@@ -1,8 +1,9 @@
 # Build verification and performance artifacts
 
-Use JDK 21. Java/Kotlin bytecode remains version 17. The release gate uses the dependency hashes in
-`gradle/verification-metadata.xml`. Local and CI commands must retain strict
-verification and must not refresh that file implicitly.
+Use JDK 21. Java/Kotlin bytecode remains version 17. The release gate uses the
+dependency hashes in `gradle/verification-metadata.xml`. All maintainer
+validation commands must retain strict verification and must not refresh that
+file implicitly.
 
 Outputs in a local `build/` directory are ephemeral evidence. Record the source
 commit and retain the command result before using them to close an audit or
@@ -29,15 +30,14 @@ Important outputs are:
 - `app/build/outputs/mapping/<variant>/` — R8 mapping, seeds, usage and effective
   configuration.
 
-The configured CI workflow additionally stages `app/build/dist/`, including
-`nanokvm-mobile-source.tar.gz` from the exact checked-out commit, the unsigned
-APK/AAB, SBOM, and repository legal/security notices. Its `SHA256SUMS` uses
-paths relative to that same downloadable tree, so it can be checked in place
-with `sha256sum -c SHA256SUMS` after extraction. A current successful workflow
-run must be attached before citing these outputs. They are not post-signing
-release checksums. The debug-signed benchmark and R8 mapping outputs remain
-local/private test evidence and are deliberately excluded from this public
-unsigned evidence bundle.
+GitHub-hosted build/test lanes and public artifact uploads are intentionally not
+configured during active development. Maintainers run this gate locally and
+retain the exact command, source commit, dirty-tree status, output hashes, and
+relevant reports in a private evidence archive. These unsigned outputs are not
+post-signing release artifacts or checksums. The debug-signed benchmark and R8
+mapping outputs must also remain private test evidence. Before the first binary
+release, the release process must create an exact-source archive and checksum
+manifest without assuming that development build output is publishable.
 
 ### Debug signing and update compatibility
 
@@ -124,12 +124,12 @@ CUJs remain separate open work.
 
 ## Required device and release evidence matrix
 
-| Lane | Automation and retained evidence |
+| Lane | Local validation and retained evidence |
 | --- | --- |
-| API 26 minimum | CI Google APIs x86_64 lane is configured; retain the current-commit debug installation and full instrumentation result |
-| API 35 / Android 15 | A Google APIs x86_64 debug instrumentation CI lane is configured; retain its current-commit result and a separate signed-candidate smoke result |
-| API 36 / Android 16 | CI Google APIs x86_64 lane is configured for instrumentation; retain its current-commit result |
-| API 37 | CI is configured for app plus native WebRTC instrumentation, profile generation/packaging, generated-source drift rejection, and startup/frame Macrobenchmark; a current local result exists but does not replace API 35/36, physical ARM, real-appliance, or signed-candidate evidence |
+| API 26 minimum | Run debug installation and full instrumentation locally for the current commit; no retained current-commit result is claimed here |
+| API 35 / Android 15 | Run debug instrumentation locally for the current commit and retain a separate signed-candidate critical-journey result before release |
+| API 36 / Android 16 | Run and retain current-commit instrumentation locally before release |
+| API 37 | A current local app plus native WebRTC instrumentation result exists; future candidates must also run profile generation/packaging, generated-source drift review, and startup/frame Macrobenchmark locally. This does not replace API 35/36, physical ARM, real-appliance, or signed-candidate evidence |
 | Representative physical ARM | Required before release for cold-start/frame comparison, input/video CUJs, thermal state and OEM behavior |
 
 ## Local verification snapshot — 2026-07-18
@@ -178,8 +178,8 @@ a performance threshold or a Baseline Profile benefit claim.
 
 Raw JSON, XML, traces, UI trees, and screenshots are retained locally under the
 ignored `qa-artifacts/modernization/material-you-final-20260718/` and
-`qa-artifacts/material-you/` directories. They are not a public CI
-or signed-candidate release record.
+`qa-artifacts/material-you/` directories. They are not hosted or
+signed-candidate release records.
 
 ## Local parity implementation checkpoint — 2026-07-18
 
@@ -250,8 +250,8 @@ no NanoKVM credentials or remote framebuffer.
 ## Public-source checkpoint — 2026-07-19
 
 The pre-publication 0.3.0 (version code 7) source snapshot passed the complete
-local source-publication gate. This is unsigned development evidence; the exact
-public commit's CI result and every production-candidate gate remain required.
+local source-publication gate. This is unsigned development evidence, not a
+binary release approval; every production-candidate gate remains open.
 
 - the strict no-configuration-cache build completed 328 tasks in 9 minutes 20
   seconds and passed 463/463 JVM tests across 73 suites, `lintRelease`, minified
@@ -278,8 +278,9 @@ public commit's CI result and every production-candidate gate remain required.
 
 The app/device results exercise deterministic local fixtures and reveal no real
 appliance address, credential, or framebuffer. They do not close real NanoKVM,
-API 26/35/36 CI, physical ARM, accessibility, endurance, destructive-control,
-full third-party notice packaging, or signed-production-candidate evidence.
+current-commit API 26/35/36, physical ARM, accessibility, endurance,
+destructive-control, full third-party notice packaging, or signed production
+candidate evidence.
 
 Emulator timing is diagnostic only. Performance baselines and regression
 thresholds must come from the controlled physical ARM lane; record device,

@@ -1,9 +1,10 @@
 # Release checklist
 
-Current status: **not approved for public distribution**. This checklist is a
-template for a named production candidate. Unchecked items remain open; source
-implementation or a debug/emulator result does not close a signed-candidate or
-manual gate.
+Current status: **source is public for active development; no binary is approved
+for public distribution**. Hosted build/test automation and release artifact
+uploads are intentionally disabled. This checklist is a template for a named
+production candidate. Unchecked items remain open; source implementation or a
+debug/emulator result does not close a signed-candidate or manual gate.
 
 ## Candidate record
 
@@ -29,10 +30,13 @@ manual gate.
 - [ ] The strict command in `BUILD_VERIFICATION.md` passes from a clean checkout.
 - [ ] JVM results, `lintRelease`, unsigned APK/AAB, benchmark APK, profile
   verification, normalized SBOM, merged manifest/NSC, dependency graph, and R8
-  mapping/seeds/usage/configuration are retained. The CI source archive and
-  unsigned SHA-256 manifest come from a successful run of this exact commit.
-- [ ] Dependency verification metadata, action pins, dependency inventory,
-  licences, and vulnerability-review dispositions are reviewed.
+  mapping/seeds/usage/configuration are retained from the exact commit in the
+  candidate record. An exact-source archive and unsigned SHA-256 evidence
+  manifest are generated and independently checked before signing.
+- [ ] Dependency verification metadata, build scripts, dependency inventory,
+  licences, and vulnerability-review dispositions are reviewed. If hosted
+  automation is introduced for release preparation, every third-party action is
+  pinned and reviewed before it becomes a gate.
 - [ ] The exact WebRTC/native dependency notice bundle and resolved-runtime
   licence report are retained with provenance/hashes and packaged beside any
   binary; the SBOM and an external notice link alone are not treated as the
@@ -66,9 +70,8 @@ manual gate.
 - [ ] API 31 clipboard/share-target/IME/lifecycle result is retained.
 - [ ] API 33 clipboard/share-target/IME/lifecycle result is retained.
 - [ ] API 34 clipboard/share-target/IME/lifecycle result is retained.
-- [ ] API 35 / Android 15 current-commit CI result and signed-candidate
-  critical-journey result are retained. The lane is configured; execution
-  evidence remains open until attached.
+- [ ] API 35 / Android 15 current-commit local instrumentation result and
+  signed-candidate critical-journey result are retained.
 - [ ] API 36 / Android 16 current-commit instrumentation result is retained.
 - [ ] API 37 instrumentation, generated-profile/package, and Macrobenchmark
   artifacts are retained.

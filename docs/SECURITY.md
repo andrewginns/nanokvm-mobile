@@ -146,19 +146,19 @@ the signed merged-manifest review.
 
 ## Build and distribution trust
 
-The repository restricts dependency repositories, pins dependency versions and
-CI actions, checks the Gradle distribution hash, and enables strict Gradle
-verification metadata. Release builds use R8 and resource shrinking. The build
+The repository restricts dependency repositories, pins dependency versions,
+checks the Gradle distribution hash, and enables strict Gradle verification
+metadata. Release builds use R8 and resource shrinking. The local strict build
 can generate a CycloneDX SBOM, R8 mapping/usage files, an unsigned APK/AAB, and
-versioned Baseline/Startup Profiles. CI stages exact source, unsigned APK/AAB,
-the canonical SBOM, repository legal/security notices, and a relative SHA-256
-manifest. The debug-signed benchmark, mapping, and configuration remain private
-local test/release evidence and are deliberately excluded from the public
-unsigned evidence bundle.
+versioned Baseline/Startup Profiles. GitHub-hosted CI and public build-artifact
+publication are intentionally disabled during active development. Current
+outputs, including the debug-signed benchmark, mapping, and configuration, are
+local evidence only and are not a public release bundle.
 
 Those controls do not make the current unsigned artifact a release. A
 production candidate must be signed through the documented release process and
-must retain source, licence/notice material, SBOM, dependency-review result,
+must retain source, licence/notice material, SBOM, dependency-vulnerability
+review result,
 checksums, signing identity, mapping/usage output, and signed/minified smoke
 evidence. Reproducibility requires two isolated builds to match after accounting
 for the documented signing step. See `DISTRIBUTION.md`.

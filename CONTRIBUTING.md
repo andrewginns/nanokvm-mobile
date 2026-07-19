@@ -72,6 +72,10 @@ Run the strict repository gate before opening a pull request:
 .\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
 ```
 
+GitHub-hosted CI is intentionally disabled during active development, so a pull
+request does not replace this local validation. Record the source commit and
+summarize the commands and device coverage you actually ran.
+
 When a booted emulator or device is available, run the applicable device and
 Macrobenchmark commands in [docs/TESTING.md](docs/TESTING.md). Do not refresh
 `gradle/verification-metadata.xml` implicitly. Dependency changes must include a

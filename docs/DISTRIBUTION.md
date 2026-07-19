@@ -19,10 +19,10 @@ Record these before building:
 - release owner, security reviewer, QA owner, signing operator, and rollback
   decision maker.
 
-The signing key must not be stored in the repository, CI logs, release bundle,
-or ordinary developer backup. Document key custody, access, backup/recovery, and
-certificate rotation/revocation out of band. Record only the public signing
-certificate digest in the release evidence.
+The signing key must not be stored in the repository, build logs, release
+bundle, or ordinary developer backup. Document key custody, access,
+backup/recovery, and certificate rotation/revocation out of band. Record only
+the public signing certificate digest in the release evidence.
 
 Default Android debug signing is not a distribution identity. Its keystore is
 selected from the build JVM's user-home directory, so Android Studio, an
@@ -51,19 +51,19 @@ The repository build produces:
   and effective configuration; and
 - generated profile sources plus packaged Baseline Profile metadata.
 
-The configured CI workflow additionally archives the exact checked-out source
-with the unsigned APK/AAB, canonical SBOM, repository legal/security notices,
-and a relative `SHA256SUMS` manifest. The debug-signed benchmark and R8
-mapping/configuration remain private local test/release evidence and are
-deliberately excluded from that public unsigned evidence bundle.
-Retain a successful run from the release commit. Generate a separate checksum
-manifest after production signing; the CI unsigned manifest cannot identify the
-final published bytes.
+GitHub-hosted build/test workflows and public artifact uploads are intentionally
+disabled during active development. Maintainers run the strict gate locally and
+retain its command output and artifacts privately against the exact commit.
+Before a production candidate is approved, create an exact-source archive and a
+reviewed unsigned evidence manifest from the frozen release commit. Generate a
+separate checksum manifest after production signing; no development-output hash
+can identify the final published bytes.
 
 Retain the complete test/lint output, merged release manifest and Network
 Security Config, resolved dependency graph, SBOM, vulnerability/licence review,
-R8 outputs, profile verification result, and device/manual evidence. CI uploads
-are useful but do not substitute for any artifact the workflow does not retain.
+R8 outputs, profile verification result, and device/manual evidence. Local-only
+storage is acceptable during development; production evidence needs named
+custody, integrity hashes, backup, and a durable release-record location.
 
 ## Signing and candidate identity
 

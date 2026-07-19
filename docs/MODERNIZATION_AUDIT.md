@@ -34,28 +34,28 @@ known at this checkpoint. P1 items below block public distribution.
 
 | Key | Evidence available in the repository | Limits at this checkpoint |
 | --- | --- | --- |
-| E1 — platform/build | [app build](../app/build.gradle.kts), [settings](../settings.gradle.kts), [version catalogue](../gradle/libs.versions.toml), [wrapper properties](../gradle/wrapper/gradle-wrapper.properties), [manifest](../app/src/main/AndroidManifest.xml), and [NSC](../app/src/main/res/xml/network_security_config.xml); the local JDK 21 strict gate passed at this checkpoint | Retain the final-commit CI result and signed-candidate evidence |
-| E2 — supply chain | [verification metadata](../gradle/verification-metadata.xml), [pinned CI](../.github/workflows/android.yml), [dependency inventory](DEPENDENCIES.md), and [SBOM task](../app/build.gradle.kts); main CI is configured to retain a self-verifying unsigned bundle and source archive while R8 mapping stays private by default | Signed artifact, post-signing checksums/provenance, and isolated-environment comparison remain open; retain a current successful workflow result |
+| E1 — platform/build | [app build](../app/build.gradle.kts), [settings](../settings.gradle.kts), [version catalogue](../gradle/libs.versions.toml), [wrapper properties](../gradle/wrapper/gradle-wrapper.properties), [manifest](../app/src/main/AndroidManifest.xml), and [NSC](../app/src/main/res/xml/network_security_config.xml); the local JDK 21 strict gate passed at this checkpoint | Repeat and retain the local strict gate against the final source freeze, then retain signed-candidate evidence |
+| E2 — supply chain | [verification metadata](../gradle/verification-metadata.xml), [dependency inventory](DEPENDENCIES.md), [SBOM task](../app/build.gradle.kts), and [build verification recipe](BUILD_VERIFICATION.md); the local strict gate verified the dependency graph and generated the canonical SBOM | Hosted automation is intentionally disabled during active development; signed artifact, vulnerability review, post-signing checksums/provenance, and isolated-environment comparison remain open |
 | E3 — architecture/state | [AppContainer](../app/src/main/java/org/nanokvm/mobile/AppContainer.kt), [AppViewModel](../app/src/main/java/org/nanokvm/mobile/ui/AppViewModel.kt), [ProfileRepository](../app/src/main/java/org/nanokvm/mobile/data/ProfileRepository.kt), [console ports](../app/src/main/java/org/nanokvm/mobile/runtime/ConsoleBackend.kt), and [backend](../app/src/main/java/org/nanokvm/mobile/runtime/NanoKvmConsoleBackend.kt) | Real DataStore/Keystore, process death, cancellation races, and deterministic shutdown need device/integration evidence |
 | E4 — trust/credentials | [CertificateInspector](../protocol/src/main/java/org/nanokvm/protocol/CertificateInspector.kt), [EndpointTrustPreflight](../protocol/src/main/java/org/nanokvm/protocol/EndpointTrustPreflight.kt), [SavedCredentialStore](../app/src/main/java/org/nanokvm/mobile/security/SavedCredentialStore.kt), and [request-ID coordinator](../app/src/main/java/org/nanokvm/mobile/security/CredentialAuthenticationCoordinator.kt) | Old/new pin comparison, connect-once, and explicit replacement are implemented; real Keystore/traffic/device recovery results remain open |
 | E5 — bounds/control/reconnect | [protocol sources](../protocol/src/main/java/org/nanokvm/protocol), [video sources](../video/src/main/java/org/nanokvm/video), [ReconnectPolicy](../app/src/main/java/org/nanokvm/mobile/runtime/ReconnectPolicy.kt), and [ControlCommandGate](../app/src/main/java/org/nanokvm/mobile/runtime/ControlCommandGate.kt) | OkHttp allocates complete WebSocket messages before application limits; long hostile/slow/real-appliance results remain open |
 | E6 — UI/adaptive/accessibility | [NanoKvmApp](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [Material implementation record](MATERIAL_YOU_IMPLEMENTATION.md), [UI sources](../app/src/main/java/org/nanokvm/mobile/ui), and [instrumentation tests](../app/src/androidTest/java/org/nanokvm/mobile); local API 37 diagnostics exercised light/dark, 200% text, RTL, IME-open portrait, portrait-to-landscape live video, and an expanded supporting pane | TalkBack, switch, API 35, long-string/breakpoint matrices, hardware input, physical ARM, and signed-candidate results remain open |
 | E7 — profiles/performance | [ReportDrawnWhen use](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [macrobenchmark module](../macrobenchmark), [generated profiles](../app/src/main/generated/baselineProfiles), and [build verification](BUILD_VERIFICATION.md); a source-matched API 37 run exercised cold-none plus cold/warm/hot-Baseline and retained 12 frame traces | Emulator timing is diagnostic; console CUJs, physical ARM, and stable trends remain open |
 | E8 — public assurance | [privacy](../PRIVACY.md), [security design](SECURITY.md), [threat model](THREAT_MODEL.md), [distribution](DISTRIBUTION.md), and [release checklist](RELEASE_CHECKLIST.md) | MASTG/manual results and observed-traffic/privacy reconciliation are required, not yet claimed |
-| E9 — execution record | The public-source checkpoint passed 463 JVM tests across 73 suites; the API 37 device checkpoint passed 59 app instrumentation tests and one native WebRTC instrumentation test; profile packaging and the strict release-like build gate also passed | Raw results are local/ignored and unsigned; retain final CI and candidate records before crediting a public release |
+| E9 — execution record | The public-source checkpoint passed 463 JVM tests across 73 suites; the API 37 device checkpoint passed 59 app instrumentation tests and one native WebRTC instrumentation test; profile packaging and the strict release-like build gate also passed | Raw results are local/ignored and unsigned; repeat them on the release source freeze and retain the candidate record before crediting a public release |
 | E10 — manual/release gates | [testing matrix](TESTING.md) and [release checklist](RELEASE_CHECKLIST.md) | API 35, physical ARM, signed candidate, 30-minute H.264/MJPEG, TalkBack/switch, and field evidence remain explicitly open |
 
 ## Platform and build
 
 | ID | Score | Priority/status | Current evidence and remaining gate |
 | --- | ---:| --- | --- |
-| PLAT-01 | 1 | P1 partial | Target 37 is current, and API 26/35/36/37 CI lanes are configured. Retain current results from those lanes plus signed-candidate critical journeys. [E1, E6] |
+| PLAT-01 | 1 | P1 partial | Minimum API 26 and target/compile API 37 are configured, but only API 37 has current local device evidence. Current-commit API 26/35/36 runs plus signed-candidate critical journeys remain open. [E1, E6] |
 | PLAT-02 | 1 | P1 partial | Edge-to-edge, safe drawing, `adjustResize`, and IME-aware controls exist. Cutout, both navigation modes, window resize, and every top-level state need device evidence. [E6] |
-| PLAT-03 | 2 | P2 evidenced | JDK 21, Gradle 9.6.1 with checksum, central exact catalogue, bytecode 17, SDK 37, and pinned CI toolchain are recorded. Review quarterly. [E1] |
+| PLAT-03 | 2 | P2 evidenced | JDK 21, Gradle 9.6.1 with checksum, central exact catalogue, bytecode 17, and SDK 37 are recorded in the local build recipe. Review quarterly. [E1] |
 | PLAT-04 | 1 | P1 partial | Release enables R8 and resource shrinking and an unsigned minified artifact can be built. Signed/minified trust/login/video/input/credential smoke is open. [E1, E9] |
 | PLAT-05 | 1 | P2 partial | Optimizing defaults and narrow project rules generate mapping/usage/configuration locally. Retention and test-justified rule review are not yet a release record. [E1, E2] |
 | PLAT-06 | 2 | P2 evidenced | Exact versions, restricted repositories, wrapper URL validation, and distribution checksum are repository-enforced. [E1] |
-| PLAT-07 | 2 | P2 evidenced | Strict verification metadata, full-SHA CI actions, wrapper validation, dependency review, and controlled update policy exist. [E2] |
+| PLAT-07 | 1 | P2 partial | Strict verification metadata, wrapper validation, and a controlled local update policy exist. Automated dependency review is absent; a retained manual vulnerability review remains a production-candidate gate. [E2] |
 | PLAT-08 | 2 | P2 evidenced | `DEPENDENCIES.md` records purpose, data/permissions, licence, owner/review, exception, and removal policy. [E2] |
 
 ## Architecture and Kotlin concurrency
@@ -160,7 +160,7 @@ numbers if device/run variance shows they are inappropriate.
 | SEC-12 | N/A | — | No WebView. Reassess if web content is embedded. |
 | SEC-13 | 1 | P1 partial | No APK secret is trusted; token origin, firmware assumptions, command serialization, and no replay/retry are documented/tested. Real adverse appliance evidence is open. [E4, E5, E8] |
 | SEC-14 | N/A | — | Play Integrity adds no meaningful boundary for this open-source local client without a developer backend. Reassess on backend entitlement. |
-| SEC-15 | 2 | P1 evidenced | Exact dependencies, repository restrictions, hashes, action pins, dependency inventory, SBOM task, and minified variants exist. Signed release retention remains TEST-10. [E1, E2] |
+| SEC-15 | 2 | P1 evidenced | Exact dependencies, repository restrictions, wrapper and artifact hashes, dependency inventory, SBOM task, and minified variants exist. Signed release retention and vulnerability review remain TEST-10. [E1, E2] |
 | SEC-16 | 1 | P1 partial | Threats map to applicable MASTG v2 IDs and dispositions. Actual signed/minified device results are not retained. [E8] |
 | SEC-17 | 1 | P1 partial | Privacy, data inventory, manifest, and dependencies are reconciled in docs; observed traffic and distribution-channel disclosure remain open. [E8] |
 
@@ -180,7 +180,7 @@ accurately: OkHttp's complete WebSocket allocation occurs before the app check.
 | TEST-05 | 1 | P1 partial | Semantics tests exist; analysis tools plus manual TalkBack, keyboard, and switch-style traversal are open. [E6, E10] |
 | TEST-06 | 1 | P1 partial | Recreation and lifecycle tests are defined; true process death, resize, offline/slow endpoint, storage failure, auth cancellation, and repeated background cycles remain. [E3, E6] |
 | TEST-07 | 1 | P1 partial | Source-matched API 37 profile generation and four-mode Macrobenchmark execution passed. Controlled physical results and trends do not exist. [E7, E9] |
-| TEST-08 | 1 | P1 partial | A local API 37 run passed 59/59 app instrumentation tests plus the video module's 1/1 native WebRTC crash-regression test. Retained API 26/35/36/37 CI results and representative physical ARM remain explicit open gates. [E6, E10] |
+| TEST-08 | 1 | P1 partial | A local API 37 run passed 59/59 app instrumentation tests plus the video module's 1/1 native WebRTC crash-regression test. Current-commit local API 26/35/36 results and representative physical ARM remain explicit open gates. [E6, E10] |
 | TEST-09 | 1 | P1 partial | Risk-based tests and MASTG mapping exist; signed-release execution/dispositions are open. [E8, E10] |
 | TEST-10 | 0 | P1 open | No approved signed production candidate or signed/minified device smoke evidence exists. [E10] |
 
@@ -188,7 +188,7 @@ accurately: OkHttp's complete WebSocket allocation occurs before the app check.
 
 | Risk | IDs | Current status | Closure evidence |
 | --- | --- | --- | --- |
-| Current source and generated artifacts can diverge from passing outputs | PLAT-04, TEST-01, TEST-07 | Locally closed at checkpoint; CI retention open | Clean JDK 21 strict gate and applicable device runs attached to the final commit; no stale result cited |
+| Current source and generated artifacts can diverge from passing outputs | PLAT-04, TEST-01, TEST-07 | Locally closed at checkpoint; release-source repetition/retention open | Clean JDK 21 strict gate and applicable device runs retained against the exact release source; no stale result cited |
 | Storage failure or cancellation can contradict deletion/save intent | ARCH-02, UI-03, SEC-03, TEST-02 | P1 mitigated in source, verification open | Transient retry vs corrupt confirmed reset, reset consequence, identity-edit block, partial deletion, DataStore I/O/corruption, and cancellation tests all pass |
 | Pending password/auth action may outlive foreground or accept a stale host result | ARCH-06, ARCH-09, SEC-03/04 | P1 mitigated in source, verification open | Background cancels non-prompt work; a stopped prompt result clears without connecting; rotation, process-death, stale request/host, and real Keystore tests pass |
 | Duplicate/stale destructive controls can affect hardware | UI-05, SEC-13 | P1 mitigated in source, verification open | Claim/serialize/generation-invalidate/no-retry tests pass at backend level and on a disposable appliance |
@@ -207,7 +207,7 @@ publishing with a failed P1 gate.
 
 | Order | Work item / owner | Estimate | Dependency | Rollback route | Success metric |
 | ---:| --- | ---:| --- | --- | --- |
-| 1 | Freeze current source and run strict verification — build owner | Locally complete; CI retention open | All active source changes complete; JDK 21/SDK 37 | Revert the failing change set; retain last known source baseline; do not publish | Exact current commit has green strict JVM/lint/release/AAB/benchmark/profile/SBOM outputs and attached logs |
+| 1 | Freeze current source and run strict verification — build owner | Local checkpoint complete; repeat at release source freeze | All active source changes complete; JDK 21/SDK 37 | Revert the failing change set; retain last known source baseline; do not publish | Exact release commit has green local strict JVM/lint/release/AAB/benchmark/profile/SBOM outputs and retained logs |
 | 2 | Adverse storage, secret lifecycle, and teardown integration — app/security owner | 2–3 days | Order 1; Android test device | Revert affected feature changes or disable distribution; never downgrade deletion/trust guarantees | DataStore unavailable/corrupt/reset, foreground secret wipe, real process death, stale auth, cancellation race, and `closeAndAwait` tests pass |
 | 3 | Produce signed production candidate and evidence bundle — release/security owner | 1–2 days | Order 1; approved signing environment/key custody | Withdraw candidate and rotate/revoke signing material if compromised; never publish debug-signed benchmark | Signature verified; final SHA-256/source tag recorded; source/licence/SBOM/mapping custody/checksums/provenance assembled; signed critical journeys pass |
 | 4 | Complete Android/API matrix — QA owner | 1–2 days | Order 3 candidate; API 26/35/36/37 devices | Hold release and revert platform-specific regression | Current-commit results for API 26, 35, 36, 37 plus navigation, resize, IME, rotation, process/lifecycle journeys |
@@ -222,7 +222,7 @@ publishing with a failed P1 gate.
 ## 30/60/90 evidence trend
 
 The score trend credits repository evidence and keeps manual gates at 0/1 until
-run. The current 106/168 remains provisional because local unsigned/emulator
+run. The current 105/168 remains provisional because local unsigned/emulator
 evidence does not close signed, physical-device, accessibility, appliance, or
 field gates; it is not a release-readiness percentage. The denominator grew by
 two because ADAPT-08 became applicable when the supporting-pane transition was
@@ -230,7 +230,7 @@ implemented.
 
 | Area | Day 0 baseline (2026-07-17) | Current checkpoint (toward Day 30) |
 | --- | ---:| ---:|
-| Platform/build | 5/16 | 12/16 |
+| Platform/build | 5/16 | 11/16 |
 | Architecture/concurrency | 15/28 | 20/28 |
 | UI behavior | 10/16 | 11/16 |
 | Adaptive behavior | 9/16 | 15/18 |
@@ -238,12 +238,12 @@ implemented.
 | Performance/reliability | 6/26 | 12/26 |
 | Security/privacy | 12/26 | 19/28 |
 | Testing/release | 6/20 | 8/20 |
-| **Total** | **71/164 (43%)** | **106/168 (63%) provisional** |
+| **Total** | **71/164 (43%)** | **105/168 (63%) provisional** |
 
 | Horizon | Verified progress already available | Required evidence/outcome before exit |
 | --- | --- | --- |
-| Day 30 — establish truthful release foundation | JDK 21/target 37; strict verification policy and local strict result; minified variants; HTTPS-only NSC; application container/narrow ports; lifecycle collection; request-ID auth coordinator; explicit catalog states; control gate; dependency inventory/SBOM task; generated profile sources; privacy/threat/distribution documents | Retain Order 1 in CI, then complete Orders 2–3: adverse secret/storage/teardown evidence and a signed traceable candidate. No stale artifact or unsigned smoke may be counted |
-| Day 60 — prove supported journeys | Current automated protocol/state/viewport/control tests and configured API 26/35/36/37 lanes provide a base | Complete Orders 4–6 and the appliance portion of 5: retain API 26/35/36/37 CI results, physical ARM functional smoke, 30-minute H.264/MJPEG, TalkBack/switch/hardware input, real Keystore, process death, resize/adverse network/storage |
+| Day 30 — establish truthful release foundation | JDK 21/target 37; strict verification policy and local strict result; minified variants; HTTPS-only NSC; application container/narrow ports; lifecycle collection; request-ID auth coordinator; explicit catalog states; control gate; dependency inventory/SBOM task; generated profile sources; privacy/threat/distribution documents | Repeat and retain Order 1 locally against the exact release source, then complete Orders 2–3: adverse secret/storage/teardown evidence and a signed traceable candidate. No stale artifact or unsigned smoke may be counted |
+| Day 60 — prove supported journeys | Current automated protocol/state/viewport/control tests and the local API 37 device checkpoint provide a base | Complete Orders 4–6 and the appliance portion of 5: retain local API 26/35/36/37 results, physical ARM functional smoke, 30-minute H.264/MJPEG, TalkBack/switch/hardware input, real Keystore, process death, resize/adverse network/storage |
 | Day 90 — make evidence durable | Macrobenchmark, profile generation/packaging, build inventory, and evidence templates exist | Complete Orders 7–10: fully drawn and named physical CUJs, three-run trends/thresholds, WebSocket allocation disposition, two-build comparison, exact source/checksum/signing bundle. Start Order 11 only after field exposure |
 
 User outcomes tracked across the horizons are: no credential or trust action
@@ -263,7 +263,7 @@ be traced to exact public source and signing identity.
   WebView, Play Integrity, and anti-tamper controls have no corresponding
   component today.
 - Third-party analytics/crash/performance SDKs will not be added. Use retained
-  lab/CI evidence, opt-in issue reports, and aggregate Android Vitals only if a
+  local lab evidence, opt-in issue reports, and aggregate Android Vitals only if a
   future channel provides them.
 
 Revisit every N/A when a new exported component, inbound link, WebView, cloud

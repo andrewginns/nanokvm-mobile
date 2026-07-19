@@ -26,7 +26,7 @@ trusted. There is no developer backend, payment, entitlement, or central account
 | GPIO/power/reset | User; immediate hardware action | Not persisted, retried, or replayed | Selected appliance; consequence confirmation and serialized generation-scoped execution |
 | Offline update archive | User-selected document; update appliance software | Transient one-pass stream; no copied file, URI grant, or path retained | Selected appliance after consequence review |
 | Terminal, script, automation, and PicoClaw content | User/appliance; explicitly entered operator tools | Owning foreground surface only; no history or diagnostics | Selected appliance and, for PicoClaw, the provider the user configures on that appliance |
-| Dependency/build inputs | Maven/Gradle/GitHub; produce app artifacts | Build cache and retained release evidence | Maintainers/users; exact versions, hashes, action pins, SBOM, licence/source bundle |
+| Dependency/build inputs | Maven/Gradle/local build tools; produce app artifacts | Build cache and retained release evidence | Maintainers/users; exact versions, hashes, SBOM, licence/source bundle |
 
 Trust boundaries are UI/IME to app, app-private storage to Android Keystore,
 app to the selected HTTPS origin, OkHttp to application parsers, parsers to
@@ -126,18 +126,18 @@ execution on a physical device and appliance.
 ### Supply-chain or distribution compromise
 
 - Repositories are restricted; versions are exact; the Gradle distribution is
-  checksummed; dependency artifacts use strict verification metadata; CI actions
-  are pinned to full commits; release uses R8/resource shrinking.
+  checksummed; dependency artifacts use strict verification metadata; release
+  uses R8/resource shrinking.
 - The build defines a canonical CycloneDX SBOM, versioned Baseline/Startup
   Profiles, unsigned APK/AAB, and R8 mapping/usage outputs.
 
-These are build capabilities, not proof of a production release. CI is
-configured to retain the unsigned APK/AAB, benchmark APK, source archive,
-canonical SBOM, and relative SHA-256 manifest. Mapping/configuration stay private
-and local by default. The configuration is not a signed candidate or a current
-successful release record by itself. Post-signing checksums/provenance,
-two-build reproducibility, signed/minified device smoke, and retained security
-results remain open in `RELEASE_CHECKLIST.md`.
+These are build capabilities, not proof of a production release. GitHub-hosted
+CI and public build-artifact publication are intentionally disabled during
+active development. Local outputs and logs are ignored working evidence, not a
+durable signed-candidate record. A production release must separately retain
+the source archive, canonical SBOM, licence material, checksums/provenance,
+mapping/configuration custody, two-build reproducibility, signed/minified device
+smoke, and security results required by `RELEASE_CHECKLIST.md`.
 
 R8 is an optimization and surface-reduction tool, not an anti-tamper boundary
 for an open-source GPL application.
@@ -184,7 +184,7 @@ run. Manual results remain open until attached to the release record.
 | Local storage, backup, logs, display | 0207, 0200, 0262, 0216, 0231, 0203, 0258, 0289 | backup rules, DataStore/no-backup store, `FLAG_SECURE` | Physical-device filesystem/Keystore/logcat, backup-transfer, screenshot/Recents results |
 | Crypto and device authentication | 0212, 0205, 0208, 0309, 0310, 0232, 0350, 0326–0330 | AES-GCM/AAD code, request-ID coordinator tests | Real Keystore auth expiry/invalidation/deletion, callback bypass, process death, secret lifetime |
 | Components and platform surface | 0364–0366, 0357, 0381, 0394, 0340 | source manifest and absence search | Merged signed-release component/permission inventory; IME/secure-display/device result |
-| Supply chain and privacy | 0272, 0274, 0206 | verification metadata, action pins, dependency inventory, SBOM task, privacy notice | SBOM/licence/vulnerability results, source bundle, checksums/signing identity, traffic/privacy reconciliation |
+| Supply chain and privacy | 0272, 0274, 0206 | verification metadata, dependency inventory, SBOM task, privacy notice | SBOM/licence/vulnerability results, source bundle, checksums/signing identity, traffic/privacy reconciliation |
 
 MASTG 0282 may flag the inspection-only trust manager; evidence must demonstrate
 its data-free, ephemeral use and independent hostname/date checks. MASTG 0212

@@ -1,6 +1,5 @@
 # NanoKVM Mobile
 
-[![Android CI](https://github.com/andrewginns/nanokvm-mobile/actions/workflows/android.yml/badge.svg)](https://github.com/andrewginns/nanokvm-mobile/actions/workflows/android.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 NanoKVM Mobile is an unofficial, open-source Android client for a trusted
@@ -164,6 +163,11 @@ targets version 17. Dependency verification is strict and must not be disabled:
 $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 .\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
 ```
+
+Hosted continuous-integration builds are intentionally disabled while the app
+is under active development. Maintainers run this validation locally before
+publishing source changes; the retained evidence and wider device-test commands
+are documented in [docs/BUILD_VERIFICATION.md](docs/BUILD_VERIFICATION.md).
 
 This produces an unsigned, minified release candidate. It is not a publishable
 release until the signing, device, accessibility, appliance, and distribution

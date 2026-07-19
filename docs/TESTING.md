@@ -2,7 +2,8 @@
 
 NanoKVM Mobile treats a test definition, a local passing run, and retained
 release evidence as different states. `MODERNIZATION_AUDIT.md` reaches score 2
-only when a repeatable result is attached or retained by CI/release records.
+only when a repeatable result is attached or retained in the maintainer's local
+evidence or release record.
 
 ## Test layers
 
@@ -72,18 +73,18 @@ thresholds from an unlocked x86_64 emulator.
 
 ## Required release matrix
 
-| Lane | Automated/current repository coverage | Required evidence before distribution |
+| Lane | Current local evidence | Required evidence before distribution |
 | --- | --- | --- |
-| API 26 | CI lane is configured for debug instrumentation | Retain the current-commit CI result |
+| API 26 | No retained current-commit result is claimed here | Run debug installation and instrumentation locally and retain the current-commit result |
 | API 29 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 31 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 33 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 34 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 35 / Android 15 | A debug instrumentation CI lane is configured, but no current retained result is claimed here | Retain the current-commit CI result and separately run the signed/minified candidate through onboarding, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
-| API 36 / Android 16 | CI lane is configured for debug instrumentation | Retain the current-commit result |
-| API 37 | The 2026-07-19 public-source checkpoint passed 59/59 app instrumentation tests plus 1/1 real-native WebRTC peer test; exact local scope is recorded in `BUILD_VERIFICATION.md` | Retain a clean current-commit workflow result with its artifacts; this emulator checkpoint remains diagnostic and does not replace the other API lanes, physical ARM, real-appliance negotiation, or signed-candidate evidence |
+| API 35 / Android 15 | No retained current-commit result is claimed here | Run instrumentation locally for the current commit and separately run the signed/minified candidate through onboarding, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
+| API 36 / Android 16 | No retained current-commit result is claimed here | Run instrumentation locally and retain the current-commit result |
+| API 37 | The 2026-07-19 public-source checkpoint passed 59/59 app instrumentation tests plus 1/1 real-native WebRTC peer test; exact local scope is recorded in `BUILD_VERIFICATION.md` | Retain a clean current-commit local run and its private evidence; this emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, or signed-candidate evidence |
 | Representative physical ARM | Not automated | Required for signed-candidate smoke, startup/frame comparison, real Keystore, input/video, thermal/OEM behavior, memory, and power/network observations |
-| Real NanoKVM | Credentials and hardware cannot be in public CI | Run at least 30 continuous minutes each on direct H.264 and forced/fallback MJPEG. If WebRTC is enabled and supported for the candidate, also run 30 minutes and force negotiation/ICE/decoder failure, retaining proof of the fresh WebRTC to H.264 to MJPEG chain; otherwise record WebRTC as an explicit capability-gated exclusion. Include keyboard, pointer, reconnect, foreground loss, frame continuity, memory, and input-release checks |
+| Real NanoKVM | Requires local hardware and private credentials | Run at least 30 continuous minutes each on direct H.264 and forced/fallback MJPEG. If WebRTC is enabled and supported for the candidate, also run 30 minutes and force negotiation/ICE/decoder failure, retaining proof of the fresh WebRTC to H.264 to MJPEG chain; otherwise record WebRTC as an explicit capability-gated exclusion. Include keyboard, pointer, reconnect, foreground loss, frame continuity, memory, and input-release checks |
 
 ## Manual functional and accessibility gates
 

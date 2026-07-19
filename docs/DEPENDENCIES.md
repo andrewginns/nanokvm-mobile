@@ -4,7 +4,9 @@ NanoKVM Mobile deliberately keeps its dependency surface small. Gradle resolves
 only from Google Maven, Maven Central, and the Gradle Plugin Portal; repository
 declarations in individual projects are rejected. Versions are centralized in
 `gradle/libs.versions.toml`, artifacts are checked against
-`gradle/verification-metadata.xml`, and CI actions are pinned to full commits.
+`gradle/verification-metadata.xml`, and the Gradle distribution is protected by
+its published checksum. GitHub-hosted CI is intentionally disabled during
+active development; dependency and build validation is run locally.
 
 ## Runtime dependencies
 
@@ -66,16 +68,19 @@ same verified dependency graph produces the same bytes.
 
 ## Update and removal policy
 
-- Dependabot proposes grouped Gradle and GitHub Actions updates weekly; changes
-  are reviewed and never auto-merged.
-- Pull requests run GitHub's pinned dependency-review action and reject newly
-  introduced high/critical known vulnerabilities. This check requires a public
-  repository or GitHub Advanced Security when the repository is private.
-- A dependency update must pass JVM tests, release lint, strict dependency
-  verification, and both release-like assemblies.
+- Dependabot proposes grouped Gradle updates weekly. Maintainers review them
+  deliberately; no bot or hosted workflow is treated as an approval signal,
+  and updates are never merged automatically.
+- Before accepting an update, review the resolved dependency diff and known
+  vulnerabilities using current authoritative advisories. Retain the review
+  with a production-candidate record once public builds are contemplated.
+- A dependency update must pass the local JVM tests, release lint, strict
+  dependency verification, and both release-like assemblies.
 - Review release notes for privacy, permission, native-code, minimum-SDK and
   shrinker changes. Refresh verification metadata only after inspecting the
   resolved diff.
 - Remove a dependency when its capability is unused, supplied safely by the
   platform, or maintainership/licensing no longer meets the project policy.
 - Review this inventory at every tagged release even when no versions changed.
+- If hosted automation is introduced later, pin every third-party action to a
+  reviewed full commit and keep its permissions and artifact retention narrow.
