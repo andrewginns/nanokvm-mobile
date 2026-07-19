@@ -1,0 +1,6 @@
+* @andrewginns
+
+# Security- and supply-chain-sensitive repository controls.
+/.github/ @andrewginns
+/gradle/verification-metadata.xml @andrewginns
+/SECURITY.md @andrewginns

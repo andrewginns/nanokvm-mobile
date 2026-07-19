@@ -1,0 +1,1961 @@
+package org.nanokvm.mobile
+
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.text.InputType
+import android.view.PixelCopy
+import android.view.Surface
+import android.view.TextureView
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pinch
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.nanokvm.mobile.data.HostProfile
+import org.nanokvm.mobile.data.ThemeMode
+import org.nanokvm.mobile.clipboard.ClipboardGateway
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
+import org.nanokvm.mobile.clipboard.ClipboardReadResult
+import org.nanokvm.mobile.runtime.BackendSession
+import org.nanokvm.mobile.runtime.ApprovedPasteRequest
+import org.nanokvm.mobile.runtime.ConnectOutcome
+import org.nanokvm.mobile.runtime.ConnectRequest
+import org.nanokvm.mobile.runtime.ConnectionState
+import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.KeyboardLayout
+import org.nanokvm.mobile.runtime.MouseButton
+import org.nanokvm.mobile.runtime.NanoKvmDeviceStatus
+import org.nanokvm.mobile.runtime.NanoKvmNetworkInterfaceStatus
+import org.nanokvm.mobile.runtime.Phase3FeatureUiState
+import org.nanokvm.mobile.runtime.Phase3HidModeSelection
+import org.nanokvm.mobile.runtime.Phase3HidModeUiState
+import org.nanokvm.mobile.runtime.Phase3MediaImageUiState
+import org.nanokvm.mobile.runtime.Phase3VirtualMediaUiState
+import org.nanokvm.mobile.runtime.Phase3WakeOnLanTargetUiState
+import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
+import org.nanokvm.mobile.runtime.PicoClawManualInputUiState
+import org.nanokvm.mobile.runtime.PicoClawSupport
+import org.nanokvm.mobile.runtime.PicoClawUiState
+import org.nanokvm.mobile.runtime.PowerAction
+import org.nanokvm.mobile.runtime.RemoteKey
+import org.nanokvm.mobile.runtime.VideoSettings
+import org.nanokvm.mobile.runtime.VideoTransportPreference
+import org.nanokvm.mobile.ui.screens.ConsoleScreen
+import org.nanokvm.mobile.ui.components.PointerMode
+import org.nanokvm.mobile.ui.components.RemoteViewport
+import org.nanokvm.mobile.ui.theme.DarkConsoleColorScheme
+import org.nanokvm.mobile.ui.theme.NanoKvmTheme
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+/** Exercises the native console without requiring a reachable NanoKVM or stored credentials. */
+class ConsoleScreenInstrumentedTest {
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private val backend = RecordingConsoleBackend()
+    private val profile = HostProfile(
+        id = "instrumented-console",
+        name = "Lab NanoKVM",
+        host = "192.0.2.250",
+    )
+
+    @After
+    fun dismissSystemIme() {
+        composeRule.runOnIdle {
+            WindowCompat.getInsetsController(
+                composeRule.activity.window,
+                composeRule.activity.window.decorView,
+            ).hide(WindowInsetsCompat.Type.ime())
+            composeRule.activity.currentFocus?.clearFocus()
+        }
+        composeRule.waitForIdle()
+    }
+
+    @Test
+    fun portraitShortcutsDriveImePointerModeAndDockedViewControls() {
+        renderConsole()
+
+        val previewBeforeKeyboard = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val defaultViewPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val quickActions = composeRule.onNodeWithTag("console-quick-actions")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "Shortcuts must remain inside the preview without reserving a side rail",
+            quickActions.left >= previewBeforeKeyboard.left - 1f &&
+                quickActions.right <= previewBeforeKeyboard.right + 1f,
+        )
+        assertViewPanelContained(previewBeforeKeyboard, defaultViewPanel)
+        assertRectsDoNotOverlap(
+            defaultViewPanel,
+            quickActions,
+            "Shortcuts must not cover the default full-width navigation strip",
+        )
+        assertTrue(
+            "The default view pad must overlay the bottom of the full preview",
+            defaultViewPanel.top >= previewBeforeKeyboard.top - 1f &&
+                defaultViewPanel.bottom <= previewBeforeKeyboard.bottom + 1f &&
+                kotlin.math.abs(defaultViewPanel.bottom - previewBeforeKeyboard.bottom) <= 1f,
+        )
+        composeRule.onNodeWithContentDescription("Pan view left").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Show view controls").assertIsDisplayed()
+
+        // Exercise real pointer hit-testing on the relocated shortcut, not just its semantics action.
+        performViewPadCustomAction("Move view pad up")
+        performViewPadCustomAction("Move view pad up")
+        assertViewPanelContained(
+            previewBeforeKeyboard,
+            composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
+        )
+        composeRule.onNodeWithContentDescription("Show keyboard")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performTouchInput { click(center) }
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+
+        // The accessory row is app-owned and remains available above the Android keyboard.
+        composeRule.onNodeWithText("Esc").assertIsDisplayed()
+        composeRule.onNodeWithText("Ctrl Alt Delete").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Hide native keyboard")
+            .performScrollTo()
+            .assertIsDisplayed()
+        val previewWithKeyboard = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val viewPanelWithKeyboard = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val keyboardAccessory = composeRule.onNodeWithTag("keyboard-accessory")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(previewWithKeyboard, viewPanelWithKeyboard)
+        assertTrue(
+            "The view pad must snap to the preview bottom immediately above the keyboard accessory",
+            kotlin.math.abs(viewPanelWithKeyboard.bottom - previewWithKeyboard.bottom) <= 1f &&
+                viewPanelWithKeyboard.bottom <= keyboardAccessory.top + 1f,
+        )
+        assertTrue(
+            "Opening the IME must move the preview upward instead of covering it",
+            previewWithKeyboard.bottom < previewBeforeKeyboard.bottom,
+        )
+        val remoteInputCallsBeforeKeyboardPadGesture = backend.remoteInputCallCount
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            pinch(
+                start0 = Offset(centerX - 20f, centerY),
+                end0 = Offset(centerX - 48f, centerY),
+                start1 = Offset(centerX + 20f, centerY),
+                end1 = Offset(centerX + 48f, centerY),
+                durationMillis = 350,
+            )
+        }
+        assertEquals(
+            "The movable view pad must stay usable without emitting remote input while the IME is open",
+            remoteInputCallsBeforeKeyboardPadGesture,
+            backend.remoteInputCallCount,
+        )
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Zoom in")
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(
+            "Opening or using View controls while typing must not resize the preview",
+            previewWithKeyboard,
+            composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot,
+        )
+        composeRule.runOnIdle {
+            assertTrue(
+                "In-window View controls must keep the native IME editor focused",
+                composeRule.activity.currentFocus?.onCheckIsTextEditor() == true,
+            )
+        }
+        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+
+        // Verify the focused native text editor really forwards InputConnection commits.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.activity.currentFocus?.onCheckIsTextEditor() == true
+        }
+        composeRule.runOnIdle {
+            val editor = composeRule.activity.currentFocus
+            assertNotNull("The native IME sink should hold focus", editor)
+            val editorInfo = EditorInfo()
+            val connection = editor!!.onCreateInputConnection(editorInfo)
+            assertNotNull("The native IME sink should expose an InputConnection", connection)
+            assertEquals(
+                InputType.TYPE_CLASS_TEXT,
+                editorInfo.inputType and InputType.TYPE_MASK_CLASS,
+            )
+            assertEquals(
+                "The native editor must not advertise a password variation, which disables voice input",
+                InputType.TYPE_TEXT_VARIATION_NORMAL,
+                editorInfo.inputType and InputType.TYPE_MASK_VARIATION,
+            )
+            assertTrue(editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
+            assertTrue(editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN != 0)
+            assertTrue(
+                editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0,
+            )
+            assertTrue(connection!!.commitText("hello from Android", 1))
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            backend.committedText == listOf("hello from Android" to KeyboardLayout.Us)
+        }
+
+        composeRule.onNodeWithContentDescription("Hide native keyboard")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Open console controls")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performTouchInput { click(center) }
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+
+        val releaseCallsBeforePointerChange = backend.releaseAllCalls
+        composeRule.onNodeWithContentDescription("Direct pointer")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithContentDescription("Trackpad pointer")
+            .performScrollTo()
+            .assertIsDisplayed()
+        assertEquals(
+            "Changing pointer mode must release held input",
+            releaseCallsBeforePointerChange + 1,
+            backend.releaseAllCalls,
+        )
+
+        // The movable pad is a saved preference: the sheet can hide and restore it explicitly.
+        composeRule.onNodeWithContentDescription("Hide view pad")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("view-navigation-pad").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Dock view pad")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Pan view left").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Show view controls")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+
+        val previewWithCompactViewPad = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val compactViewPadBounds = composeRule.onNodeWithTag("view-navigation-pad")
+            .fetchSemanticsNode().boundsInRoot
+        val remoteInputCallsBeforeViewGesture = backend.remoteInputCallCount
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            val gestureY = centerY
+            pinch(
+                start0 = Offset(centerX - 24f, gestureY),
+                end0 = Offset(centerX - 88f, gestureY),
+                start1 = Offset(centerX + 24f, gestureY),
+                end1 = Offset(centerX + 88f, gestureY),
+                durationMillis = 500,
+            )
+        }
+        assertEquals(
+            "Using the view pad must never send mouse or wheel input to the remote computer",
+            remoteInputCallsBeforeViewGesture,
+            backend.remoteInputCallCount,
+        )
+
+        // The secondary navigation buttons consume no height until explicitly expanded.
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Hide view controls").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Pan view left")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        assertEquals(
+            "Opening view controls as a popup must not resize the preview",
+            previewWithCompactViewPad,
+            composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot,
+        )
+        assertEquals(
+            "Opening view controls as a popup must not resize the gesture pad",
+            compactViewPadBounds,
+            composeRule.onNodeWithTag("view-navigation-pad").fetchSemanticsNode().boundsInRoot,
+        )
+        composeRule.onNodeWithContentDescription("Fit remote view")
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+        composeRule.onNodeWithContentDescription("Pan view left").assertDoesNotExist()
+        val previewAfterCollapsingViewControls = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(
+            "Collapsing secondary view controls must restore the compact preview area",
+            previewWithCompactViewPad,
+            previewAfterCollapsingViewControls,
+        )
+
+        // Two-finger movement on the preview is always a remote wheel, even while zoomed.
+        composeRule.onNodeWithTag("remote-input-layer").performTouchInput {
+            val startY = height * 0.68f
+            val endY = height * 0.30f
+            pinch(
+                start0 = Offset(centerX - 28f, startY),
+                end0 = Offset(centerX - 28f, endY),
+                start1 = Offset(centerX + 28f, startY),
+                end1 = Offset(centerX + 28f, endY),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) { backend.scrollSteps.isNotEmpty() }
+
+        // The movable view pad remains present while the keyboard is shown and after it closes.
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Hide native keyboard")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+    }
+
+    @Test
+    fun phoneClipboardIsPreviewedBeforeTypingIntoTheBoundRemote() {
+        val clipboard = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("safe remote text"),
+            )
+        }
+        renderConsole(clipboardGateway = clipboard)
+
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithText("Type phone clipboard?").assertIsDisplayed()
+        composeRule.onNodeWithText("safe remote text").assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+
+        composeRule.runOnIdle { assertEquals(listOf("safe remote text"), backend.pastedText) }
+    }
+
+    @Test
+    fun sharedPlainTextOpensTheSamePreviewWithoutAutomaticTyping() {
+        val shared = ClipboardPayloadAnalyzer.analyzeDirectPlainText("shared remote text")
+        var consumed = false
+        renderConsole(
+            pendingSharedPaste = shared,
+            onSharedPasteConsumed = { consumed = it === shared },
+        )
+
+        composeRule.onNodeWithText("Type phone clipboard?").assertIsDisplayed()
+        composeRule.onNodeWithText("shared remote text").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertTrue(consumed)
+            assertTrue(backend.pastedText.isEmpty())
+        }
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+    }
+
+    @Test
+    fun clipboardApprovalUsesTheKeyboardAccessoryTargetLayout() {
+        val clipboard = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("symbol @"),
+            )
+        }
+        renderConsole(clipboardGateway = clipboard)
+
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+        composeRule.onNodeWithText("US").performClick()
+        composeRule.onNodeWithText("UK").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithText("Target keyboard layout: UK").assertIsDisplayed()
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(KeyboardLayout.Uk, backend.pasteRequests.single().keyboardLayout)
+        }
+    }
+
+    @Test
+    fun backgroundSensitiveWorkGenerationClearsAnOpenClipboardPreview() {
+        val sensitiveGeneration = mutableLongStateOf(0L)
+        val clipboard = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("temporary preview"),
+            )
+        }
+        composeRule.setContent {
+            val session by backend.session.collectAsState()
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = session,
+                    input = backend,
+                    videoSurface = backend,
+                    commands = backend,
+                    onDisconnect = {},
+                    clipboardGateway = clipboard,
+                    sensitiveWorkGeneration = sensitiveGeneration.longValue,
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithText("temporary preview").assertIsDisplayed()
+
+        composeRule.runOnIdle { sensitiveGeneration.longValue++ }
+
+        composeRule.onNodeWithText("Type phone clipboard?").assertDoesNotExist()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+    }
+
+    @Test
+    fun dedicatedScrollPadSendsFourDirectionRemoteScrollAndWorksWithKeyboard() {
+        renderConsole()
+
+        val preview = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewNavigationContentSpansPreview(preview)
+        val caret = composeRule.onNodeWithContentDescription("Show view controls")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val scrollPad = composeRule.onNodeWithTag("remote-scroll-pad")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val panel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val quickActions = composeRule.onNodeWithTag("console-quick-actions")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "The remote scroll pad $scrollPad must occupy the area immediately right of the caret $caret",
+            scrollPad.left >= caret.right - 1f && scrollPad.left - caret.right <= 16f,
+        )
+        assertEquals(
+            "The dedicated scroll pad must meet the right edge of the full-width strip",
+            preview.right,
+            scrollPad.right,
+            1f,
+        )
+        val density = composeRule.activity.resources.displayMetrics.density
+        assertTrue(scrollPad.width >= 48f * density - 1f)
+        assertTrue(scrollPad.height >= 48f * density - 1f)
+        assertRectsDoNotOverlap(
+            panel,
+            quickActions,
+            "Keyboard/settings shortcuts must not cover the navigation or scroll pad",
+        )
+
+        composeRule.onNodeWithTag("remote-scroll-pad").performTouchInput {
+            swipe(
+                start = Offset(centerX, height * 0.82f),
+                end = Offset(centerX, height * 0.18f),
+                durationMillis = 400,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) { backend.scrollSteps.isNotEmpty() }
+        assertTrue("An upward swipe must emit positive remote wheel steps", backend.scrollSteps.sum() > 0)
+
+        composeRule.onNodeWithTag("remote-scroll-pad").performTouchInput {
+            swipe(
+                start = Offset(width * 0.82f, centerY),
+                end = Offset(width * 0.18f, centerY),
+                durationMillis = 400,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) { backend.horizontalScrollSteps.isNotEmpty() }
+        assertTrue(
+            "A left swipe must emit positive Shift-wheel compatibility steps",
+            backend.horizontalScrollSteps.sum() > 0,
+        )
+
+        val preImePreviewHeight = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot.height
+        val verticalCountBeforeKeyboard = backend.scrollSteps.size
+        val horizontalCountBeforeKeyboard = backend.horizontalScrollSteps.size
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+        waitForBottomDockedViewPanelAndStablePreview(preImePreviewHeight)
+        val imePreview = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewNavigationContentSpansPreview(imePreview)
+        assertRectsDoNotOverlap(
+            composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
+            composeRule.onNodeWithTag("console-quick-actions").fetchSemanticsNode().boundsInRoot,
+            "Keyboard/settings shortcuts must remain clear of the IME-docked strip",
+        )
+        composeRule.onNodeWithTag("remote-scroll-pad").assertIsDisplayed().performTouchInput {
+            swipe(
+                start = Offset(centerX, height * 0.18f),
+                end = Offset(centerX, height * 0.82f),
+                durationMillis = 400,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            backend.scrollSteps.size > verticalCountBeforeKeyboard
+        }
+        assertTrue(
+            "A downward swipe must emit negative remote wheel steps",
+            backend.scrollSteps.drop(verticalCountBeforeKeyboard).sum() < 0,
+        )
+
+        composeRule.onNodeWithTag("remote-scroll-pad").performTouchInput {
+            swipe(
+                start = Offset(width * 0.18f, centerY),
+                end = Offset(width * 0.82f, centerY),
+                durationMillis = 400,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            backend.horizontalScrollSteps.size > horizontalCountBeforeKeyboard
+        }
+        assertTrue(
+            "A right swipe must emit negative compatibility steps while the keyboard is open",
+            backend.horizontalScrollSteps.drop(horizontalCountBeforeKeyboard).sum() < 0,
+        )
+    }
+
+    @Test
+    fun scrollPadSensitivityCanBeChangedFromConsoleSettings() {
+        val sensitivity = androidx.compose.runtime.mutableFloatStateOf(1f)
+        val connectedSession = backend.session.value
+        composeRule.setContent {
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = connectedSession,
+                    input = backend,
+                    videoSurface = backend,
+                    commands = backend,
+                    onDisconnect = {},
+                    scrollSensitivity = sensitivity.floatValue,
+                    onScrollSensitivityChange = { sensitivity.floatValue = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Scroll sensitivity 1.0×")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Scroll sensitivity").assertIsDisplayed()
+
+        val setProgress = composeRule.onNodeWithTag("scroll-sensitivity-slider")
+            .fetchSemanticsNode().config[SemanticsActions.SetProgress]
+        var changed = false
+        composeRule.runOnIdle { changed = setProgress.action?.invoke(2.5f) == true }
+        assertTrue("The sensitivity slider must accept an app setting", changed)
+        composeRule.onNodeWithText("Apply").performClick()
+
+        composeRule.runOnIdle { assertEquals(2.5f, sensitivity.floatValue) }
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Scroll sensitivity 2.5×")
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun movableViewPadLeavesVideoAndRemoteInputAvailableBelowIt() {
+        backend.surfaceFillColor = TEST_VIDEO_COLOR
+        composeRule.setContent {
+            NanoKvmTheme {
+                Box(Modifier.requiredSize(width = 360.dp, height = 500.dp)) {
+                    RemoteViewport(
+                        input = backend,
+                        videoSurface = backend,
+                        remoteWidth = 360,
+                        remoteHeight = 500,
+                        videoSurfaceGeneration = 0,
+                        pointerMode = PointerMode.Direct,
+                        fitRequest = 0,
+                        viewNavigationVisible = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls >= 1 }
+
+        val previewBeforeMove = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val panelBeforeMove = composeRule.onNodeWithTag("view-navigation-panel")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val moveHandle = composeRule.onNodeWithContentDescription("Move pan and zoom pad")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        val handleBounds = moveHandle.fetchSemanticsNode().boundsInRoot
+        val density = composeRule.activity.resources.displayMetrics.density
+        assertTrue(handleBounds.width >= 48f * density - 1f)
+        assertTrue(handleBounds.height >= 48f * density - 1f)
+        assertViewPanelContained(previewBeforeMove, panelBeforeMove)
+
+        val availableTravel = previewBeforeMove.height - panelBeforeMove.height
+        assertTrue("The portrait viewport must leave vertical room to move the pad", availableTravel > 0f)
+        val matrixBeforeMove = captureTextureTransform()
+        val remoteInputBeforeMove = backend.remoteInputCallCount
+        val attachCallsBeforeMove = backend.attachSurfaceCalls
+        val detachCallsBeforeMove = backend.detachSurfaceCalls
+        moveHandle.performTouchInput {
+            swipe(
+                start = center,
+                end = Offset(centerX, centerY - availableTravel * 0.28f),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+
+        val previewAfterMove = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val panelAfterMove = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val matrixAfterMove = captureTextureTransform()
+        assertEquals(
+            "Moving the overlay must not resize the remote preview",
+            previewBeforeMove,
+            previewAfterMove,
+        )
+        assertViewPanelContained(previewAfterMove, panelAfterMove)
+        assertTrue(
+            "Dragging the move handle must raise the view pad",
+            panelAfterMove.top < panelBeforeMove.top - 4f,
+        )
+        assertTrue(
+            "Moving the pad upward must expose remote video and input space below it",
+            panelAfterMove.bottom < previewAfterMove.bottom - 4f,
+        )
+        assertTrue(
+            "The moved pad should leave remote video visible above it as well",
+            panelAfterMove.top > previewAfterMove.top + 4f,
+        )
+        assertMatrixEquals(
+            "Moving the pad must not pan, zoom, or otherwise transform the video",
+            matrixBeforeMove,
+            matrixAfterMove,
+        )
+        assertEquals(remoteInputBeforeMove, backend.remoteInputCallCount)
+        assertEquals(attachCallsBeforeMove, backend.attachSurfaceCalls)
+        assertEquals(detachCallsBeforeMove, backend.detachSurfaceCalls)
+
+        // The fake video exactly matches this viewport's aspect ratio. PixelCopy therefore proves
+        // that the same live TextureView remains visible on both sides of the floating overlay.
+        val textureLocation = IntArray(2)
+        val textureView = composeRule.runOnIdle {
+            findTextureView(composeRule.activity.window.decorView).also {
+                assertNotNull("The remote viewport must contain a TextureView", it)
+                it!!.getLocationInWindow(textureLocation)
+            }!!
+        }
+        val sampleRootX = panelAfterMove.center.x
+        val sampleAboveRootY = (previewAfterMove.top + panelAfterMove.top) / 2f
+        val sampleBelowRootY = (panelAfterMove.bottom + previewAfterMove.bottom) / 2f
+        val sampleWindowX = (
+            textureLocation[0] + sampleRootX - previewAfterMove.left
+            ).toInt().coerceIn(
+                textureLocation[0],
+                textureLocation[0] + textureView.width - 1,
+            )
+        val sampleAboveWindowY = (
+            textureLocation[1] + sampleAboveRootY - previewAfterMove.top
+            ).toInt().coerceIn(0, composeRule.activity.window.decorView.height - 1)
+        val sampleBelowWindowY = (
+            textureLocation[1] + sampleBelowRootY - previewAfterMove.top
+            ).toInt().coerceIn(0, composeRule.activity.window.decorView.height - 1)
+        val window = captureWindow()
+        assertColorNear(TEST_VIDEO_COLOR, window.getPixel(sampleWindowX, sampleAboveWindowY))
+        assertColorNear(TEST_VIDEO_COLOR, window.getPixel(sampleWindowX, sampleBelowWindowY))
+
+        // A direct click in the revealed area must still reach the remote input layer.
+        val inputBounds = composeRule.onNodeWithTag("remote-input-layer")
+            .fetchSemanticsNode().boundsInRoot
+        val remoteInputBeforeClick = backend.remoteInputCallCount
+        composeRule.onNodeWithTag("remote-input-layer").performTouchInput {
+            click(
+                Offset(
+                    x = centerX,
+                    y = sampleBelowRootY - inputBounds.top,
+                ),
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            backend.remoteInputCallCount > remoteInputBeforeClick
+        }
+    }
+
+    @Test
+    fun keyboardTemporarilyBottomDocksMovableViewPadAndRestoresItsPosition() {
+        renderConsole()
+        composeRule.onNodeWithContentDescription("Move pan and zoom pad")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+
+        // Save a normal position distinct from both the keyboard-time bottom and its temporary move.
+        performViewPadCustomAction("Move view pad up")
+        performViewPadCustomAction("Move view pad up")
+        val previewBeforeKeyboard = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val panelBeforeKeyboard = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(
+            "Two accessibility steps from the bottom should place the pad halfway down",
+            0.5f,
+            normalizedPanelPosition(previewBeforeKeyboard, panelBeforeKeyboard),
+            0.03f,
+        )
+
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+        waitForBottomDockedViewPanelAndStablePreview(previewBeforeKeyboard.height)
+        val previewWithKeyboard = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val bottomDockedPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val keyboardAccessory = composeRule.onNodeWithTag("keyboard-accessory")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(previewWithKeyboard, bottomDockedPanel)
+        assertEquals(
+            "Opening the keyboard must temporarily snap the pad to the resized preview bottom",
+            1f,
+            normalizedPanelPosition(previewWithKeyboard, bottomDockedPanel),
+            0.02f,
+        )
+        assertTrue(bottomDockedPanel.bottom <= keyboardAccessory.top + 1f)
+
+        val matrixBeforeImeMove = captureTextureTransform()
+        val remoteInputBeforeImeMove = backend.remoteInputCallCount
+        performViewPadCustomAction("Move view pad up")
+        val temporarilyMovedPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(previewWithKeyboard, temporarilyMovedPanel)
+        assertTrue(
+            "The move handle must remain usable while the keyboard is open",
+            temporarilyMovedPanel.top < bottomDockedPanel.top - 4f,
+        )
+        assertEquals(
+            0.75f,
+            normalizedPanelPosition(previewWithKeyboard, temporarilyMovedPanel),
+            0.03f,
+        )
+        assertMatrixEquals(
+            "Moving the pad while typing must not transform the remote video",
+            matrixBeforeImeMove,
+            captureTextureTransform(),
+        )
+        assertEquals(remoteInputBeforeImeMove, backend.remoteInputCallCount)
+
+        val panelBeforeImePinch = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val matrixBeforeImePinch = captureTextureTransform()
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            pinch(
+                start0 = Offset(centerX - 24f, centerY),
+                end0 = Offset(centerX - 72f, centerY),
+                start1 = Offset(centerX + 24f, centerY),
+                end1 = Offset(centerX + 72f, centerY),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+        val matrixAfterImePinch = captureTextureTransform()
+        assertTrue(
+            "Pan and zoom gestures must remain usable while the keyboard is open",
+            matrixAfterImePinch[Matrix.MSCALE_X] > matrixBeforeImePinch[Matrix.MSCALE_X] + 0.02f,
+        )
+        assertEquals(
+            "Pan and zoom gestures must not move the floating pad",
+            panelBeforeImePinch,
+            composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
+        )
+        assertEquals(remoteInputBeforeImeMove, backend.remoteInputCallCount)
+        composeRule.runOnIdle {
+            assertTrue(
+                "Moving and using the pad must retain the native IME editor focus",
+                composeRule.activity.currentFocus?.onCheckIsTextEditor() == true,
+            )
+        }
+
+        composeRule.onNodeWithContentDescription("Hide native keyboard")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            val preview = composeRule.onNodeWithTag("remote-preview")
+                .fetchSemanticsNode().boundsInRoot
+            val panel = composeRule.onNodeWithTag("view-navigation-panel")
+                .fetchSemanticsNode().boundsInRoot
+            kotlin.math.abs(preview.height - previewBeforeKeyboard.height) <= 2f &&
+                kotlin.math.abs(normalizedPanelPosition(preview, panel) - 0.5f) <= 0.03f
+        }
+        val previewAfterKeyboard = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val restoredPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(previewBeforeKeyboard, previewAfterKeyboard)
+        assertEquals(
+            "Closing the keyboard must restore the saved normal placement, not the temporary IME placement",
+            panelBeforeKeyboard.top,
+            restoredPanel.top,
+            2f,
+        )
+        assertEquals(
+            0.5f,
+            normalizedPanelPosition(previewAfterKeyboard, restoredPanel),
+            0.03f,
+        )
+    }
+
+    @Test
+    fun controlSheetShowsDiagnosticsWithoutResizingOrRecreatingVideoTarget() {
+        renderConsole()
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls >= 1 }
+
+        // Connected diagnostics are available on demand and never obscure the remote image.
+        composeRule.onNodeWithText("Lab NanoKVM").assertDoesNotExist()
+        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        val previewBeforeSheet = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val actionBounds = composeRule.onNodeWithTag("console-quick-actions")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            actionBounds.left < previewBeforeSheet.right &&
+                actionBounds.right <= previewBeforeSheet.right + 1f,
+        )
+
+        val density = composeRule.activity.resources.displayMetrics.density
+        val minimumTouchTarget = 48f * density
+        val keyboardTarget = composeRule.onNodeWithContentDescription("Show keyboard")
+            .fetchSemanticsNode().boundsInRoot
+        val controlsTarget = composeRule.onNodeWithContentDescription("Open console controls")
+            .fetchSemanticsNode().boundsInRoot
+        composeRule.onNodeWithTag("console-quick-connection-status")
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Connected")
+        assertTrue(keyboardTarget.width >= minimumTouchTarget - 1f)
+        assertTrue(keyboardTarget.height >= minimumTouchTarget - 1f)
+        assertTrue(controlsTarget.width >= minimumTouchTarget - 1f)
+        assertTrue(controlsTarget.height >= minimumTouchTarget - 1f)
+
+        val attachCallsBeforeSheet = backend.attachSurfaceCalls
+        val detachCallsBeforeSheet = backend.detachSurfaceCalls
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-status-summary").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-connection-status-label")
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Connected", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Lab NanoKVM").assertIsDisplayed()
+        composeRule.onNodeWithText("H.264 direct", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Drops 7", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Stalls 2", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Video diagnostics visible").assertIsDisplayed()
+        val previewWithSheet = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(
+            "The overlay sheet must not resize the video viewport",
+            previewBeforeSheet,
+            previewWithSheet,
+        )
+        assertEquals(
+            "Opening console chrome must not recreate the video Surface",
+            attachCallsBeforeSheet,
+            backend.attachSurfaceCalls,
+        )
+        assertEquals(
+            "Opening console chrome must not detach the video Surface",
+            detachCallsBeforeSheet,
+            backend.detachSurfaceCalls,
+        )
+
+        composeRule.onNodeWithContentDescription("Close controls")
+            .assertHasClickAction()
+            .performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
+        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        assertEquals(previewBeforeSheet, composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot)
+        assertEquals(attachCallsBeforeSheet, backend.attachSurfaceCalls)
+        assertEquals(detachCallsBeforeSheet, backend.detachSurfaceCalls)
+    }
+
+    @Test
+    fun moreActionsDiscoversVirtualMediaAndWakeOnLanState() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-virtual-media-action")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-virtual-media-dialog").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(true, backend.phase3SurfaceIsVisible) }
+        composeRule.onNodeWithText("USB HID mode").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("HID only").performScrollTo().performClick()
+        composeRule.onNodeWithText("Authenticated session: 7").assertIsDisplayed()
+        composeRule.onNodeWithText("Confirm").performClick()
+        composeRule.runOnIdle {
+            assertEquals(listOf(Phase3HidModeSelection.HidOnly), backend.phase3HidModeChanges)
+        }
+        composeRule.onNodeWithTag("phase3-network-toggle")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithText("Authenticated session: 7").assertIsDisplayed()
+        composeRule.onNodeWithText("Confirm").performClick()
+        composeRule.runOnIdle { assertEquals(listOf(false), backend.phase3NetworkChanges) }
+        composeRule.onNodeWithText("Virtual media device (reported state)")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("installer.iso")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Currently mounted").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Close").performClick()
+        composeRule.runOnIdle { assertEquals(false, backend.phase3SurfaceIsVisible) }
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-wol-action")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-wol-dialog").assertIsDisplayed()
+        composeRule.onNodeWithText("Test server").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("00:11:22:33:44:55").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun phase3NoticesStayWithTheirOwningDialog() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-virtual-media-action").performClick()
+        composeRule.onNodeWithText("Virtual-media-only notice").assertIsDisplayed()
+        composeRule.onNodeWithText("Wake-on-LAN-only notice").assertDoesNotExist()
+        composeRule.onNodeWithText("Close").performClick()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("phase3-wol-action").performClick()
+        composeRule.onNodeWithText("Wake-on-LAN-only notice").assertIsDisplayed()
+        composeRule.onNodeWithText("Virtual-media-only notice").assertDoesNotExist()
+    }
+
+    @Test
+    fun moreActionsOpensTheReadOnlyDeviceAndCapabilitySheet() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("device-info-action").assertIsDisplayed().performClick()
+
+        composeRule.onNodeWithTag("device-info-dialog").assertIsDisplayed()
+        composeRule.onNodeWithText("2.4.3").assertIsDisplayed()
+        composeRule.onNodeWithText("NanoKVM-Full").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("192.0.2.250").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun immersiveModeIsExplicitAndBackRestoresTheNormalConsole() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("immersive-mode-action")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Exit full screen").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Close").performClick()
+
+        composeRule.runOnIdle {
+            composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Enter full screen").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun moreActionsDiscoversPicoClawButConsentIsTheFirstProtocolEntry() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("picoclaw-action")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("picoclaw-dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("picoclaw-risk-warning").assertIsDisplayed()
+        composeRule.onNodeWithText("scheduled cron", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("MCP", substring = true).assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertTrue(backend.picoClawSurfaceIsVisible)
+            assertEquals(0, backend.picoClawEntryCalls)
+        }
+
+        composeRule.onNodeWithTag("picoclaw-consent-enter").performClick()
+        composeRule.runOnIdle { assertEquals(1, backend.picoClawEntryCalls) }
+    }
+
+    @Test
+    fun unsupportedPicoClawIsExplicitAndNeverOffersConsentEntry() {
+        backend.mutablePicoClawState.value = PicoClawUiState(
+            support = PicoClawSupport.Unsupported,
+        )
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("picoclaw-action").performScrollTo().performClick()
+
+        composeRule.onNodeWithText("requires NanoKVM application 2.4.0", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("picoclaw-consent-enter").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, backend.picoClawEntryCalls) }
+    }
+
+    @Test
+    fun activePicoClawLockRemainsGloballyDiscoverableOutsideControls() {
+        backend.mutablePicoClawState.value = PicoClawUiState(
+            support = PicoClawSupport.Supported,
+            entered = true,
+            manualInput = PicoClawManualInputUiState.Held,
+        )
+        renderConsole()
+
+        composeRule.onNodeWithTag("picoclaw-global-hid-lock").assertIsDisplayed()
+        composeRule.onNodeWithText("PicoClaw controls keyboard and mouse").assertIsDisplayed()
+    }
+
+    @Test
+    fun controlSheetExposesAccessibleOneShotAuxiliaryMouseButtons() {
+        renderConsole(themeMode = ThemeMode.LIGHT, useDynamicColor = false)
+        val previewBeforeControls = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+
+        composeRule.onNodeWithContentDescription("Middle mouse click").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Mouse Back").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Mouse Forward").assertDoesNotExist()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        // The horizontal rail is nested inside the vertically scrolling adaptive controls.
+        // Scroll the rail itself through the vertical ancestor before scrolling its children.
+        composeRule.onNodeWithTag("console-mouse-controls")
+            .performScrollTo()
+            .assertIsDisplayed()
+        val middleButtonTextLayouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText("Middle mouse click", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
+                action(middleButtonTextLayouts)
+            }
+        assertEquals(
+            "Mouse action labels must use the fixed dark-console foreground in a light app theme",
+            DarkConsoleColorScheme.onSurface.toArgb(),
+            middleButtonTextLayouts.single().layoutInput.style.color.toArgb(),
+        )
+        listOf("Middle mouse click", "Mouse Back", "Mouse Forward").forEach { description ->
+            composeRule.onNodeWithContentDescription(description)
+                .performScrollTo()
+                .assertHasClickAction()
+                .performClick()
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(
+                listOf(
+                    MouseButton.Middle to true,
+                    MouseButton.Middle to false,
+                    MouseButton.Back to true,
+                    MouseButton.Back to false,
+                    MouseButton.Forward to true,
+                    MouseButton.Forward to false,
+                ),
+                backend.mouseButtonEvents,
+            )
+        }
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        assertEquals(
+            "Auxiliary mouse controls must remain temporary chrome over the full preview",
+            previewBeforeControls,
+            composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot,
+        )
+    }
+
+    @Test
+    fun compactLandscapeEmbeddedActionsAndControlSheetRemainUsable() {
+        renderConsole(compactLandscape = true)
+
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+        val preview = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val panelAtBottom = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(preview, panelAtBottom)
+        performViewPadCustomAction("Move view pad up")
+        val raisedPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(preview, raisedPanel)
+        assertTrue(
+            "The view pad must move upward and expose space below even in compact landscape",
+            raisedPanel.top < panelAtBottom.top - 2f && raisedPanel.bottom < preview.bottom - 2f,
+        )
+        performViewPadCustomAction("Move view pad down")
+        val returnedPanel = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        assertViewPanelContained(preview, returnedPanel)
+        assertViewNavigationContentSpansPreview(preview)
+        assertEquals(panelAtBottom.top, returnedPanel.top, 2f)
+        val actions = composeRule.onNodeWithTag("console-quick-actions")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "Compact shortcuts must remain inside the preview",
+            actions.left >= preview.left - 1f &&
+                actions.top >= preview.top - 1f &&
+                actions.right <= preview.right + 1f &&
+                actions.bottom <= preview.bottom + 1f,
+        )
+        assertRectsDoNotOverlap(
+            returnedPanel,
+            actions,
+            "Compact shortcuts must not obscure the full-width navigation strip",
+        )
+
+        composeRule.onNodeWithContentDescription("Show keyboard")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-control-scrim")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .assertContentDescriptionEquals("Close controls")
+        composeRule.onNodeWithContentDescription("Direct pointer")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithContentDescription("Trackpad pointer")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Hide view pad")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("view-navigation-pad").assertDoesNotExist()
+        composeRule.onNodeWithTag("console-quick-actions").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Dock view pad")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Fit remote view")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
+    }
+
+    @Test
+    fun viewNavigationPadPinchAndDragChangeTheVideoTransformWithoutRemoteInput() {
+        val remoteWidth = mutableIntStateOf(1920)
+        val remoteHeight = mutableIntStateOf(1080)
+        val fitRequest = mutableIntStateOf(0)
+        composeRule.setContent {
+            NanoKvmTheme {
+                Box(Modifier.requiredSize(width = 360.dp, height = 500.dp)) {
+                    RemoteViewport(
+                        input = backend,
+                        videoSurface = backend,
+                        remoteWidth = remoteWidth.intValue,
+                        remoteHeight = remoteHeight.intValue,
+                        videoSurfaceGeneration = 0,
+                        pointerMode = PointerMode.Direct,
+                        fitRequest = fitRequest.intValue,
+                        viewNavigationVisible = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls >= 1 }
+
+        val remoteInputCallsBeforeGestures = backend.remoteInputCallCount
+        val panelBeforeGestures = composeRule.onNodeWithTag("view-navigation-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val beforePinch = captureTextureTransform()
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            pinch(
+                start0 = Offset(centerX - 24f, centerY),
+                end0 = Offset(centerX - 104f, centerY),
+                start1 = Offset(centerX + 24f, centerY),
+                end1 = Offset(centerX + 104f, centerY),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+        val afterPinch = captureTextureTransform()
+        assertTrue(
+            "Pinching the view pad must increase the video transform scale",
+            afterPinch[Matrix.MSCALE_X] > beforePinch[Matrix.MSCALE_X] + 0.05f &&
+                afterPinch[Matrix.MSCALE_Y] > beforePinch[Matrix.MSCALE_Y] + 0.05f,
+        )
+        assertEquals(
+            "Pinching the view must not reposition its movable control panel",
+            panelBeforeGestures,
+            composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
+        )
+
+        // Replacing the dimensions resets the active transform. The pad gesture callback must
+        // continue mutating that active state rather than a state captured by an earlier layout.
+        composeRule.runOnIdle {
+            remoteWidth.intValue = 1366
+            remoteHeight.intValue = 768
+            fitRequest.intValue++
+        }
+        composeRule.waitForIdle()
+        val afterDimensionChange = captureTextureTransform()
+        assertTrue(
+            "Changing dimensions and fitting must reset the first pinch",
+            afterDimensionChange[Matrix.MSCALE_X] < afterPinch[Matrix.MSCALE_X] - 0.05f &&
+                afterDimensionChange[Matrix.MSCALE_Y] < afterPinch[Matrix.MSCALE_Y] - 0.05f,
+        )
+
+        // Separation grows only 1.4x over two seconds. Its individual injected deltas are below
+        // the former 0.8% per-event cutoff, so they must accumulate into a visible final zoom.
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            pinch(
+                start0 = Offset(centerX - 80f, centerY),
+                end0 = Offset(centerX - 112f, centerY),
+                start1 = Offset(centerX + 80f, centerY),
+                end1 = Offset(centerX + 112f, centerY),
+                durationMillis = 2_000,
+            )
+        }
+        composeRule.waitForIdle()
+        val afterSlowPinch = captureTextureTransform()
+        assertTrue(
+            "A slow pinch must accumulate into a video transform scale change after dimensions change",
+            afterSlowPinch[Matrix.MSCALE_X] > afterDimensionChange[Matrix.MSCALE_X] + 0.02f &&
+                afterSlowPinch[Matrix.MSCALE_Y] > afterDimensionChange[Matrix.MSCALE_Y] + 0.02f,
+        )
+
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            swipe(
+                start = Offset(width * 0.30f, centerY),
+                end = Offset(width * 0.65f, centerY),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+        val afterDrag = captureTextureTransform()
+        assertEquals(afterSlowPinch[Matrix.MSCALE_X], afterDrag[Matrix.MSCALE_X], 0.01f)
+        assertEquals(afterSlowPinch[Matrix.MSCALE_Y], afterDrag[Matrix.MSCALE_Y], 0.01f)
+        assertTrue(
+            "Dragging the view pad must translate the zoomed video",
+            kotlin.math.abs(afterDrag[Matrix.MTRANS_X] - afterSlowPinch[Matrix.MTRANS_X]) > 4f ||
+                kotlin.math.abs(afterDrag[Matrix.MTRANS_Y] - afterSlowPinch[Matrix.MTRANS_Y]) > 4f,
+        )
+        assertEquals(
+            "Panning the remote view must not drag the navigation panel itself",
+            panelBeforeGestures,
+            composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
+        )
+        assertEquals(
+            "View navigation gestures must not send mouse or wheel input to the remote computer",
+            remoteInputCallsBeforeGestures,
+            backend.remoteInputCallCount,
+        )
+    }
+
+    @Test
+    fun changingSurfaceGenerationRecreatesTheVideoTarget() {
+        val generation = mutableLongStateOf(0L)
+        composeRule.setContent {
+            NanoKvmTheme {
+                RemoteViewport(
+                    input = backend,
+                    videoSurface = backend,
+                    remoteWidth = 1920,
+                    remoteHeight = 1080,
+                    videoSurfaceGeneration = generation.longValue,
+                    pointerMode = PointerMode.Direct,
+                    fitRequest = 0,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls >= 1 }
+        val originalAttachCount = backend.attachSurfaceCalls
+
+        composeRule.runOnIdle { generation.longValue++ }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            backend.attachSurfaceCalls > originalAttachCount && backend.detachSurfaceCalls >= 1
+        }
+    }
+
+    @Test
+    fun changingReportedVideoSizeKeepsTheFirstSurfaceVisible() {
+        val remoteWidth = mutableIntStateOf(1920)
+        val remoteHeight = mutableIntStateOf(1080)
+        backend.surfaceFillColor = TEST_VIDEO_COLOR
+        composeRule.setContent {
+            NanoKvmTheme {
+                RemoteViewport(
+                    input = backend,
+                    videoSurface = backend,
+                    remoteWidth = remoteWidth.intValue,
+                    remoteHeight = remoteHeight.intValue,
+                    videoSurfaceGeneration = 0,
+                    pointerMode = PointerMode.Direct,
+                    fitRequest = 0,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+
+        // The decoder commonly replaces the guessed 1080p dimensions after its first SPS.
+        composeRule.runOnIdle {
+            remoteWidth.intValue = 1366
+            remoteHeight.intValue = 768
+        }
+        composeRule.waitForIdle()
+
+        val textureView = composeRule.runOnIdle {
+            findTextureView(composeRule.activity.window.decorView)
+        }
+        assertNotNull("The console must keep its TextureView after a size report", textureView)
+        val location = IntArray(2)
+        composeRule.runOnIdle { textureView!!.getLocationInWindow(location) }
+        val window = captureWindow()
+        val sampleY = (location[1] + textureView!!.height / 2).coerceIn(0, window.height - 1)
+        val sampleLeft = (location[0] + textureView.width / 4).coerceIn(0, window.width - 1)
+        val sampleRight = (location[0] + textureView.width * 3 / 4).coerceIn(0, window.width - 1)
+        assertColorNear(TEST_VIDEO_COLOR, window.getPixel(sampleLeft, sampleY))
+        assertColorNear(TEST_VIDEO_COLOR, window.getPixel(sampleRight, sampleY))
+        assertEquals("A resolution report must not recreate the video Surface", 1, backend.attachSurfaceCalls)
+    }
+
+    @Test
+    fun videoSettingsReflectCurrentSessionAndApplyTypedTransport() {
+        renderConsole()
+
+        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Video settings")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("MJPEG").assertIsSelected()
+        composeRule.onNodeWithText("WebRTC").assertIsDisplayed()
+        composeRule.onNodeWithText("600p").assertIsSelected()
+        composeRule.onNodeWithText("24 fps").assertIsSelected()
+        composeRule.onNodeWithText("WebRTC").performClick()
+        composeRule.onNodeWithText("720p").performClick()
+        composeRule.onNodeWithText("Apply").performClick()
+        composeRule.onNodeWithTag("remote-preview").assertExists()
+
+        composeRule.runOnIdle {
+            assertEquals(
+                VideoSettings(
+                    transportPreference = VideoTransportPreference.WEBRTC,
+                    resolutionHeight = 720,
+                    framesPerSecond = 24,
+                    bitrateKbps = 2_000,
+                    jpegQuality = 60,
+                ),
+                backend.lastVideoSettings,
+            )
+        }
+    }
+
+    @Test
+    fun frameDetectionPreferenceIsStagedUntilApplyAndDispatchedOnce() {
+        val frameDetectionChanges = mutableListOf<Boolean>()
+        renderConsole(
+            mjpegFrameDetectionEnabled = false,
+            onMjpegFrameDetectionEnabledChange = frameDetectionChanges::add,
+        )
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Video settings")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("mjpegFrameDetectionToggle")
+            .performScrollTo()
+            .assertIsOff()
+            .performClick()
+        composeRule.runOnIdle { assertEquals(emptyList<Boolean>(), frameDetectionChanges) }
+
+        composeRule.onNodeWithText("Apply").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(listOf(true), frameDetectionChanges)
+            assertNull(backend.lastVideoSettings)
+        }
+    }
+
+    @Test
+    fun openingAndClosingAdaptiveControlsKeepsTheVideoSurfaceAttached() {
+        renderConsole()
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+        val originalAttachCount = backend.attachSurfaceCalls
+        val originalDetachCount = backend.detachSurfaceCalls
+
+        composeRule.onNodeWithContentDescription("Open console controls")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        composeRule.waitForIdle()
+        assertEquals(originalAttachCount, backend.attachSurfaceCalls)
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+
+        composeRule.onNodeWithContentDescription("Close controls")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
+        composeRule.waitForIdle()
+        assertEquals(
+            "Changing console chrome must not recreate the video Surface",
+            originalAttachCount,
+            backend.attachSurfaceCalls,
+        )
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+    }
+
+    @Test
+    fun resizingAcrossExpandedBreakpointMovesConsoleWithoutReattachingVideoSurface() {
+        val layoutWidth = mutableIntStateOf(500)
+        composeRule.setContent {
+            val session by backend.session.collectAsState()
+            NanoKvmTheme {
+                Box(
+                    Modifier.requiredSize(
+                        width = layoutWidth.intValue.dp,
+                        height = 700.dp,
+                    ),
+                ) {
+                    ConsoleScreen(
+                        profile = profile,
+                        session = session,
+                        input = backend,
+                        videoSurface = backend,
+                        commands = backend,
+                        onDisconnect = { backend.disconnectCalls++ },
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithTag("console-layout-single-pane").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+        val compactPreview = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        val originalTextureView = composeRule.runOnIdle {
+            findTextureView(composeRule.activity.window.decorView)
+        }
+        assertNotNull(originalTextureView)
+        val originalAttachCount = backend.attachSurfaceCalls
+        val originalDetachCount = backend.detachSurfaceCalls
+
+        composeRule.runOnIdle { layoutWidth.intValue = 900 }
+        composeRule.onNodeWithTag("console-layout-supporting-pane").assertExists()
+        composeRule.waitForIdle()
+        val expandedPreview = composeRule.onNodeWithTag("remote-preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "The test host must really cross into a wider expanded composition",
+            expandedPreview.width > compactPreview.width + 100f,
+        )
+        assertEquals(
+            "Entering an expanded supporting-pane layout must retain the decoder Surface",
+            originalAttachCount,
+            backend.attachSurfaceCalls,
+        )
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+        assertSame(
+            originalTextureView,
+            composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
+        )
+
+        composeRule.runOnIdle { layoutWidth.intValue = 700 }
+        composeRule.onNodeWithTag("console-layout-single-pane").assertExists()
+        composeRule.waitForIdle()
+        assertEquals(
+            "Returning from the expanded breakpoint must retain the decoder Surface",
+            originalAttachCount,
+            backend.attachSurfaceCalls,
+        )
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+        assertSame(
+            originalTextureView,
+            composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
+        )
+    }
+
+    private fun performViewPadCustomAction(label: String) {
+        val actions = composeRule.onNodeWithTag("view-navigation-move-handle")
+            .fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        val requestedAction = actions.firstOrNull { it.label == label }
+        assertNotNull("Expected accessibility action '$label' on the view-pad move handle", requestedAction)
+        var actionResult = false
+        composeRule.runOnIdle { actionResult = requestedAction!!.action() }
+        assertTrue("Accessibility action '$label' should move the view pad", actionResult)
+        composeRule.waitForIdle()
+    }
+
+    private fun assertViewPanelContained(preview: Rect, panel: Rect) {
+        assertTrue(
+            "View pad $panel must remain within remote preview $preview",
+            panel.left >= preview.left - 1f &&
+                panel.top >= preview.top - 1f &&
+                panel.right <= preview.right + 1f &&
+                panel.bottom <= preview.bottom + 1f,
+        )
+        assertEquals(
+            "The view pad must meet the preview's left edge",
+            preview.left,
+            panel.left,
+            1f,
+        )
+        assertEquals(
+            "The view pad must meet the preview's right edge",
+            preview.right,
+            panel.right,
+            1f,
+        )
+        assertViewNavigationContentSpansPreview(preview)
+    }
+
+    private fun assertViewNavigationContentSpansPreview(preview: Rect) {
+        val content = composeRule.onNodeWithTag("view-navigation-content")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(
+            "The visible navigation strip must meet the preview's left edge",
+            preview.left,
+            content.left,
+            1f,
+        )
+        assertEquals(
+            "The visible navigation strip must meet the preview's right edge",
+            preview.right,
+            content.right,
+            1f,
+        )
+    }
+
+    private fun assertRectsDoNotOverlap(first: Rect, second: Rect, message: String) {
+        assertTrue(
+            "$message: $first vs $second",
+            first.right <= second.left + 1f ||
+                second.right <= first.left + 1f ||
+                first.bottom <= second.top + 1f ||
+                second.bottom <= first.top + 1f,
+        )
+    }
+
+    private fun waitForBottomDockedViewPanelAndStablePreview(preImePreviewHeight: Float) {
+        var previousHeight = Float.NaN
+        var stableSince = 0L
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            val preview = composeRule.onNodeWithTag("remote-preview")
+                .fetchSemanticsNode().boundsInRoot
+            val panel = composeRule.onNodeWithTag("view-navigation-panel")
+                .fetchSemanticsNode().boundsInRoot
+            val now = SystemClock.uptimeMillis()
+            val imeVisible = ViewCompat.getRootWindowInsets(
+                composeRule.activity.window.decorView,
+            )?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            val previewResized = preview.height < preImePreviewHeight - 2f
+            val docked = kotlin.math.abs(panel.bottom - preview.bottom) <= 2f
+            if (
+                !imeVisible || !previewResized || !docked || previousHeight.isNaN() ||
+                kotlin.math.abs(preview.height - previousHeight) > 1f
+            ) {
+                stableSince = now
+            }
+            previousHeight = preview.height
+            imeVisible && previewResized && docked && now - stableSince >= 250L
+        }
+    }
+
+    private fun normalizedPanelPosition(preview: Rect, panel: Rect): Float {
+        val travel = preview.height - panel.height
+        assertTrue("The preview must be taller than the movable view pad", travel > 0f)
+        return ((panel.top - preview.top) / travel).coerceIn(0f, 1f)
+    }
+
+    private fun assertMatrixEquals(
+        message: String,
+        expected: FloatArray,
+        actual: FloatArray,
+        tolerance: Float = 0.001f,
+    ) {
+        assertEquals("Matrix lengths differ", expected.size, actual.size)
+        expected.indices.forEach { index ->
+            assertEquals("$message (matrix index $index)", expected[index], actual[index], tolerance)
+        }
+    }
+
+    private fun renderConsole(
+        compactLandscape: Boolean = false,
+        clipboardGateway: ClipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+        pendingSharedPaste: org.nanokvm.mobile.clipboard.ClipboardPayload? = null,
+        onSharedPasteConsumed: (org.nanokvm.mobile.clipboard.ClipboardPayload) -> Unit = {},
+        mjpegFrameDetectionEnabled: Boolean = false,
+        onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit = {},
+        themeMode: ThemeMode = ThemeMode.SYSTEM,
+        useDynamicColor: Boolean = true,
+    ) {
+        val connectedSession = backend.session.value
+        composeRule.setContent {
+            NanoKvmTheme(themeMode = themeMode, useDynamicColor = useDynamicColor) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.TopStart,
+                ) {
+                    if (compactLandscape) {
+                        Box(Modifier.requiredSize(width = 360.dp, height = 240.dp)) {
+                            ConsoleScreen(
+                                profile = profile,
+                                session = connectedSession,
+                                input = backend,
+                                videoSurface = backend,
+                                commands = backend,
+                                onDisconnect = { backend.disconnectCalls++ },
+                                clipboardGateway = clipboardGateway,
+                                pendingSharedPaste = pendingSharedPaste,
+                                onSharedPasteConsumed = onSharedPasteConsumed,
+                                mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
+                                onMjpegFrameDetectionEnabledChange =
+                                    onMjpegFrameDetectionEnabledChange,
+                            )
+                        }
+                    } else {
+                        ConsoleScreen(
+                            profile = profile,
+                            session = connectedSession,
+                            input = backend,
+                            videoSurface = backend,
+                            commands = backend,
+                            onDisconnect = { backend.disconnectCalls++ },
+                            clipboardGateway = clipboardGateway,
+                            pendingSharedPaste = pendingSharedPaste,
+                            onSharedPasteConsumed = onSharedPasteConsumed,
+                            mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
+                            onMjpegFrameDetectionEnabledChange =
+                                onMjpegFrameDetectionEnabledChange,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun captureWindow(): Bitmap {
+        val decor = composeRule.activity.window.decorView
+        val bitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+        val result = AtomicInteger(-1)
+        val completed = CountDownLatch(1)
+        composeRule.runOnIdle {
+            PixelCopy.request(
+                composeRule.activity.window,
+                bitmap,
+                {
+                    result.set(it)
+                    completed.countDown()
+                },
+                Handler(Looper.getMainLooper()),
+            )
+        }
+        assertTrue("PixelCopy timed out", completed.await(5, TimeUnit.SECONDS))
+        assertEquals("PixelCopy should capture the TextureView", PixelCopy.SUCCESS, result.get())
+        return bitmap
+    }
+
+    private fun captureTextureTransform(): FloatArray {
+        val values = FloatArray(9)
+        composeRule.runOnIdle {
+            val textureView = findTextureView(composeRule.activity.window.decorView)
+            assertNotNull("The remote viewport must contain a TextureView", textureView)
+            val matrix = Matrix()
+            textureView!!.getTransform(matrix)
+            matrix.getValues(values)
+        }
+        return values
+    }
+}
+
+private fun findTextureView(view: View): TextureView? {
+    if (view is TextureView) return view
+    if (view !is ViewGroup) return null
+    for (index in 0 until view.childCount) {
+        findTextureView(view.getChildAt(index))?.let { return it }
+    }
+    return null
+}
+
+private fun assertColorNear(expected: Int, actual: Int) {
+    val tolerance = 18
+    assertTrue(
+        "Expected video colour ${Integer.toHexString(expected)}, got ${Integer.toHexString(actual)}",
+        kotlin.math.abs(Color.red(expected) - Color.red(actual)) <= tolerance &&
+            kotlin.math.abs(Color.green(expected) - Color.green(actual)) <= tolerance &&
+            kotlin.math.abs(Color.blue(expected) - Color.blue(actual)) <= tolerance,
+    )
+}
+
+private val TEST_VIDEO_COLOR = Color.rgb(31, 190, 142)
+
+private class RecordingConsoleBackend : ConsoleBackend {
+    override val picoClawState: StateFlow<PicoClawUiState>
+        get() = mutablePicoClawState
+    val mutablePicoClawState = MutableStateFlow(
+        PicoClawUiState(support = PicoClawSupport.Supported),
+    )
+    override val session: StateFlow<BackendSession> = MutableStateFlow(
+        BackendSession(
+            connection = ConnectionState.Connected,
+            remoteWidth = 1920,
+            remoteHeight = 1080,
+            streamLabel = "H.264 direct",
+            videoSettings = VideoSettings(
+                transportPreference = VideoTransportPreference.MJPEG,
+                resolutionHeight = 600,
+                framesPerSecond = 24,
+                bitrateKbps = 2_000,
+                jpegQuality = 60,
+            ),
+            framesPerSecond = 30,
+            roundTripMs = 8,
+            droppedFrames = 7L,
+            videoStallEvents = 2L,
+            sessionGeneration = 7L,
+            deviceStatus = NanoKvmDeviceStatus(
+                applicationVersion = "2.4.3",
+                imageVersion = "2026.07",
+                hardwareVersion = "NanoKVM-Full",
+                deviceKey = "test-device-key",
+                mdnsName = "nanokvm.local",
+                networkAddresses = listOf("192.0.2.250"),
+                networkInterfaces = listOf(
+                    NanoKvmNetworkInterfaceStatus(
+                        name = "eth0",
+                        address = "192.0.2.250",
+                        version = "v4",
+                        type = "wired",
+                    ),
+                ),
+            ),
+            phase3 = Phase3FeatureUiState(
+                available = true,
+                hidMode = Phase3HidModeUiState(Phase3HidModeSelection.Normal),
+                virtualMedia = Phase3VirtualMediaUiState(
+                    loaded = true,
+                    images = listOf(
+                        Phase3MediaImageUiState(
+                            id = 11L,
+                            displayName = "installer.iso",
+                            mounted = true,
+                        ),
+                    ),
+                    mountedDisplayName = "installer.iso",
+                    cdRomEnabled = true,
+                    networkEnabled = true,
+                    mediaEnabled = true,
+                    diskEnabled = true,
+                    remoteTransferEnabled = true,
+                ),
+                wakeOnLanLoaded = true,
+                wakeOnLanTargets = listOf(
+                    Phase3WakeOnLanTargetUiState(
+                        id = 12L,
+                        macAddress = "00:11:22:33:44:55",
+                        name = "Test server",
+                    ),
+                ),
+                virtualMediaNotice = "Virtual-media-only notice",
+                wakeOnLanNotice = "Wake-on-LAN-only notice",
+            ),
+            message = "Video diagnostics visible",
+        ),
+    )
+
+    val committedText = mutableListOf<Pair<String, KeyboardLayout>>()
+    val pastedText = mutableListOf<String>()
+    val pasteRequests = mutableListOf<ApprovedPasteRequest>()
+    var releaseAllCalls = 0
+    var disconnectCalls = 0
+    var lastVideoSettings: VideoSettings? = null
+    var surfaceFillColor: Int? = null
+    var absoluteMoveCalls = 0
+    var relativeMoveCalls = 0
+    var mouseButtonCalls = 0
+    val mouseButtonEvents = mutableListOf<Pair<MouseButton, Boolean>>()
+    val scrollSteps = mutableListOf<Int>()
+    val horizontalScrollSteps = mutableListOf<Int>()
+    @Volatile var attachSurfaceCalls = 0
+    @Volatile var detachSurfaceCalls = 0
+    @Volatile var phase3SurfaceIsVisible = false
+    val phase3HidModeChanges = mutableListOf<Phase3HidModeSelection>()
+    val phase3NetworkChanges = mutableListOf<Boolean>()
+    @Volatile var picoClawSurfaceIsVisible = false
+    var picoClawEntryCalls = 0
+
+    override suspend fun connect(request: ConnectRequest): ConnectOutcome = ConnectOutcome.Connected
+    override suspend fun disconnect() {
+        disconnectCalls++
+    }
+
+    override fun reconnect() = Unit
+    override fun setForeground(isForeground: Boolean) = Unit
+    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
+        attachSurfaceCalls++
+        surfaceFillColor?.let { color ->
+            runCatching {
+                val canvas = surface.lockCanvas(null)
+                canvas.drawColor(color)
+                surface.unlockCanvasAndPost(canvas)
+            }
+        }
+    }
+    override fun resizeVideoSurface(width: Int, height: Int) = Unit
+    override fun detachVideoSurface(surface: Surface) {
+        detachSurfaceCalls++
+    }
+    override fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton>) {
+        absoluteMoveCalls++
+    }
+    override fun moveRelative(deltaX: Int, deltaY: Int, buttons: Set<MouseButton>) {
+        relativeMoveCalls++
+    }
+    override fun mouseButton(button: MouseButton, pressed: Boolean) {
+        mouseButtonCalls++
+        mouseButtonEvents += button to pressed
+    }
+    override fun scrollWheel(steps: Int) {
+        scrollSteps += steps
+    }
+    override fun scrollHorizontal(steps: Int) {
+        horizontalScrollSteps += steps
+    }
+
+    val remoteInputCallCount: Int
+        get() = absoluteMoveCalls + relativeMoveCalls + mouseButtonCalls +
+            scrollSteps.size + horizontalScrollSteps.size
+
+    override fun typeCommittedText(text: String, layout: KeyboardLayout) {
+        committedText += text to layout
+    }
+
+    override fun key(key: RemoteKey, pressed: Boolean) = Unit
+    override fun releaseAllInput() {
+        releaseAllCalls++
+    }
+
+    override fun updateVideo(settings: VideoSettings) {
+        lastVideoSettings = settings
+    }
+    override fun resetHid() = Unit
+    override fun power(action: PowerAction) = Unit
+    override fun pasteText(request: ApprovedPasteRequest) {
+        pasteRequests += request
+        pastedText += request.content
+    }
+    override fun cancelPaste() = Unit
+    override fun setPhase3SurfaceVisible(visible: Boolean) {
+        phase3SurfaceIsVisible = visible
+    }
+    override fun setPhase3HidMode(
+        destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
+        selection: Phase3HidModeSelection,
+    ) {
+        phase3HidModeChanges += selection
+    }
+    override fun setPhase3NetworkEnabled(
+        destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
+        enabled: Boolean,
+    ) {
+        phase3NetworkChanges += enabled
+    }
+    override fun setPicoClawSurfaceVisible(visible: Boolean) {
+        picoClawSurfaceIsVisible = visible
+    }
+    override fun enterPicoClaw(destination: ApprovedPicoClawDestination) {
+        picoClawEntryCalls++
+        mutablePicoClawState.value = mutablePicoClawState.value.copy(
+            entered = true,
+            installed = true,
+        )
+    }
+}

@@ -1,0 +1,15 @@
+NanoKVM Mobile
+Copyright (C) 2026 NanoKVM Mobile contributors
+
+This program is free software under the GNU General Public License,
+version 3 or (at your option) any later version. It is distributed without
+warranty; see LICENSE for the complete terms.
+
+NanoKVM is a trademark/product name used to describe interoperability with
+Sipeed hardware. This project is independent and is not endorsed by Sipeed.
+
+This product includes the WebRTC SDK Android wrapper, distributed under the MIT
+License, and WebRTC, distributed under the BSD 3-Clause License. WebRTC includes
+additional third-party components under their respective terms. Copyright and
+licence texts, provenance, and the upstream comprehensive notice location are in
+THIRD_PARTY_NOTICES.md.

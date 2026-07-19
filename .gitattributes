@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.jar binary
+*.apk binary
+*.aab binary
+
+app/src/main/generated/baselineProfiles/** linguist-generated=true
+gradle/verification-metadata.xml linguist-generated=true

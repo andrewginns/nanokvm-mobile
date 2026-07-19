@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connecting_to_profile">Connecting to %1$s</string>
+    <string name="connecting_status">Negotiating authentication and video…</string>
+    <string name="local_network_permission_title">Allow local network access?</string>
+    <string name="local_network_permission_rationale">NanoKVM needs local network access to connect directly to %1$s. It does not scan your network or send this access to another service.</string>
+    <string name="local_network_permission_continue">Continue</string>
+    <string name="local_network_permission_not_now">Not now</string>
+    <string name="local_network_permission_denied_title">Local network access is off</string>
+    <string name="local_network_permission_denied_retry">NanoKVM cannot reach %1$s until local network access is allowed. You can try the Android permission request again.</string>
+    <string name="local_network_permission_denied_settings">NanoKVM cannot reach %1$s until local network access is enabled in Android settings.</string>
+    <string name="local_network_permission_try_again">Try again</string>
+    <string name="local_network_permission_open_settings">Open settings</string>
+    <string name="local_network_permission_cancel">Cancel</string>
+    <string name="local_network_permission_ap_rationale">NanoKVM needs local network access for the one-time AP onboarding endpoint. It does not scan or auto-discover networks.</string>
+    <string name="local_network_permission_ap_denied">AP onboarding cannot reach the user-supplied endpoint until local network access is enabled.</string>
+    <string name="share_plain_text_only">NanoKVM can review one direct plain-text share. Rich text, files, links supplied through content providers, and empty shares are not opened.</string>
+    <string name="share_choose_connection">Choose a NanoKVM connection to review the shared text. Nothing will be sent automatically.</string>
+</resources>

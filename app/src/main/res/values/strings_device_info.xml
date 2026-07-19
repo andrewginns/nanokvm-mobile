@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="console_device_details">Device details</string>
+    <string name="console_device_identity">Identity</string>
+    <string name="console_device_application_version">Application version</string>
+    <string name="console_device_image_version">System image version</string>
+    <string name="console_device_hardware_revision">Hardware revision</string>
+    <string name="console_device_key">Device key</string>
+    <string name="console_device_mdns_name">mDNS name</string>
+    <string name="console_device_network_interfaces">Network interfaces</string>
+    <string name="console_device_network_addresses">Network addresses</string>
+    <string name="console_device_network_interface_fallback">Interface %1$d</string>
+    <string name="console_device_not_reported">Not reported</string>
+    <string name="console_device_capabilities">Capabilities</string>
+    <string name="console_device_capability_summary">%1$d available · %2$d unavailable · %3$d needs a runtime check</string>
+    <string name="console_device_capability_available">Available</string>
+    <string name="console_device_capability_unavailable">Unavailable</string>
+    <string name="console_device_capability_unknown">Needs runtime check</string>
+    <string name="console_device_capabilities_not_probed">Capability information is not available for this session.</string>
+</resources>

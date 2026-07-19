@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="offline_update_title">Offline application update</string>
+    <string name="offline_update_open_action">Install offline update package</string>
+    <string name="offline_update_choose">Choose package</string>
+    <string name="offline_update_choose_different">Choose different package</string>
+    <string name="offline_update_install_once">Install once</string>
+    <string name="offline_update_cancel">Cancel upload</string>
+    <string name="offline_update_close">Close</string>
+    <string name="offline_update_inactive">Return to the foreground before selecting an update package.</string>
+    <string name="offline_update_unsupported">This NanoKVM application version does not support offline update.</string>
+    <string name="offline_update_select_explanation">Select an official package named exactly nanokvm_X.Y.Z.tar.gz. The app requires a known size and streams it directly to the currently connected NanoKVM.</string>
+    <string name="offline_update_not_saved">The document URI, permission, filename and package contents are not saved. A failed or cancelled attempt cannot be replayed.</string>
+    <string name="offline_update_destination">Destination: %1$s</string>
+    <string name="offline_update_installed_version">Currently reported version: %1$s</string>
+    <string name="offline_update_installed_unknown">Currently reported version: unavailable</string>
+    <string name="offline_update_package_version">Selected package version: %1$s</string>
+    <string name="offline_update_exact_file">Required filename: %1$s</string>
+    <string name="offline_update_package_size">Package size: %1$s</string>
+    <string name="offline_update_interruption_warning">Installing interrupts remote control and restarts NanoKVM services.</string>
+    <string name="offline_update_one_shot_warning">This is one high-risk, one-shot request to the exact destination above. It is never retried automatically.</string>
+    <string name="offline_update_progress_percent">Uploaded: %1$d%%</string>
+    <string name="offline_update_progress_bytes">%1$s of %2$s</string>
+    <string name="offline_update_upload_not_install_progress">This is local upload progress, not verified installation or checksum progress.</string>
+    <string name="offline_update_cancel_uncertain">Closing, cancelling or losing the connection after dispatch can leave the update outcome unknown.</string>
+    <string name="offline_update_acknowledged">NanoKVM acknowledged the package and should now restart its services.</string>
+    <string name="offline_update_unknown">The connection did not establish the final update outcome.</string>
+    <string name="offline_update_verify_before_retry">Reconnect and read the installed application version before making any new update decision. Do not retry automatically.</string>
+    <string name="offline_update_auth_expired">The authenticated session expired. Reconnect and verify the installed version before selecting another package.</string>
+    <string name="offline_update_session_changed">The authenticated NanoKVM destination or session generation changed. The selected package was cleared.</string>
+    <string name="offline_update_reselect_required">The selection was consumed and cleared. Choose the package again for any fresh, explicit attempt.</string>
+    <string name="offline_update_source_unavailable">The selected document could not be opened or did not match its reported size.</string>
+    <string name="offline_update_server_rejected">NanoKVM rejected the request before an acknowledged install.</string>
+    <string name="offline_update_invalid_selection">The selection or confirmation is no longer valid.</string>
+    <string name="offline_update_failed">The offline update could not be started.</string>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Profiles may contain pinned certificate fingerprints; do not cloud-back them up. -->
+    <exclude domain="file" path="datastore/nanokvm_profiles.preferences_pb" />
+</full-backup-content>

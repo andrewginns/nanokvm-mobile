@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible NanoKVM Mobile problem without including secrets.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not use a public issue for a security vulnerability. Use **Security → Advisories → Report a vulnerability** instead. Never attach passwords, tokens, private hosts, certificate fingerprints, or an unredacted remote screen.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version and build
+      description: Include version name/code, source commit if self-built, and whether the APK was debug or release signed.
+      placeholder: "0.3.0 (7), commit abc1234, debug APK"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android device
+      description: Device model, Android/API version, and relevant input method or external hardware.
+      placeholder: "Pixel 8, Android 17 / API 37, Gboard"
+    validations:
+      required: true
+  - type: input
+    id: nanokvm
+    attributes:
+      label: NanoKVM target
+      description: Hardware type and application/image version. Do not include its address, key, password, or certificate fingerprint.
+      placeholder: "Cube, application 2.4.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Connection, login, or certificate review
+        - Video or transport fallback
+        - Keyboard, mouse, pan, zoom, or scrolling
+        - Clipboard or Android share target
+        - Virtual media or Wake-on-LAN
+        - Administration or update
+        - Terminal, scripts, or automation
+        - PicoClaw
+        - Appearance, layout, or accessibility
+        - Build, installation, or update signing
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: transport
+    attributes:
+      label: Video transport
+      description: If relevant, state Auto, WebRTC, H.264, or MJPEG and any observed fallback.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a disposable target for disruptive actions and redact all private data.
+      placeholder: |
+        1. Open …
+        2. Choose …
+        3. Observe …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Paste only redacted logs or links. State whether the issue reproduces after reconnecting; do not retry an ambiguous destructive write.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, private addresses, fingerprints, and remote-screen contents.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true
