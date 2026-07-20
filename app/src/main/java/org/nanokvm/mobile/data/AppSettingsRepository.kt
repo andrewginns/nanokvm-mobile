@@ -14,8 +14,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.withContext
 
@@ -108,17 +111,47 @@ class AppSettingsRepository(
         }
 }
 
-internal fun Flow<Preferences>.recoverIoReadFailures(
-    retryDelayMillis: Long = 500L,
-): Flow<Preferences> {
-    require(retryDelayMillis >= 0L)
-    return retryWhen { error, _ ->
-        if (error !is IOException) return@retryWhen false
-        emit(emptyPreferences())
-        delay(retryDelayMillis)
-        true
-    }
+internal fun Flow<Preferences>.recoverIoReadFailures(): Flow<Preferences> = flow {
+    var hasSuccessfulRead = false
+    var emittedInitialFallback = false
+    var consecutiveFailures = 0
+    emitAll(
+        this@recoverIoReadFailures
+            .onEach {
+                hasSuccessfulRead = true
+                consecutiveFailures = 0
+            }
+            .retryWhen { error, _ ->
+                if (error !is IOException) return@retryWhen false
+
+                val failureIndex = consecutiveFailures
+                consecutiveFailures = (consecutiveFailures + 1)
+                    .coerceAtMost(SETTINGS_READ_RETRY_DELAYS_MILLIS.size)
+                if (
+                    !hasSuccessfulRead &&
+                    !emittedInitialFallback &&
+                    failureIndex >= SETTINGS_READ_RETRY_DELAYS_MILLIS.size
+                ) {
+                    emit(emptyPreferences())
+                    emittedInitialFallback = true
+                }
+                delay(settingsReadRetryDelayMillis(failureIndex))
+                true
+            },
+    )
 }
+
+internal fun settingsReadRetryDelayMillis(failureIndex: Int): Long =
+    SETTINGS_READ_RETRY_DELAYS_MILLIS.getOrElse(failureIndex) {
+        SETTINGS_READ_SLOW_RETRY_MILLIS
+    }
+
+private val SETTINGS_READ_RETRY_DELAYS_MILLIS = longArrayOf(
+    250L,
+    500L,
+    1_000L,
+)
+private const val SETTINGS_READ_SLOW_RETRY_MILLIS = 5_000L
 
 fun normalizeScrollSensitivity(value: Float?): Float = value
     ?.takeIf(Float::isFinite)

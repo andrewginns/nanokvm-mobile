@@ -5,6 +5,7 @@ import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.protocol.AuthenticationExpiredException
@@ -95,12 +96,110 @@ class NanoKvmAutomationGatewayTest {
     }
 
     @Test
+    fun `port catalogs expose redacted stable IDs but require exact typed members`() {
+        val key = NanoKvmAutomationPortHidKey("KeyA", "A", known = true)
+        val shortcut = NanoKvmAutomationPortHidShortcut(
+            stableId = "private-server-shortcut-id",
+            keys = listOf(key),
+            runnable = true,
+        )
+        val shortcutLookalike = NanoKvmAutomationPortHidShortcut(
+            stableId = "private-server-shortcut-id",
+            keys = listOf(key),
+            runnable = true,
+        )
+        val hidCatalog = NanoKvmAutomationPortHidCatalog(listOf(shortcut))
+
+        assertEquals("private-server-shortcut-id", shortcut.stableId)
+        assertFalse(shortcut.toString().contains("private-server-shortcut-id"))
+        val shortcutFailure = assertThrows(IllegalArgumentException::class.java) {
+            hidCatalog.requireExactMember(shortcutLookalike)
+        }
+        assertEquals(
+            "HID shortcut must be an exact member of the supplied port catalog",
+            shortcutFailure.message,
+        )
+        val duplicateIdFailure = assertThrows(IllegalArgumentException::class.java) {
+            NanoKvmAutomationPortHidCatalog(listOf(shortcut, shortcutLookalike))
+        }
+        assertEquals(
+            "HID shortcut catalog must not contain duplicate stable IDs",
+            duplicateIdFailure.message,
+        )
+
+        val script = NanoKvmAutomationPortAutostartScript("private-startup.sh")
+        val scriptLookalike = NanoKvmAutomationPortAutostartScript("private-startup.sh")
+        val autostartCatalog = NanoKvmAutomationPortAutostartCatalog(listOf(script))
+
+        assertFalse(script.toString().contains("private-startup.sh"))
+        val scriptFailure = assertThrows(IllegalArgumentException::class.java) {
+            autostartCatalog.requireExactMember(scriptLookalike)
+        }
+        assertEquals(
+            "Autostart script must be an exact member of the supplied port catalog",
+            scriptFailure.message,
+        )
+    }
+
+    @Test
+    fun `foreign and superseded gateway catalogs are rejected before review`() = runTest {
+        val current = binding(7)
+        val first = foregroundGateway(FakeAutomationPort(), current)
+        val second = foregroundGateway(FakeAutomationPort(), current)
+        val foreignHid = success(first.refreshHidShortcuts())
+        val secondHid = success(second.refreshHidShortcuts())
+
+        assertReviewRejected(
+            second.reviewHidShortcutAction(
+                foreignHid,
+                foreignHid.shortcuts.single(),
+                NanoKvmHidShortcutAction.DELETE,
+            ),
+            NanoKvmAutomationError.Kind.FOREIGN_OR_STALE_STATE,
+        )
+
+        val refreshedSecondHid = success(second.refreshHidShortcuts())
+        assertEquals(
+            secondHid.shortcuts.single().portShortcut.stableId,
+            refreshedSecondHid.shortcuts.single().portShortcut.stableId,
+        )
+        assertReviewRejected(
+            second.reviewHidShortcutAction(
+                secondHid,
+                secondHid.shortcuts.single(),
+                NanoKvmHidShortcutAction.DELETE,
+            ),
+            NanoKvmAutomationError.Kind.FOREIGN_OR_STALE_STATE,
+        )
+
+        val foreignAutostart = success(first.refreshAutostartScripts())
+        val secondAutostart = success(second.refreshAutostartScripts())
+        assertReviewRejected(
+            second.reviewAutostartDelete(
+                foreignAutostart,
+                foreignAutostart.scripts.single(),
+            ),
+            NanoKvmAutomationError.Kind.FOREIGN_OR_STALE_STATE,
+        )
+
+        second.refreshAutostartScripts()
+        assertReviewRejected(
+            second.reviewAutostartDelete(
+                secondAutostart,
+                secondAutostart.scripts.single(),
+            ),
+            NanoKvmAutomationError.Kind.FOREIGN_OR_STALE_STATE,
+        )
+    }
+
+    @Test
     fun `HID run releases all input before and finally after one dispatch`() = runTest {
         val port = FakeAutomationPort()
         val current = binding(8)
         val gateway = foregroundGateway(port, current)
         val catalog = success(gateway.refreshHidShortcuts())
         val shortcut = catalog.shortcuts.single()
+        assertEquals("fake-hid-shortcut-0", shortcut.portShortcut.stableId)
         val approval = ready(
             gateway.reviewHidShortcutAction(
                 catalog,
@@ -423,6 +522,7 @@ private class FakeAutomationPort(
             throw AuthenticationExpiredException()
         }
         val shortcut = NanoKvmAutomationPortHidShortcut(
+            stableId = "fake-hid-shortcut-0",
             keys = listOf(
                 NanoKvmAutomationPortHidKey(
                     code = if (shortcutKnown) "KeyA" else "FutureKey",
@@ -431,9 +531,8 @@ private class FakeAutomationPort(
                 ),
             ),
             runnable = shortcutKnown,
-            opaqueToken = Any(),
         )
-        return NanoKvmAutomationPortHidCatalog(listOf(shortcut), Any()).also {
+        return NanoKvmAutomationPortHidCatalog(listOf(shortcut)).also {
             afterHidList?.invoke()
         }
     }
@@ -485,9 +584,8 @@ private class FakeAutomationPort(
         autostartListCalls++
         return NanoKvmAutomationPortAutostartCatalog(
             scripts = autostartNames.map {
-                NanoKvmAutomationPortAutostartScript(it, AutostartToken(it))
+                NanoKvmAutomationPortAutostartScript(it)
             },
-            opaqueToken = Any(),
         )
     }
 
@@ -539,6 +637,4 @@ private class FakeAutomationPort(
         autostartDeleteCalls++
         autostartNames.remove(script.displayName)
     }
-
-    private data class AutostartToken(val name: String)
 }

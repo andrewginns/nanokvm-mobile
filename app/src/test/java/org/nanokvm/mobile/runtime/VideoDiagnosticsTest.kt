@@ -6,13 +6,36 @@ import org.junit.Test
 
 class VideoDiagnosticsTest {
     @Test
-    fun `dropped frames accumulate without changing the transient message`() {
-        val initial = BackendSession(message = "Keep this app-authored status", droppedFrames = 4L)
+    fun `repeated equal action feedback receives a new revision`() {
+        val first = BackendSession().withActionFeedback(ConsoleMessage.CtrlAltDeleteSent)
+        val second = first.withActionFeedback(ConsoleMessage.CtrlAltDeleteSent)
+
+        assertEquals(1L, first.lastActionFeedback?.revision)
+        assertEquals(2L, second.lastActionFeedback?.revision)
+        assertEquals(first.lastActionFeedback?.content, second.lastActionFeedback?.content)
+    }
+
+    @Test
+    fun `replacement session starts without prior action feedback`() {
+        val old = BackendSession(sessionGeneration = 4L)
+            .withActionFeedback(ConsoleMessage.HidInterfaceReset)
+        val replacement = BackendSession(sessionGeneration = old.sessionGeneration + 1L)
+
+        assertEquals(null, replacement.lastActionFeedback)
+    }
+
+    @Test
+    fun `dropped frames accumulate without changing action feedback`() {
+        val initial = BackendSession(droppedFrames = 4L)
+            .withActionFeedback(ConsoleMessage.VideoSettingsApplied)
 
         val updated = initial.recordDroppedFrames(3)
 
         assertEquals(7L, updated.droppedFrames)
-        assertEquals("Keep this app-authored status", updated.message)
+        assertEquals(
+            ConsoleMessage.VideoSettingsApplied,
+            updated.lastActionFeedback?.content,
+        )
         assertEquals(0L, updated.videoStallEvents)
     }
 

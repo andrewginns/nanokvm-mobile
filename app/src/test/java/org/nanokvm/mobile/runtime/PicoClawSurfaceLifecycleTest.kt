@@ -39,15 +39,46 @@ class PicoClawSurfaceLifecycleTest {
         val messages = (1..80).fold(emptyList<PicoClawMessageUiState>()) { current, index ->
             appendBoundedPicoClawMessage(
                 current,
-                PicoClawMessageUiState(PicoClawMessageRole.Assistant, "private-$index"),
+                PicoClawMessageUiState(
+                    PicoClawMessageContent.ApplianceText(
+                        PicoClawMessageRole.Assistant,
+                        "private-$index",
+                    ),
+                ),
             )
         }
 
         assertEquals(64, messages.size)
-        assertEquals("private-17", messages.first().content)
-        assertEquals("private-80", messages.last().content)
+        assertEquals("private-17", messages.first().applianceText())
+        assertEquals("private-80", messages.last().applianceText())
         assertTrue(messages.none { it.toString().contains("private-") })
     }
+
+    @Test
+    fun `chat display content enforces utf8 bounds and redacts diagnostics`() {
+        val applianceText = PicoClawMessageContent.ApplianceText(
+            PicoClawMessageRole.Assistant,
+            "private response",
+        )
+        val toolAction = PicoClawMessageContent.ToolAction("click")
+
+        assertEquals(16, applianceText.utf8ByteCount)
+        assertEquals(5, toolAction.utf8ByteCount)
+        assertFalse(applianceText.toString().contains("private response"))
+        assertFalse(toolAction.toString().contains("click"))
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            PicoClawMessageContent.ApplianceText(
+                PicoClawMessageRole.Assistant,
+                "a".repeat(32 * 1_024 + 1),
+            )
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            PicoClawMessageContent.ToolAction("a".repeat(257))
+        }
+    }
+
+    private fun PicoClawMessageUiState.applianceText(): String =
+        (content as PicoClawMessageContent.ApplianceText).value
 
     private fun binding(generation: Long) = NanoKvmSessionBinding(
         profileId = "office",

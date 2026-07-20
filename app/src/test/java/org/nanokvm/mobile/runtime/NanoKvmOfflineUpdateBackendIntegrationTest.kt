@@ -48,9 +48,9 @@ class NanoKvmOfflineUpdateBackendIntegrationTest {
                 sessionGeneration = 9L,
             )
             backend.installOfflineUpdateGatewayForTest(authenticatedSession, 9L)
-            val owner = backend as NanoKvmOfflineUpdateFeatureOwner
+            val owner = requireNotNull(backend.features.offlineUpdate)
 
-            assertNull(owner.currentOfflineUpdateGatewayToken())
+            assertNull(owner.currentOfflineUpdateGateway())
 
             owner.setOfflineUpdateSurfaceVisible(true)
             val generationNineGateway = requireNotNull(owner.currentOfflineUpdateGateway())
@@ -58,7 +58,7 @@ class NanoKvmOfflineUpdateBackendIntegrationTest {
             assertEquals(NanoKvmOfflineUpdatePhase.EMPTY, generationNineGateway.state.value.phase)
 
             owner.setOfflineUpdateSurfaceVisible(false)
-            assertNull(owner.currentOfflineUpdateGatewayToken())
+            assertNull(owner.currentOfflineUpdateGateway())
             assertEquals(
                 NanoKvmOfflineUpdatePhase.HIDDEN,
                 generationNineGateway.state.value.phase,
@@ -68,7 +68,7 @@ class NanoKvmOfflineUpdateBackendIntegrationTest {
             assertSame(generationNineGateway, owner.currentOfflineUpdateGateway())
             mutableSession.value = mutableSession.value.copy(sessionGeneration = 10L)
 
-            assertNull(owner.currentOfflineUpdateGatewayToken())
+            assertNull(owner.currentOfflineUpdateGateway())
             val staleSource = NanoKvmOfflineUpdateSource.create(
                 fileName = "nanokvm_2.5.0.tar.gz",
                 contentLength = 1L,
@@ -86,7 +86,7 @@ class NanoKvmOfflineUpdateBackendIntegrationTest {
             // until the new generation is published, otherwise the visible gateway observes 9.
             mutableSession.value = mutableSession.value.copy(sessionGeneration = 9L)
             backend.installOfflineUpdateGatewayForTest(authenticatedSession, 10L)
-            assertNull(owner.currentOfflineUpdateGatewayToken())
+            assertNull(owner.currentOfflineUpdateGateway())
             mutableSession.value = mutableSession.value.copy(sessionGeneration = 10L)
             backend.activateOfflineUpdateGatewayForTest()
             val generationTenGateway = requireNotNull(owner.currentOfflineUpdateGateway())
@@ -95,7 +95,7 @@ class NanoKvmOfflineUpdateBackendIntegrationTest {
             assertEquals(NanoKvmOfflineUpdatePhase.EMPTY, generationTenGateway.state.value.phase)
 
             backend.closeAndAwait()
-            assertNull(owner.currentOfflineUpdateGatewayToken())
+            assertNull(owner.currentOfflineUpdateGateway())
         }
 }
 

@@ -3,6 +3,7 @@ package org.nanokvm.mobile.ui.screens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.nanokvm.mobile.R
 import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmCapability
 import org.nanokvm.protocol.NanoKvmCapabilityEvidence
@@ -11,7 +12,7 @@ import org.nanokvm.protocol.NanoKvmCapabilityUnknownReason
 
 class DeviceInfoDialogTest {
     @Test
-    fun `capability rows preserve all three support states and use readable labels`() {
+    fun `capability rows preserve all three support states and capability identity`() {
         val version = NanoKvmApplicationVersion(2, 4, 3)
         val assessments: MutableMap<NanoKvmCapability, NanoKvmCapabilitySupport> =
             NanoKvmCapability.entries.associateWith {
@@ -39,18 +40,26 @@ class DeviceInfoDialogTest {
             rows.single { it.capability == NanoKvmCapability.TERMINAL }.state,
         )
         assertEquals(
-            "Saved HID shortcuts",
-            rows.single { it.capability == NanoKvmCapability.SAVED_HID_SHORTCUTS }.label,
+            R.string.console_device_capability_saved_hid_shortcuts,
+            capabilityLabelResource(NanoKvmCapability.SAVED_HID_SHORTCUTS),
         )
         assertEquals(
-            "PCIe HDMI control",
-            capabilityDisplayLabel(NanoKvmCapability.PCIE_HDMI_CONTROL),
+            R.string.console_device_capability_pcie_hdmi_control,
+            capabilityLabelResource(NanoKvmCapability.PCIE_HDMI_CONTROL),
         )
         assertEquals(
-            "Direct H.264",
-            capabilityDisplayLabel(NanoKvmCapability.DIRECT_H264),
+            R.string.console_device_capability_direct_h264,
+            capabilityLabelResource(NanoKvmCapability.DIRECT_H264),
         )
         assertTrue(rows.first().state.ordinal <= rows.last().state.ordinal)
+    }
+
+    @Test
+    fun `every capability has an explicit resource backed label`() {
+        assertEquals(
+            NanoKvmCapability.entries.size,
+            NanoKvmCapability.entries.map(::capabilityLabelResource).distinct().size,
+        )
     }
 
     @Test

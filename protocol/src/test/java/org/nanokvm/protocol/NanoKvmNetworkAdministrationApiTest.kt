@@ -10,7 +10,6 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -98,71 +97,6 @@ class NanoKvmNetworkAdministrationApiTest {
     }
 
     @Test
-    fun `ap onboarding omits account cookie binds authorization and clears both secrets`() =
-        runBlocking {
-            server.enqueue(successNoData())
-            server.enqueue(successNoData())
-            val apPassword = "ap-secret".toCharArray()
-
-            val authorization = client.api.verifyWifiAccessPointPassword(apPassword)
-
-            assertEquals("ap-secret", apPassword.concatToString())
-            assertFalse(authorization.toString().contains("ap-secret"))
-            val wifiPassword = "wifi-secret".toCharArray()
-            val credentials = NanoKvmWifiCredentials("Manual SSID", wifiPassword)
-            client.api.connectWifiInAccessPointMode(credentials, authorization)
-
-            assertTrue(apPassword.all { it == '\u0000' })
-            assertTrue(wifiPassword.all { it == '\u0000' })
-            val verify = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("POST", verify.method)
-            assertEquals("/api/network/wifi/verify", verify.path)
-            assertEquals("ap-secret", verify.getHeader("X-AP-Key"))
-            assertNull(verify.getHeader("Cookie"))
-            assertEquals(0L, verify.bodySize)
-
-            val connect = requireNotNull(server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("POST", connect.method)
-            assertEquals("/api/network/wifi", connect.path)
-            assertEquals("ap-secret", connect.getHeader("X-AP-Key"))
-            assertNull(connect.getHeader("Cookie"))
-            val body = Json.parseToJsonElement(connect.body.readUtf8()).jsonObject
-            assertEquals("Manual SSID", body.getValue("ssid").jsonPrimitive.content)
-            assertEquals("wifi-secret", body.getValue("password").jsonPrimitive.content)
-
-            assertThrows(IllegalStateException::class.java) {
-                runBlocking {
-                    client.api.connectWifiInAccessPointMode(
-                        NanoKvmWifiCredentials("Manual SSID", "again".toCharArray()),
-                        authorization,
-                    )
-                }
-            }
-            assertEquals(2, server.requestCount)
-        }
-
-    @Test
-    fun `failed ap verification clears secret and discards echoed response text`() = runBlocking {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .addHeader("Content-Type", "application/json")
-                .setBody("""{"code":-4,"msg":"rejected ap-secret","data":null}"""),
-        )
-        val apPassword = "ap-secret".toCharArray()
-
-        val error = assertThrows(NanoKvmWifiOperationException::class.java) {
-            runBlocking { client.api.verifyWifiAccessPointPassword(apPassword) }
-        }
-
-        assertEquals(NanoKvmWifiOperation.VERIFY_ACCESS_POINT_PASSWORD, error.operation)
-        assertEquals(-4, error.apiCode)
-        assertFalse(error.toString().contains("ap-secret"))
-        assertTrue(apPassword.all { it == '\u0000' })
-        assertEquals(1, server.requestCount)
-    }
-
-    @Test
     fun `wifi credentials enforce bounded text without putting values in errors`() {
         val oversizedSsid = "x".repeat(33)
         val ssidError = assertThrows(IllegalArgumentException::class.java) {
@@ -178,11 +112,6 @@ class NanoKvmNetworkAdministrationApiTest {
         assertFalse(passwordError.toString().contains(secretText))
         assertTrue(secret.all { it == '\u0000' })
 
-        val invalidApPassword = charArrayOf('a', '\n')
-        assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { client.api.verifyWifiAccessPointPassword(invalidApPassword) }
-        }
-        assertTrue(invalidApPassword.all { it == '\u0000' })
         assertEquals(0, server.requestCount)
     }
 

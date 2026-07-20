@@ -3,6 +3,7 @@ package org.nanokvm.mobile.runtime
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.protocol.HttpResponseException
@@ -163,14 +164,58 @@ class NanoKvmPhase3FeatureGatewayTest {
         val image = NanoKvmMediaImage(
             displayName = "secret.iso",
             binding = binding,
-            portImage = NanoKvmPhase3PortImage("secret.iso", "/data/secret.iso"),
+            portImage = NanoKvmPhase3PortImage(
+                "secret.iso",
+                NanoKvmPhase3PortImageIdentity(
+                    NanoKvmPhase3PortImageIdentityScope(),
+                    "/data/secret.iso",
+                ),
+            ),
         )
 
         assertEquals(false, binding.toString().contains("192.168"))
         assertEquals(false, image.toString().contains("secret"))
+        assertEquals(false, image.portImage.identity.toString().contains("secret"))
         assertEquals(
             "NanoKvmPhase3Error(kind=CONNECTION)",
             NanoKvmPhase3Error(NanoKvmPhase3Error.Kind.CONNECTION).toString(),
+        )
+    }
+
+    @Test
+    fun `media port catalog requires its exact typed member`() {
+        val scope = NanoKvmPhase3PortImageIdentityScope()
+        val member = NanoKvmPhase3PortImage(
+            "installer.iso",
+            NanoKvmPhase3PortImageIdentity(scope, "/data/installer.iso"),
+        )
+        val lookalike = NanoKvmPhase3PortImage(
+            "installer.iso",
+            NanoKvmPhase3PortImageIdentity(scope, "/data/installer.iso"),
+        )
+        val foreign = NanoKvmPhase3PortImage(
+            "installer.iso",
+            NanoKvmPhase3PortImageIdentity(
+                NanoKvmPhase3PortImageIdentityScope(),
+                "/data/installer.iso",
+            ),
+        )
+        val catalog = NanoKvmPhase3PortImageCatalog(
+            images = listOf(member),
+            mountedImage = null,
+            hasUnlistedMountedImage = false,
+            cdRomEnabled = false,
+        )
+        assertTrue(member.identity.sameAs(lookalike.identity))
+        assertEquals(false, member.identity.sameAs(foreign.identity))
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            catalog.requireExactMember(lookalike)
+        }
+
+        assertEquals(
+            "Image must be an exact member of the supplied port catalog",
+            failure.message,
         )
     }
 
@@ -215,6 +260,8 @@ private class FakePhase3Port : NanoKvmPhase3Port {
     var networkEnabled = false
     val wolEntries = mutableListOf<NanoKvmPhase3PortWakeOnLanEntry>()
     private val imageIds = mutableListOf("installer.iso")
+    private val imageIdentityScope = NanoKvmPhase3PortImageIdentityScope()
+    private var latestImageMembers = emptyMap<NanoKvmPhase3PortImage, String>()
 
     override suspend fun hidMode(): NanoKvmHidMode = hidMode
 
@@ -225,29 +272,38 @@ private class FakePhase3Port : NanoKvmPhase3Port {
 
     override suspend fun imageCatalog(): NanoKvmPhase3PortImageCatalog {
         imageReadFailure?.let { throw it }
-        val images = imageIds.map { NanoKvmPhase3PortImage(it, it) }
-        val mounted = mountedId?.let { id -> images.firstOrNull { it.opaqueToken == id } }
+        val members = imageIds.map { id ->
+            NanoKvmPhase3PortImage(
+                id,
+                NanoKvmPhase3PortImageIdentity(imageIdentityScope, id),
+            ) to id
+        }
+        val images = members.map { it.first }
+        latestImageMembers = members.toMap()
+        val mounted = mountedId?.let { id ->
+            members.firstOrNull { it.second == id }?.first
+        }
         return NanoKvmPhase3PortImageCatalog(
             images = images,
             mountedImage = mounted,
             hasUnlistedMountedImage = mountedId != null && mounted == null,
             cdRomEnabled = cdRomEnabled,
-            opaqueToken = Any(),
         )
     }
 
     override fun sameImage(
         left: NanoKvmPhase3PortImage,
         right: NanoKvmPhase3PortImage,
-    ): Boolean = left.opaqueToken == right.opaqueToken
+    ): Boolean = left.identity.sameAs(right.identity)
 
     override suspend fun mountImage(
         catalog: NanoKvmPhase3PortImageCatalog,
         image: NanoKvmPhase3PortImage,
         mode: NanoKvmImageMountMode,
     ) {
+        catalog.requireExactMember(image)
         mountCalls++
-        mountedId = image.opaqueToken as String
+        mountedId = requireNotNull(latestImageMembers[image])
         cdRomEnabled = mode == NanoKvmImageMountMode.CD_ROM
     }
 
@@ -260,8 +316,9 @@ private class FakePhase3Port : NanoKvmPhase3Port {
         catalog: NanoKvmPhase3PortImageCatalog,
         image: NanoKvmPhase3PortImage,
     ) {
+        catalog.requireExactMember(image)
         deleteCalls++
-        imageIds.remove(image.opaqueToken)
+        imageIds.remove(requireNotNull(latestImageMembers[image]))
     }
 
     override suspend fun virtualDevices(): NanoKvmVirtualDevices {

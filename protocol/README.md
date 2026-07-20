@@ -29,7 +29,7 @@ Keystore-backed storage.
 
 ## Self-signed certificates
 
-Use `CertificateInspector.inspect(endpoint)` during onboarding. It performs one isolated TLS
+Use `CertificateInspector.inspect(endpoint)` during profile trust setup. It performs one isolated TLS
 handshake, sends no application data, and returns the leaf fingerprint, identity, SANs, validity,
 and a separate hostname-verification result. The inspection-only permissive trust manager is never
 exposed or installed globally.
@@ -72,7 +72,9 @@ the navigation button just like Left, Right, and Middle.
 
 The input socket emits a heartbeat every 10 seconds. A graceful disconnect attempts unconditional
 keyboard and mouse-button releases before the close handshake. Callers may coalesce motion but must
-never drop release reports.
+never drop release reports. The client removes WebSocket compression negotiation, rejects an
+unsolicited compression extension, and limits a close handshake to two seconds. An oversized input
+server message stops command acceptance and queues safety releases before closing.
 
 Video WebSockets should share the exact client TLS policy and use the authenticated request helper:
 
@@ -111,6 +113,11 @@ Wake-on-LAN. This surface follows the stable NanoKVM 2.4.3 wire contract. Succes
 decoded models. HTTP 401, non-successful HTTP status, nonzero NanoKVM envelopes and malformed or
 out-of-policy response fields use distinct typed exceptions.
 
+REST execution, bounded response reads, and JSON decoding are internally dispatched away from the
+caller thread. Connection retries and HTTP/HTTPS redirects are disabled on every client
+construction path: all 3xx responses are surfaced as `HttpResponseException` and no request body
+or session cookie is replayed to a redirect target.
+
 The additional stable routes are:
 
 | Area | Read | Mutation |
@@ -124,7 +131,7 @@ The additional stable routes are:
 | Application | `GET /api/application/version`, `/api/application/preview` | `POST /api/application/preview`, `/api/application/update`, streaming multipart `POST /api/application/update/offline` |
 | Appliance | `GET /api/vm/oled`, `/api/vm/ssh`, `/api/vm/hostname`, `/api/vm/mdns`, `/api/vm/web-title` | OLED and hostname setters; explicit SSH/mDNS enable/disable; title set/reset; `POST /api/vm/system/reboot` |
 | DNS | `GET /api/network/dns` | `POST /api/network/dns` with typed `manual` or `dhcp` mode |
-| Wi-Fi | `GET /api/network/wifi` (manual SSID; no scan route) | authenticated connect/disconnect; public AP verify/connect with `X-AP-Key` and no account cookie |
+| Wi-Fi | `GET /api/network/wifi` (manual SSID; no scan route) | authenticated connect/disconnect |
 | Tailscale | `GET /api/extensions/tailscale/status` | typed install/uninstall, service start/stop/restart, tailnet up/down, login/logout |
 | Scripts | `GET /api/vm/script` | multipart `POST /api/vm/script/upload`; JSON `POST /api/vm/script/run`; JSON-body `DELETE /api/vm/script` |
 | Autostart scripts | `GET /api/vm/autostart`, `GET /api/vm/autostart/:name` | JSON `POST /api/vm/autostart/:name`; bodyless `DELETE /api/vm/autostart/:name` |
@@ -167,10 +174,10 @@ unique servers; DHCP writes always send an empty server list. Response lists and
 are bounded independently so a future but well-formed response remains readable without allowing
 unbounded allocation.
 
-Wi-Fi/AP onboarding and Tailscale extension semantics are specified in
-[NETWORK_ADMINISTRATION_2_4_3.md](NETWORK_ADMINISTRATION_2_4_3.md). Wi-Fi passwords and AP keys use
-single-use mutable storage with redacted failures; public AP requests explicitly omit the account
-cookie. Tailscale writes require a single-use approval bound to the latest known status, and a
+Wi-Fi administration and Tailscale extension semantics are specified in
+[NETWORK_ADMINISTRATION_2_4_3.md](NETWORK_ADMINISTRATION_2_4_3.md). Wi-Fi passwords use single-use
+mutable storage with redacted failures; unauthenticated AP-mode routes are intentionally not
+exposed. Tailscale writes require a single-use approval bound to the latest known status, and a
 bounded future state is read-only. All nine exact extension commands are distinct and non-replayed.
 
 HDMI, mouse-jiggler, memory-limit, swap, TLS-enable, and virtual-device semantics are specified in
@@ -254,7 +261,7 @@ upload/output/error bounds, and forward-compatible structured script failures.
 HID-shortcut tests cover the exact 190-code 2.4.3 key allowlist, REST route/method/body goldens,
 snapshot-bound deletion, strict response bounds, forward-compatible unknown reads, capability
 floors, incremental WebSocket run frames, preflight rejection, safety release, and no replay.
-Network-administration tests cover manual-only Wi-Fi, authenticated/AP cookie boundaries,
+Network-administration tests cover manual-only Wi-Fi, exact authenticated routes and cookie use,
 single-use mutable secrets, every Tailscale route, official login-URL allowlists, known-state/latest
 snapshot gates, redacted failures, capability floors, and no replay.
 Offline-update tests cover multipart boundaries and known length, authenticated one-shot streaming,

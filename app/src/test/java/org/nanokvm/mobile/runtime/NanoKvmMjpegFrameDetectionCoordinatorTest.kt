@@ -2,6 +2,7 @@ package org.nanokvm.mobile.runtime
 
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -9,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.nanokvm.protocol.AuthenticationExpiredException
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class NanoKvmMjpegFrameDetectionCoordinatorTest {
     private val binding = NanoKvmSessionBinding("profile", "nanokvm.test", 7L)
 
@@ -26,7 +28,7 @@ class NanoKvmMjpegFrameDetectionCoordinatorTest {
 
         assertEquals(listOf(true, false), fixture.port.enabledWrites)
         assertEquals(false, fixture.authenticationExpired)
-        assertEquals(emptyList<String>(), fixture.rejections)
+        assertEquals(emptyList<ConsoleMessage>(), fixture.rejections)
     }
 
     @Test
@@ -105,7 +107,7 @@ class NanoKvmMjpegFrameDetectionCoordinatorTest {
 
         assertEquals(true, fixture.authenticationExpired)
         assertEquals(listOf(true), fixture.port.enabledWrites)
-        assertEquals(emptyList<String>(), fixture.rejections)
+        assertEquals(emptyList<ConsoleMessage>(), fixture.rejections)
     }
 
     @Test
@@ -116,8 +118,24 @@ class NanoKvmMjpegFrameDetectionCoordinatorTest {
         advanceUntilIdle()
 
         assertEquals(listOf(true), fixture.port.enabledWrites)
-        assertEquals(1, fixture.rejections.size)
+        assertEquals(
+            listOf(ConsoleMessage.MjpegFrameDetectionNotAcknowledged),
+            fixture.rejections,
+        )
         assertEquals(false, fixture.authenticationExpired)
+    }
+
+    @Test
+    fun `explicit change reports typed unavailable message without an installed gateway`() = runTest {
+        val rejections = mutableListOf<ConsoleMessage>()
+        val coordinator = coordinator(
+            currentBinding = { binding },
+            onRejected = rejections::add,
+        )
+
+        coordinator.setEnabledByUser(true)
+
+        assertEquals(listOf(ConsoleMessage.MjpegFrameDetectionUnavailable), rejections)
     }
 
     private fun kotlinx.coroutines.test.TestScope.fixture(
@@ -125,7 +143,7 @@ class NanoKvmMjpegFrameDetectionCoordinatorTest {
     ): CoordinatorFixture {
         val port = CoordinatorFrameDetectionPort(failure)
         var authenticationExpired = false
-        val rejections = mutableListOf<String>()
+        val rejections = mutableListOf<ConsoleMessage>()
         val coordinator = coordinator(
             currentBinding = { binding },
             onAuthenticationExpired = { authenticationExpired = true },
@@ -143,7 +161,7 @@ class NanoKvmMjpegFrameDetectionCoordinatorTest {
     private fun kotlinx.coroutines.test.TestScope.coordinator(
         currentBinding: () -> NanoKvmSessionBinding?,
         onAuthenticationExpired: (NanoKvmSessionBinding) -> Unit = {},
-        onRejected: (String) -> Unit = {},
+        onRejected: (ConsoleMessage) -> Unit = {},
     ) = NanoKvmMjpegFrameDetectionCoordinator(
         scope = this,
         currentBinding = currentBinding,
@@ -162,7 +180,7 @@ private class CoordinatorFixture(
     val coordinator: NanoKvmMjpegFrameDetectionCoordinator,
     val port: CoordinatorFrameDetectionPort,
     private val authenticationExpiredValue: () -> Boolean,
-    val rejections: List<String>,
+    val rejections: List<ConsoleMessage>,
 ) {
     val authenticationExpired: Boolean
         get() = authenticationExpiredValue()

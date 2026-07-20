@@ -100,53 +100,7 @@ public class NanoKvmWifiCredentials(
         "NanoKvmWifiCredentials(ssid=$ssid, password=<redacted>, consumed=$consumed)"
 }
 
-/**
- * One verified AP-mode password, bound to the API instance that performed verification.
- *
- * The mutable password is retained only until one AP-mode connection attempt. Call [close] when
- * onboarding is abandoned. Its string form is always redacted.
- */
-public class NanoKvmWifiAccessPointAuthorization internal constructor(
-    private val owner: Any,
-    private val mutableApPassword: CharArray,
-) : Closeable {
-    private var consumed: Boolean = false
-
-    internal fun verificationHeader(requiredOwner: Any): String = synchronized(this) {
-        check(!consumed) { "Wi-Fi AP authorization has already been consumed" }
-        require(owner === requiredOwner) {
-            "Wi-Fi AP authorization belongs to a different NanoKVM API"
-        }
-        mutableApPassword.concatToString()
-    }
-
-    internal fun consumeHeader(requiredOwner: Any): String = synchronized(this) {
-        check(!consumed) { "Wi-Fi AP authorization has already been consumed" }
-        require(owner === requiredOwner) {
-            "Wi-Fi AP authorization belongs to a different NanoKVM API"
-        }
-        consumed = true
-        try {
-            mutableApPassword.concatToString()
-        } finally {
-            mutableApPassword.fill('\u0000')
-        }
-    }
-
-    override fun close() {
-        synchronized(this) {
-            consumed = true
-            mutableApPassword.fill('\u0000')
-        }
-    }
-
-    override fun toString(): String =
-        "NanoKvmWifiAccessPointAuthorization(password=<redacted>, consumed=$consumed)"
-}
-
 public enum class NanoKvmWifiOperation {
-    VERIFY_ACCESS_POINT_PASSWORD,
-    CONNECT_IN_ACCESS_POINT_MODE,
     CONNECT_AUTHENTICATED,
     DISCONNECT_AUTHENTICATED,
 }
@@ -453,15 +407,6 @@ private fun validateWifiSecret(
     }
 }
 
-internal fun validateWifiApPassword(value: CharArray) {
-    validateWifiSecret(
-        value = value,
-        label = "Wi-Fi AP password",
-        maximumCharacters = MAX_WIFI_AP_PASSWORD_CHARS,
-        maximumUtf8Bytes = MAX_WIFI_AP_PASSWORD_UTF8_BYTES,
-    )
-}
-
 private fun String.networkOptionalBounded(label: String, maximumUtf8Bytes: Int): String? =
     takeIf(String::isNotEmpty)?.also { value ->
         require(value.networkUtf8Size() <= maximumUtf8Bytes) { "$label is too long" }
@@ -497,8 +442,6 @@ private fun String.networkUtf8Size(): Int = encodeToByteArray().size
 private const val MAX_WIFI_SSID_UTF8_BYTES = 32
 private const val MAX_WIFI_PASSWORD_CHARS = 128
 private const val MAX_WIFI_PASSWORD_UTF8_BYTES = 256
-private const val MAX_WIFI_AP_PASSWORD_CHARS = 128
-private const val MAX_WIFI_AP_PASSWORD_UTF8_BYTES = 256
 private const val MAX_TAILSCALE_STATE_UTF8_BYTES = 64
 private const val MAX_TAILSCALE_NAME_UTF8_BYTES = 253
 private const val MAX_TAILSCALE_IP_UTF8_BYTES = 64

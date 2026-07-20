@@ -45,6 +45,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.security.CredentialAuthenticator
@@ -52,7 +53,6 @@ import org.nanokvm.mobile.ui.screens.CertificateReviewScreen
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
 import org.nanokvm.mobile.ui.screens.ProfileEditorScreen
 import org.nanokvm.mobile.ui.screens.ProfilesScreen
-import org.nanokvm.mobile.ui.screens.WifiAccessPointOnboardingScreen
 import org.nanokvm.mobile.ui.theme.NanoKvmConsoleTheme
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
 import org.nanokvm.mobile.ui.theme.shouldUseDarkTheme
@@ -65,7 +65,9 @@ fun NanoKvmApp(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val chooseShareDestinationMessage = stringResource(R.string.share_choose_connection)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val pendingNotice = state.pendingAppNotices.firstOrNull()
+    val noticeText = pendingNotice?.content?.displayText()
 
     NanoKvmTheme(
         themeMode = state.themeMode,
@@ -90,16 +92,12 @@ fun NanoKvmApp(
             state.credentialPrompt?.let(credentialAuthenticator::authenticate)
         }
 
-        LaunchedEffect(state.errorMessage) {
-            state.errorMessage?.let {
-                snackbarHostState.showSnackbar(it)
-                viewModel.clearError()
-            }
-        }
-
-        LaunchedEffect(state.pendingSharedPaste, state.screen) {
-            if (state.pendingSharedPaste != null && state.screen is AppScreen.Profiles) {
-                snackbarHostState.showSnackbar(chooseShareDestinationMessage)
+        LaunchedEffect(pendingNotice?.id, lifecycleOwner, snackbarHostState, viewModel) {
+            pendingNotice?.let { notice ->
+                lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    snackbarHostState.showSnackbar(noticeText.orEmpty())
+                    viewModel.acknowledgeNotice(notice.id)
+                }
             }
         }
 
@@ -146,18 +144,11 @@ fun NanoKvmApp(
                         onRemoveSavedCredential = viewModel::removeSavedCredential,
                         onResetProfileStorage = viewModel::resetProfileStorage,
                         onRetryProfileStorage = viewModel::retryProfileStorage,
-                        onOpenWifiAccessPointOnboarding =
-                            viewModel::openWifiAccessPointOnboarding,
                     )
-                    AppScreen.WifiAccessPointOnboarding ->
-                        WifiAccessPointOnboardingScreen(
-                            state = state.wifiAccessPointOnboarding,
-                            onConnect = viewModel::connectWifiAccessPoint,
-                            onBack = viewModel::cancelToProfiles,
-                        )
                     is AppScreen.EditProfile -> ProfileEditorScreen(
                         initial = screen.profile,
                         isNew = screen.isNew,
+                        mutation = state.profileMutation,
                         hasSavedPassword = screen.profile.id in state.savedPasswordProfileIds,
                         onSave = viewModel::saveProfile,
                         onDelete = if (screen.isNew) null else viewModel::deleteProfile,
@@ -179,7 +170,8 @@ fun NanoKvmApp(
                         scrollSensitivity = state.scrollSensitivity,
                         input = viewModel.remoteInput,
                         videoSurface = viewModel.videoSurface,
-                        commands = viewModel.consoleCommands,
+                        features = viewModel.consoleFeatures,
+                        sessionDraftOwner = viewModel.consoleSessionDraftOwner,
                         clipboardGateway = clipboardGateway,
                         pendingSharedPaste = state.pendingSharedPaste,
                         onSharedPasteConsumed = viewModel::consumeSharedPlainText,
@@ -344,68 +336,7 @@ private fun LocalNetworkPermissionHost(
                 }
             },
         )
-        LocalNetworkPermissionUiState.AccessPointRationale -> AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.local_network_permission_title)) },
-            text = {
-                Text(stringResource(R.string.local_network_permission_ap_rationale))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onBeginRequest()
-                        permissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
-                    },
-                ) {
-                    Text(stringResource(R.string.local_network_permission_continue))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.local_network_permission_not_now))
-                }
-            },
-        )
-        is LocalNetworkPermissionUiState.AccessPointDenied -> AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(stringResource(R.string.local_network_permission_denied_title)) },
-            text = {
-                Text(stringResource(R.string.local_network_permission_ap_denied))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (state.canRequestAgain) {
-                            onRetry()
-                        } else {
-                            context.startActivity(
-                                Intent(
-                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                    Uri.fromParts("package", context.packageName, null),
-                                ),
-                            )
-                        }
-                    },
-                ) {
-                    Text(
-                        stringResource(
-                            if (state.canRequestAgain) {
-                                R.string.local_network_permission_try_again
-                            } else {
-                                R.string.local_network_permission_open_settings
-                            },
-                        ),
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.local_network_permission_cancel))
-                }
-            },
-        )
-        is LocalNetworkPermissionUiState.Requesting,
-        LocalNetworkPermissionUiState.AccessPointRequesting -> Unit
+        is LocalNetworkPermissionUiState.Requesting -> Unit
     }
 }
 

@@ -34,13 +34,46 @@ class OperatorSurfaceLifecycleTest {
     }
 
     @Test
-    fun `ephemeral output is utf8 bounded and diagnostics redact content`() {
-        val retained = appendBoundedOperatorOutput("ab", "é€", maximumUtf8Bytes = 4)
+    fun `ephemeral output diagnostics redact content`() {
         val output = OperatorEphemeralOutput(OperatorOutputKind.Script, "secret output")
 
-        assertEquals("€", retained)
         assertFalse(output.toString().contains("secret output"))
         assertEquals("secret output", output.copyText())
+    }
+
+    @Test
+    fun `incremental output buffer retains only complete newest utf8 scalars`() {
+        val buffer = BoundedOperatorOutputBuffer(maximumUtf8Bytes = 4)
+
+        buffer.append("ab")
+        buffer.append("é€")
+
+        assertEquals("€", buffer.snapshot())
+        assertEquals(3, buffer.retainedUtf8Bytes)
+
+        buffer.clear()
+        buffer.append("a\uD83D")
+        buffer.append("\uDE00")
+
+        assertEquals("\uD83D\uDE00", buffer.snapshot())
+        assertEquals(4, buffer.retainedUtf8Bytes)
+
+        val tooSmallForSupplementaryScalar = BoundedOperatorOutputBuffer(maximumUtf8Bytes = 3)
+        tooSmallForSupplementaryScalar.append("\uD83D\uDE00")
+        assertEquals("", tooSmallForSupplementaryScalar.snapshot())
+    }
+
+    @Test(timeout = 5_000L)
+    fun `many tiny appends keep incremental storage chunk bounded`() {
+        val maximumBytes = 4 * 1024
+        val buffer = BoundedOperatorOutputBuffer(maximumUtf8Bytes = maximumBytes)
+        buffer.append("x".repeat(maximumBytes))
+
+        repeat(100_000) { buffer.append("x") }
+
+        assertEquals(maximumBytes, buffer.retainedUtf8Bytes)
+        assertTrue(buffer.retainedChunkCount <= 2)
+        assertEquals("x".repeat(maximumBytes), buffer.snapshot())
     }
 
     @Test

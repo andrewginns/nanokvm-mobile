@@ -51,10 +51,12 @@ identity. Power, reset, long-press power, and Ctrl-Alt-Delete are intentionally
 guarded actions. Security fixes for unintended input, TLS bypass, credential
 exposure, or guard bypasses should be treated as release blockers.
 
-Authenticated application traffic is HTTPS-only. The one cleartext exception is
-the explicitly entered, pre-authentication NanoKVM access-point onboarding flow.
-That flow is isolated from authenticated clients, sends no account cookie,
-persists neither password, and cannot create a normal HTTP connection profile.
+The NanoKVM origin, authenticated signaling, and application control traffic
+require HTTPS, and Android cleartext transport is disabled in both the manifest
+and Network Security Config. Initial access-point Wi-Fi setup is deliberately
+outside the app. Private and self-signed appliance certificates remain supported
+through the inspection and pinning flow above. Explicit WebRTC mode has the
+limited ICE-network exception described below.
 
 Optional WebRTC signaling uses the authenticated NanoKVM origin, but native ICE
 negotiation may contact STUN/TURN URLs supplied by the appliance. Those values

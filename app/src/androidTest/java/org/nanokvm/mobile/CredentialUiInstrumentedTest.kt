@@ -111,9 +111,7 @@ class CredentialUiInstrumentedTest {
     fun corruptStorageCanBeKeptWithoutResetAndRecoveryRemainsReachable() {
         var resetRequests = 0
         render(
-            profileStorageIssue = ProfileStorageIssue.Corrupted(
-                "Saved connections are damaged.",
-            ),
+            profileStorageIssue = ProfileStorageIssue.Corrupted,
             onResetProfileStorage = { resetRequests += 1 },
         )
 

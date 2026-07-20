@@ -48,13 +48,16 @@ different debug certificates even on one computer. A replacement install is
 accepted only when package name and signing lineage match and the new
 `versionCode` is not lower.
 
-Before sharing any development APK, record `:app:signingReport` and verify the
-actual file with SDK `apksigner verify --print-certs`. Debug keys are local
-developer identities, are not recoverable release identities, and must not be
-treated as a stable update channel. Never solve a mismatch by asking a user to
-uninstall without first explaining that uninstalling clears profiles, pins, and
-protected credentials. Production distribution requires a dedicated protected
-release key and a monotonically increasing version code.
+Before sharing any development APK, verify the actual file with SDK `apksigner
+verify --print-certs`; this artifact result is authoritative. Retain
+`:app:signingReport` when auditing how a variant selected its signing
+configuration, but do not substitute that configuration report for inspecting
+the delivered bytes. Debug keys are local developer identities, are not
+recoverable release identities, and must not be treated as a production update
+channel. Never solve a mismatch by asking a user to uninstall without first
+explaining that uninstalling clears profiles, pins, and protected credentials.
+Production distribution requires a dedicated protected release key and a
+monotonically increasing version code.
 
 The SBOM normalization removes the per-run timestamp and random serial number,
 then canonically orders object keys and collections. When changing dependencies,
@@ -116,11 +119,12 @@ timing. Traces and metric results are copied beneath
 `macrobenchmark/build/outputs/connected_android_test_additional_output/`.
 
 The app calls the fully-drawn reporting API after the profile catalog reaches a
-renderable terminal state. A benchmark artifact is current only if it names the
-four source test methods and contains the expected startup/frame metrics from the
-same revision. The current API 37 result meets that structural requirement but
-remains local emulator diagnostics, not a production baseline. Connect/console
-CUJs remain separate open work.
+renderable terminal state. A benchmark artifact is attributable only if it
+names the four source test methods and contains the expected startup/frame
+metrics from the same revision. The 2026-07-18 API 37 result met that structural
+requirement but is now historical local emulator diagnostics, not evidence for
+the latest checkpoint or a production baseline. Connect/console CUJs remain
+separate open work.
 
 ## Required device and release evidence matrix
 
@@ -129,7 +133,7 @@ CUJs remain separate open work.
 | API 26 minimum | Run debug installation and full instrumentation locally for the current commit; no retained current-commit result is claimed here |
 | API 35 / Android 15 | Run debug instrumentation locally for the current commit and retain a separate signed-candidate critical-journey result before release |
 | API 36 / Android 16 | Run and retain current-commit instrumentation locally before release |
-| API 37 | A current local app plus native WebRTC instrumentation result exists; future candidates must also run profile generation/packaging, generated-source drift review, and startup/frame Macrobenchmark locally. This does not replace API 35/36, physical ARM, real-appliance, or signed-candidate evidence |
+| API 37 | Current local app, native WebRTC, and non-secret process-restart results exist; profile generation/packaging and generated-source drift review also passed. Startup/frame Macrobenchmark measurement and `WebSocketIngressMemoryInstrumentedTest` were not run for the latest checkpoint. This does not replace API 35/36, physical ARM, real-appliance, real-Keystore, or signed-candidate evidence |
 | Representative physical ARM | Required before release for cold-start/frame comparison, input/video CUJs, thermal state and OEM behavior |
 
 ## Local verification snapshot — 2026-07-18
@@ -286,3 +290,149 @@ Emulator timing is diagnostic only. Performance baselines and regression
 thresholds must come from the controlled physical ARM lane; record device,
 build, thermal state, data/network fixture, iterations and both compilation
 modes with the retained release evidence.
+
+## Adversarial modernization checkpoint - 2026-07-19
+
+The modernization working tree based on `782e3b0` was independently reviewed
+for architecture/lifecycle, platform/security/cancellation, UI/accessibility/
+performance, and post-remediation regressions, then passed its final local
+implementation gate. This is unsigned, uncommitted development evidence, not a
+release approval. Hosted CI remains intentionally disabled during active
+development; these checks were run locally with JDK 21 and SDK 37.
+
+- the complete strict Gradle matrix passed 361 tasks in 10 minutes 36 seconds:
+  503/503 JVM tests across 75 suites, six zero-finding debug/release lint
+  reports across `app`, `protocol`, and `video`, debug/release/benchmark APK
+  assembly, release AAB, release-profile verification, and the canonical
+  CycloneDX SBOM;
+- source-matched profile generation completed in 8 minutes 26 seconds and
+  produced 18,524 Baseline rules and 15,831 Startup rules; APK/AAB verification
+  found the compiled profiles packaged at 11,631 bytes;
+- the Android 17/API 37 x86_64 emulator passed 76/76 app instrumentation tests
+  and 1/1 real-native WebRTC peer test, with no failures, errors, or skips; and
+- after reinstalling the exact debug APK, a fresh cold launch resolved
+  `MainActivity` and rendered the labelled empty connection catalogue in
+  1,686 ms. The scoped log review found no fatal app exception, ANR, or
+  StrictMode policy violation, and the crash buffer was empty. This timing is
+  diagnostic only.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Self-signed debug APK | 53,223,502 | `46a462ecc5096f17aea5ac3bcb3ad102e0de068a93751fa2febcdeb03b1ffad8` |
+| Unsigned minified release APK | 32,806,556 | `51d6ee9785b26aed94c3b52b751e396bd9b3a4cadd72aa06ca02362a9296e098` |
+| Debug-signed minified benchmark APK | 32,687,758 | `18c934cded1bae1c6396abf159fbc3b83c7f0d3bf0c4186c822966a29b6f03a3` |
+| Release AAB (development output) | 20,785,108 | `e330b1b44a775a68df84759199ad00e057fae9a75f01d689f0e829ea656f6bc7` |
+| Canonical CycloneDX SBOM | 373,351 | `7512bf2c0fa5f4bab5b06e7e47a530e7f35d51409811b575dc4a8ac0e44805b3` |
+
+The device suite uses deterministic local fixtures and does not disclose or
+exercise a real NanoKVM credential or framebuffer. API 26/35/36, representative
+physical ARM, TalkBack/switch/hardware-input review, real Keystore failure
+paths, signed/minified candidate smoke, current real-appliance negotiation and
+30-minute H.264/MJPEG endurance remain open release gates.
+
+## Development update-lineage checkpoint - 2026-07-19
+
+The previously shared development APKs (version codes 1 through 6) use one
+certificate with SHA-256
+`7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746`.
+The sandbox's ambient JVM-home debug key instead produced certificate
+`149d694db3d3b0d86849d1f99a570fb78c11627739494aa8c4e04eec6e276002`,
+which Android correctly rejected as an update. Package identity and SDK levels
+matched; signing lineage was the root cause.
+
+Version 0.3.1 increases the Android version code to 8. The local
+`scripts/build-development-update.ps1` builder explicitly supplies the
+out-of-repository development key and delegates to
+`scripts/verify-apk-upgrade.ps1`. The verifier rejects a wrong package, a
+different signer, multiple signers, an invalid signature, or a version code
+that does not strictly increase. A negative test rejected the old wrong-signer
+code-7 build before handoff.
+
+The API 37 emulator then installed the preceding 0.2.1/code-6 APK, launched it,
+and created an app-private retention marker. `adb install -r` accepted the new
+0.3.1/code-8 APK; the marker remained present, the profile catalogue rendered,
+and the crash buffer remained empty. This proves development update and data
+retention for that lineage; it is not production-signing or physical-device
+evidence.
+
+The source-matched focused Gradle gate then passed 129 tasks with strict
+dependency verification: 297/297 app JVM tests across 43 suites, zero debug
+lint findings, and the explicitly signed debug APK assembly.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `NanoKVM-Mobile-0.3.1-update-compatible-debug.apk` | `a5fab8fd055094d5d3d901d2313528c5e28eb9cc8413125ef0c9e66bee0a7779` |
+
+The private key is not in the repository. `AGENTS.md` records the handoff
+invariant so future automated work does not silently select the sandbox key.
+
+## Modernization remediation checkpoint — 2026-07-20
+
+The dirty 0.3.2/code-9 working tree based on commit `782e3b0` completed the
+prepared lifecycle, state, presentation, certificate, and transport remediation
+tranche. This is local development evidence, not approval of a production
+release. Hosted CI remains
+intentionally disabled during active development.
+
+The exact-source strict gate used JDK 21, SDK 37, strict dependency verification,
+one worker, no parallel execution, no configuration cache, and in-process Kotlin
+compilation. It passed 378 tasks in 6 minutes 43 seconds:
+
+```powershell
+.\gradlew.bat --no-daemon --no-parallel --no-configuration-cache `
+    --no-problems-report --max-workers=1 `
+    '-Pkotlin.compiler.execution.strategy=in-process' `
+    --dependency-verification=strict `
+    test lintDebug lintRelease assembleRelease bundleRelease assembleBenchmark `
+    :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark `
+    :app:reproducibleSbom
+```
+
+- all 548 JVM tests across 83 suites passed with no failures, errors, or skips:
+  331 tests/48 suites in `app`, 181/25 in `protocol`, and 36/10 in `video`;
+- all six `app`, `protocol`, and `video` debug/release lint reports contained no
+  findings;
+- the Android 17/API 37 x86_64 emulator passed 76/76 app instrumentation tests
+  and the video module's 1/1 EGL-backed native WebRTC regression, with no
+  failure, error, or skip;
+- the out-of-process 1/1 process-restart case killed the app process, relaunched
+  a new process, restored a non-secret profile draft, and did not restore a
+  password-like field;
+- source profile generation passed and produced 18,528 Baseline rules and
+  15,838 Startup rules. Verification found the release APK/AAB profiles
+  packaged, with `baseline.prof` measuring 11,793 bytes; and
+- the canonical CycloneDX SBOM task passed; the dependency graph was unchanged,
+  so the normalized SBOM retained its prior deterministic hash.
+
+The JVM WebSocket tripwire passed and continues to demonstrate that OkHttp
+buffers a complete uncompressed fragmented message before listener delivery.
+Production handshakes refuse compression, reject unsolicited extensions, and
+terminate oversized input/direct-H.264 transports promptly. At the user's
+direction, `WebSocketIngressMemoryInstrumentedTest` was **not invoked** during
+this checkpoint. No Android heap/PSS result is claimed; representative physical
+measurement and explicit disposition of the first uncompressed-message
+allocation remain open.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Update-compatible development APK, `NanoKVM-Mobile-0.3.2-update-compatible-debug.apk` | 53,271,445 | `9e837f8bd1ac5076ebcb695810c4ed05e8ad792d79d87ad59c27440d96c16428` |
+| Unsigned minified release APK | 33,010,324 | `21935b9726ec4f73135b5e35193ebc8dc7b0fbb4414ef2dc5a2099fc5b1e98f4` |
+| Release AAB (development output) | 20,897,257 | `5d0996556858820e88fa1befcd3fc800347e807127cbc02d2953f605367b6521` |
+| Debug-signed minified benchmark APK | 32,891,526 | `7468e1f45fec909e95eb790d19913f0ff4159605861120811cbc1961ce64f525` |
+| Canonical CycloneDX SBOM | 373,351 | `3eeeb5a54d4dfb8ebf7e638234458f5ccc4e8114b001b76708fb3390cf8dc5f7` |
+
+The development APK is `org.nanokvm.mobile` 0.3.2/code 9 and has the established
+development certificate SHA-256
+`7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746`.
+The verifier confirmed it can update the preceding 0.3.1/code-8 APK. On the API
+37 emulator, `adb install -r` retained an app-private marker; the updated app
+then cold-launched as the resumed `MainActivity`, and the crash buffer remained
+empty. This proves update compatibility and data retention for this development
+lineage only. It is not production-signing, physical-device, real-Keystore,
+accessibility, appliance-endurance, or public-release evidence.
+
+The hardened builder also rejected a keystore resolved inside the repository
+before invoking Gradle. A second invocation against the existing final output
+verified the artifact and reported an identical SHA-256 without overwriting it;
+its fail-closed output branch requires a higher version/code and new path when
+the existing versioned file has different bytes.

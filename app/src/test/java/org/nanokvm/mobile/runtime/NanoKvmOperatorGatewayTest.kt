@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.protocol.NanoKvmScriptRunMode
@@ -239,6 +240,22 @@ class NanoKvmOperatorGatewayTest {
     }
 
     @Test
+    fun `script port catalog requires its exact typed member`() {
+        val member = NanoKvmOperatorPortScript("health-check.sh")
+        val lookalike = NanoKvmOperatorPortScript("health-check.sh")
+        val catalog = NanoKvmOperatorPortScriptCatalog(listOf(member))
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            catalog.requireExactMember(lookalike)
+        }
+
+        assertEquals(
+            "Script must be an exact member of the supplied port catalog",
+            failure.message,
+        )
+    }
+
+    @Test
     fun `ambiguous delete reconciles by read and never replays mutation`() = runTest {
         val port = FakeOperatorPort().apply { deleteFailsAfterApplying = true }
         val current = binding()
@@ -410,8 +427,7 @@ private class FakeOperatorPort(
     override suspend fun listScripts(): NanoKvmOperatorPortScriptCatalog {
         listCalls++
         return NanoKvmOperatorPortScriptCatalog(
-            scripts = scriptNames.map { NanoKvmOperatorPortScript(it, ScriptToken(it)) },
-            opaqueToken = Any(),
+            scripts = scriptNames.map(::NanoKvmOperatorPortScript),
         )
     }
 
@@ -446,8 +462,6 @@ private class FakeOperatorPort(
         scriptNames.remove(script.displayName)
         if (deleteFailsAfterApplying) throw IOException("response lost: ${script.displayName}")
     }
-
-    private data class ScriptToken(val name: String)
 }
 
 private class FakeOperatorTerminal : NanoKvmOperatorTerminalPort {

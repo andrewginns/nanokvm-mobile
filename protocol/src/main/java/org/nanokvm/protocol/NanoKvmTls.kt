@@ -1,5 +1,6 @@
 package org.nanokvm.protocol
 
+import android.annotation.SuppressLint
 import okhttp3.OkHttpClient
 import java.security.MessageDigest
 import java.security.cert.CertificateException
@@ -107,6 +108,14 @@ internal fun OkHttpClient.Builder.applyTlsMode(
     return sslSocketFactory(context.socketFactory, trustManager)
 }
 
+/**
+ * Replaces CA-chain trust only for an endpoint-scoped full-DER pin or TOFU decision.
+ *
+ * Certificate validity is checked here and OkHttp's default hostname verifier remains enabled.
+ * This custom manager is necessary because platform trust rejects the self-signed certificates
+ * that these explicit trust modes are designed to support.
+ */
+@SuppressLint("CustomX509TrustManager")
 private class EndpointCertificateTrustManager(
     private val endpoint: NanoKvmEndpoint,
     private val mode: TlsMode,

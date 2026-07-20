@@ -10,9 +10,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -34,19 +35,29 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.runtime.ApprovedOperatorDestination
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.runtime.OperatorControls
 import org.nanokvm.mobile.runtime.OperatorEphemeralOutput
+import org.nanokvm.mobile.runtime.OperatorNotice
 import org.nanokvm.mobile.runtime.OperatorNoticeKind
-import org.nanokvm.mobile.runtime.OperatorOutputKind
 import org.nanokvm.mobile.runtime.OperatorScriptRunMode
 import org.nanokvm.mobile.runtime.OperatorScriptUiState
 import org.nanokvm.mobile.runtime.OperatorScriptUploadRequest
@@ -59,7 +70,9 @@ import org.nanokvm.mobile.runtime.OperatorSerialPort
 import org.nanokvm.mobile.runtime.OperatorSerialStopBits
 import org.nanokvm.mobile.runtime.OperatorTerminalUiPhase
 import org.nanokvm.mobile.runtime.OperatorUiState
-import org.nanokvm.mobile.runtime.appendBoundedOperatorOutput
+import org.nanokvm.mobile.runtime.utf8SizeAtMost
+import org.nanokvm.mobile.ui.components.PoliteStatus
+import org.nanokvm.mobile.ui.displayText
 
 @Composable
 internal fun OperatorDialog(
@@ -67,26 +80,54 @@ internal fun OperatorDialog(
     destination: ApprovedOperatorDestination,
     state: OperatorUiState,
     output: SharedFlow<OperatorEphemeralOutput>,
-    commands: ConsoleCommandSink,
+    controls: OperatorControls,
     onDismiss: () -> Unit,
+    retainedMemory: OperatorDialogMemory? = null,
 ) {
     var pendingAction by remember { mutableStateOf<PendingOperatorAction?>(null) }
-    var outputText by remember { mutableStateOf("") }
+    val localMemory = remember { OperatorDialogMemory() }
+    val memory = retainedMemory ?: localMemory
+    // Terminal input may contain passwords or replayable commands; never retain or save it.
     var terminalInput by remember { mutableStateOf("") }
-    var scriptName by remember { mutableStateOf("") }
-    var scriptContent by remember { mutableStateOf("") }
-    var serialConfiguration by remember { mutableStateOf(OperatorSerialConfiguration()) }
+    var scriptName by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    var serialConfiguration by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+        stateSaver = operatorSerialConfigurationSaver,
+    ) { mutableStateOf(OperatorSerialConfiguration()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(output) {
-        output.collect { event ->
-            val marker = when (event.kind) {
-                OperatorOutputKind.Terminal -> ""
-                OperatorOutputKind.Script -> "\n--- script output ---\n"
+    LaunchedEffect(output, lifecycleOwner, memory) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            coroutineScope {
+                val dirtyOutput = Channel<Unit>(Channel.CONFLATED)
+                launch {
+                    for (ignored in dirtyOutput) {
+                        withFrameNanos { }
+                        memory.publishOutputSnapshot()
+                    }
+                }
+                // Flush output retained just before a recreation cancelled the previous frame.
+                dirtyOutput.trySend(Unit)
+                try {
+                    output.collect { event ->
+                        memory.appendOutput(event)
+                        dirtyOutput.trySend(Unit)
+                    }
+                } finally {
+                    dirtyOutput.close()
+                }
             }
-            outputText = appendBoundedOperatorOutput(
-                outputText,
-                marker + event.copyText(),
-            )
+        }
+    }
+    DisposableEffect(memory, retainedMemory) {
+        onDispose {
+            if (retainedMemory == null) memory.clear()
         }
     }
     DisposableEffect(pendingAction) {
@@ -105,7 +146,7 @@ internal fun OperatorDialog(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = commands::refreshOperatorScripts,
+                    onClick = controls::refreshOperatorScripts,
                     enabled = controlsEnabled,
                 ) {
                     Icon(
@@ -118,265 +159,293 @@ internal fun OperatorDialog(
             }
         },
         text = {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 620.dp)
-                    .verticalScroll(rememberScrollState())
                     .testTag("operator-surface"),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                    ),
-                ) {
-                    Text(
-                        stringResource(R.string.console_operator_root_warning),
-                        modifier = Modifier.padding(12.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
+                item(key = "root-warning") {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                    ) {
+                        Text(
+                            stringResource(R.string.console_operator_root_warning),
+                            modifier = Modifier.padding(12.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
                 }
                 state.notice?.let { notice ->
-                    OperatorNoticeCard(notice.kind, notice.message)
+                    item(key = "notice") {
+                        OperatorNoticeCard(notice)
+                    }
                 }
 
-                OperatorSection(stringResource(R.string.console_operator_terminal)) {
-                    Text(state.terminalPhase.displayLabel())
-                    when (state.terminalPhase) {
-                        OperatorTerminalUiPhase.Inactive,
-                        OperatorTerminalUiPhase.Failed -> OutlinedButton(
-                            onClick = { pendingAction = PendingOperatorAction.OpenTerminal },
-                            enabled = controlsEnabled,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("operator-open-terminal"),
-                        ) {
-                            Text(stringResource(R.string.console_operator_open_terminal))
-                        }
-                        OperatorTerminalUiPhase.Connecting,
-                        OperatorTerminalUiPhase.Connected,
-                        OperatorTerminalUiPhase.Closing -> OutlinedButton(
-                            onClick = { commands.closeOperatorTerminal(destination) },
-                            enabled = controlsEnabled,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.console_operator_close_terminal))
-                        }
-                    }
-                    if (state.terminalPhase == OperatorTerminalUiPhase.Connected) {
-                        OutlinedTextField(
-                            value = terminalInput,
-                            onValueChange = {
-                                if (it.encodeToByteArray().size <= MAX_TERMINAL_INPUT_BYTES) {
-                                    terminalInput = it
-                                }
-                            },
-                            label = {
-                                Text(stringResource(R.string.console_operator_terminal_input))
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            Button(
-                                onClick = {
-                                    commands.sendOperatorTerminalInput(
-                                        destination,
-                                        terminalInput + '\r',
-                                    )
-                                    terminalInput = ""
-                                },
-                                enabled = terminalInput.isNotEmpty(),
-                                modifier = Modifier.weight(1f),
+                item(key = "terminal") {
+                    OperatorSection(stringResource(R.string.console_operator_terminal)) {
+                        Text(state.terminalPhase.displayLabel())
+                        when (state.terminalPhase) {
+                            OperatorTerminalUiPhase.Inactive,
+                            OperatorTerminalUiPhase.Failed -> OutlinedButton(
+                                onClick = { pendingAction = PendingOperatorAction.OpenTerminal },
+                                enabled = controlsEnabled,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("operator-open-terminal"),
                             ) {
-                                Text(stringResource(R.string.console_operator_send_input))
+                                Text(stringResource(R.string.console_operator_open_terminal))
                             }
-                            Spacer(Modifier.width(8.dp))
+                            OperatorTerminalUiPhase.Connecting,
+                            OperatorTerminalUiPhase.Connected,
+                            OperatorTerminalUiPhase.Closing -> OutlinedButton(
+                                onClick = { controls.closeOperatorTerminal(destination) },
+                                enabled = controlsEnabled,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.console_operator_close_terminal))
+                            }
+                        }
+                        if (state.terminalPhase == OperatorTerminalUiPhase.Connected) {
+                            OutlinedTextField(
+                                value = terminalInput,
+                                onValueChange = {
+                                    if (it.utf8SizeAtMost(MAX_TERMINAL_INPUT_BYTES) != null) {
+                                        terminalInput = it
+                                    }
+                                },
+                                label = {
+                                    Text(stringResource(R.string.console_operator_terminal_input))
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Button(
+                                    onClick = {
+                                        controls.sendOperatorTerminalInput(
+                                            destination,
+                                            terminalInput + '\r',
+                                        )
+                                        terminalInput = ""
+                                    },
+                                    enabled = terminalInput.isNotEmpty(),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(stringResource(R.string.console_operator_send_input))
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        controls.resizeOperatorTerminal(destination, 24, 80)
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(stringResource(R.string.console_operator_resize_80x24))
+                                }
+                            }
                             OutlinedButton(
                                 onClick = {
-                                    commands.resizeOperatorTerminal(destination, 24, 80)
+                                    controls.resizeOperatorTerminal(destination, 40, 120)
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text(stringResource(R.string.console_operator_resize_80x24))
+                                Text(stringResource(R.string.console_operator_resize_120x40))
                             }
                         }
-                        OutlinedButton(
-                            onClick = {
-                                commands.resizeOperatorTerminal(destination, 40, 120)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.console_operator_resize_120x40))
-                        }
                     }
                 }
 
-                OperatorSection(stringResource(R.string.console_operator_serial)) {
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_port),
-                        values = OperatorSerialPort.entries,
-                        selected = serialConfiguration.port,
-                        display = { it.devicePath },
-                        onSelect = { serialConfiguration = serialConfiguration.copy(port = it) },
-                    )
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_baud),
-                        values = OperatorSerialBaud.entries,
-                        selected = serialConfiguration.baud,
-                        display = { it.bitsPerSecond.toString() },
-                        onSelect = { serialConfiguration = serialConfiguration.copy(baud = it) },
-                    )
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_parity),
-                        values = OperatorSerialParity.entries,
-                        selected = serialConfiguration.parity,
-                        display = { it.displayLabel() },
-                        onSelect = { serialConfiguration = serialConfiguration.copy(parity = it) },
-                    )
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_flow),
-                        values = OperatorSerialFlowControl.entries,
-                        selected = serialConfiguration.flowControl,
-                        display = { it.displayLabel() },
-                        onSelect = {
-                            serialConfiguration = serialConfiguration.copy(flowControl = it)
-                        },
-                    )
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_data_bits),
-                        values = OperatorSerialDataBits.entries,
-                        selected = serialConfiguration.dataBits,
-                        display = { it.count.toString() },
-                        onSelect = { serialConfiguration = serialConfiguration.copy(dataBits = it) },
-                    )
-                    SerialChoiceRow(
-                        label = stringResource(R.string.console_operator_serial_stop_bits),
-                        values = OperatorSerialStopBits.entries,
-                        selected = serialConfiguration.stopBits,
-                        display = { it.count.toString() },
-                        onSelect = { serialConfiguration = serialConfiguration.copy(stopBits = it) },
-                    )
-                    if (state.serialActive) {
-                        OutlinedButton(
-                            onClick = { commands.exitOperatorSerial(destination) },
-                            enabled = controlsEnabled,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.console_operator_exit_serial))
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = {
-                                pendingAction = PendingOperatorAction.StartSerial(
-                                    serialConfiguration,
-                                )
-                            },
-                            enabled = controlsEnabled &&
-                                state.terminalPhase == OperatorTerminalUiPhase.Connected,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.console_operator_start_serial))
-                        }
-                    }
-                }
-
-                OperatorSection(stringResource(R.string.console_operator_scripts)) {
-                    if (state.loadingScripts) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CircularProgressIndicator()
-                            Text(stringResource(R.string.console_operator_loading_scripts))
-                        }
-                    }
-                    if (state.scriptsLoaded && state.scripts.isEmpty()) {
-                        Text(stringResource(R.string.console_operator_no_scripts))
-                    }
-                    state.scripts.forEach { script ->
-                        ScriptRow(
-                            script = script,
-                            enabled = controlsEnabled,
-                            onRunForeground = {
-                                pendingAction = PendingOperatorAction.RunScript(
-                                    script,
-                                    OperatorScriptRunMode.Foreground,
-                                )
-                            },
-                            onRunBackground = {
-                                pendingAction = PendingOperatorAction.RunScript(
-                                    script,
-                                    OperatorScriptRunMode.Background,
-                                )
-                            },
-                            onDelete = {
-                                pendingAction = PendingOperatorAction.DeleteScript(script)
+                item(key = "serial") {
+                    OperatorSection(stringResource(R.string.console_operator_serial)) {
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_port),
+                            values = OperatorSerialPort.entries,
+                            selected = serialConfiguration.port,
+                            display = { it.devicePath },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(port = it)
                             },
                         )
-                    }
-                    Text(
-                        stringResource(R.string.console_operator_script_upload),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    OutlinedTextField(
-                        value = scriptName,
-                        onValueChange = { if (it.length <= 255) scriptName = it },
-                        label = { Text(stringResource(R.string.console_operator_script_name)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = scriptContent,
-                        onValueChange = {
-                            if (it.encodeToByteArray().size <= MAX_SCRIPT_UPLOAD_BYTES) {
-                                scriptContent = it
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_baud),
+                            values = OperatorSerialBaud.entries,
+                            selected = serialConfiguration.baud,
+                            display = { it.bitsPerSecond.toString() },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(baud = it)
+                            },
+                        )
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_parity),
+                            values = OperatorSerialParity.entries,
+                            selected = serialConfiguration.parity,
+                            display = { it.displayLabel() },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(parity = it)
+                            },
+                        )
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_flow),
+                            values = OperatorSerialFlowControl.entries,
+                            selected = serialConfiguration.flowControl,
+                            display = { it.displayLabel() },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(flowControl = it)
+                            },
+                        )
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_data_bits),
+                            values = OperatorSerialDataBits.entries,
+                            selected = serialConfiguration.dataBits,
+                            display = { it.count.toString() },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(dataBits = it)
+                            },
+                        )
+                        SerialChoiceRow(
+                            label = stringResource(R.string.console_operator_serial_stop_bits),
+                            values = OperatorSerialStopBits.entries,
+                            selected = serialConfiguration.stopBits,
+                            display = { it.count.toString() },
+                            onSelect = {
+                                serialConfiguration = serialConfiguration.copy(stopBits = it)
+                            },
+                        )
+                        if (state.serialActive) {
+                            OutlinedButton(
+                                onClick = { controls.exitOperatorSerial(destination) },
+                                enabled = controlsEnabled,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.console_operator_exit_serial))
                             }
-                        },
-                        label = { Text(stringResource(R.string.console_operator_script_content)) },
-                        minLines = 4,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    val contentBytes = scriptContent.encodeToByteArray().size
-                    OutlinedButton(
-                        onClick = {
-                            pendingAction = PendingOperatorAction.UploadScript(
-                                fileName = scriptName,
-                                content = scriptContent.encodeToByteArray(),
-                            )
-                            scriptContent = ""
-                        },
-                        enabled = controlsEnabled && isSafeScriptName(scriptName) &&
-                            contentBytes in 1..MAX_SCRIPT_UPLOAD_BYTES,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.console_operator_upload))
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    pendingAction = PendingOperatorAction.StartSerial(
+                                        serialConfiguration,
+                                    )
+                                },
+                                enabled = controlsEnabled &&
+                                    state.terminalPhase == OperatorTerminalUiPhase.Connected,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.console_operator_start_serial))
+                            }
+                        }
                     }
-                    Text(
-                        stringResource(R.string.console_operator_foreground_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        stringResource(R.string.console_operator_background_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
 
-                OperatorSection(stringResource(R.string.console_operator_output)) {
-                    if (outputText.isEmpty()) {
-                        Text(stringResource(R.string.console_operator_output_empty))
-                    } else {
-                        SelectionContainer {
-                            Text(
-                                outputText,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.testTag("operator-output"),
-                            )
+                item(key = "scripts-header") {
+                    OperatorSection(stringResource(R.string.console_operator_scripts)) {
+                        if (state.loadingScripts) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                CircularProgressIndicator()
+                                Text(stringResource(R.string.console_operator_loading_scripts))
+                            }
                         }
+                        if (state.scriptsLoaded && state.scripts.isEmpty()) {
+                            Text(stringResource(R.string.console_operator_no_scripts))
+                        }
+                    }
+                }
+                items(
+                    items = state.scripts,
+                    key = OperatorScriptUiState::id,
+                ) { script ->
+                    ScriptRow(
+                        script = script,
+                        enabled = controlsEnabled,
+                        onRunForeground = {
+                            pendingAction = PendingOperatorAction.RunScript(
+                                script,
+                                OperatorScriptRunMode.Foreground,
+                            )
+                        },
+                        onRunBackground = {
+                            pendingAction = PendingOperatorAction.RunScript(
+                                script,
+                                OperatorScriptRunMode.Background,
+                            )
+                        },
+                        onDelete = {
+                            pendingAction = PendingOperatorAction.DeleteScript(script)
+                        },
+                    )
+                }
+                item(key = "script-upload") {
+                    OperatorCard {
+                        Text(
+                            stringResource(R.string.console_operator_script_upload),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        OutlinedTextField(
+                            value = scriptName,
+                            onValueChange = { if (it.length <= 255) scriptName = it },
+                            label = {
+                                Text(stringResource(R.string.console_operator_script_name))
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = memory.scriptContent,
+                            onValueChange = memory::updateScriptContent,
+                            label = {
+                                Text(stringResource(R.string.console_operator_script_content))
+                            },
+                            minLines = 4,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                         OutlinedButton(
-                            onClick = { outputText = "" },
+                            onClick = {
+                                pendingAction = PendingOperatorAction.UploadScript(
+                                    fileName = scriptName,
+                                    content = memory.takeScriptContent(),
+                                )
+                            },
+                            enabled = controlsEnabled && isSafeScriptName(scriptName) &&
+                                memory.scriptUtf8ByteCount in 1..MAX_SCRIPT_UPLOAD_BYTES,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(stringResource(R.string.console_operator_clear_output))
+                            Text(stringResource(R.string.console_operator_upload))
+                        }
+                        Text(
+                            stringResource(R.string.console_operator_foreground_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(R.string.console_operator_background_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                item(key = "output") {
+                    OperatorSection(stringResource(R.string.console_operator_output)) {
+                        if (memory.outputText.isEmpty()) {
+                            Text(stringResource(R.string.console_operator_output_empty))
+                        } else {
+                            SelectionContainer {
+                                Text(
+                                    memory.outputText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.testTag("operator-output"),
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    memory.clearOutput()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.console_operator_clear_output))
+                            }
                         }
                     }
                 }
@@ -398,7 +467,7 @@ internal fun OperatorDialog(
                 pendingAction = null
             },
             onConfirm = {
-                action.execute(commands, destination)
+                action.execute(controls, destination)
                 pendingAction = null
             },
         )
@@ -408,6 +477,16 @@ internal fun OperatorDialog(
 @Composable
 private fun OperatorSection(
     title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    OperatorCard {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        content()
+    }
+}
+
+@Composable
+private fun OperatorCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
@@ -420,7 +499,6 @@ private fun OperatorSection(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
             content()
         }
     }
@@ -459,7 +537,12 @@ private fun ScriptRow(
     onRunBackground: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("operator-script-row"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
         Column(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -469,7 +552,9 @@ private fun ScriptRow(
                 TextButton(
                     onClick = onRunForeground,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("operator-script-run-foreground-${script.id}"),
                 ) {
                     Text(stringResource(R.string.console_operator_run_foreground))
                 }
@@ -493,7 +578,12 @@ private fun ScriptRow(
 }
 
 @Composable
-private fun OperatorNoticeCard(kind: OperatorNoticeKind, message: String) {
+internal fun OperatorNoticeCard(notice: OperatorNotice) {
+    OperatorNoticeSurface(kind = notice.kind, message = notice.displayText())
+}
+
+@Composable
+private fun OperatorNoticeSurface(kind: OperatorNoticeKind, message: String) {
     val container = when (kind) {
         OperatorNoticeKind.Applied -> MaterialTheme.colorScheme.primaryContainer
         OperatorNoticeKind.Reconciled -> MaterialTheme.colorScheme.tertiaryContainer
@@ -501,8 +591,10 @@ private fun OperatorNoticeCard(kind: OperatorNoticeKind, message: String) {
         OperatorNoticeKind.Rejected -> MaterialTheme.colorScheme.errorContainer
         OperatorNoticeKind.Information -> MaterialTheme.colorScheme.surfaceContainerHigh
     }
-    Card(colors = CardDefaults.cardColors(containerColor = container)) {
-        Text(message, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+    PoliteStatus {
+        Card(colors = CardDefaults.cardColors(containerColor = container)) {
+            Text(message, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -610,15 +702,27 @@ private fun PendingOperatorAction.clear() {
 private fun PendingOperatorAction.actionLabel(): String = when (this) {
     PendingOperatorAction.OpenTerminal ->
         stringResource(R.string.console_operator_action_open_terminal)
-    is PendingOperatorAction.StartSerial -> stringResource(
-        R.string.console_operator_action_start_serial,
-        configuration.port.devicePath,
-        configuration.baud.bitsPerSecond,
-        configuration.parity.displayLabel(),
-        configuration.flowControl.displayLabel(),
-        configuration.dataBits.count,
-        configuration.stopBits.count,
-    )
+    is PendingOperatorAction.StartSerial -> {
+        val dataBits = configuration.dataBits.count
+        val stopBits = configuration.stopBits.count
+        stringResource(
+            R.string.console_operator_action_start_serial,
+            configuration.port.devicePath,
+            configuration.baud.bitsPerSecond,
+            configuration.parity.displayLabel(),
+            configuration.flowControl.displayLabel(),
+            pluralStringResource(
+                R.plurals.console_operator_serial_data_bit_count,
+                dataBits,
+                dataBits,
+            ),
+            pluralStringResource(
+                R.plurals.console_operator_serial_stop_bit_count,
+                stopBits,
+                stopBits,
+            ),
+        )
+    }
     is PendingOperatorAction.UploadScript -> stringResource(
         R.string.console_operator_action_upload,
         fileName,
@@ -652,21 +756,21 @@ private fun PendingOperatorAction.riskLabel(): String = stringResource(
 )
 
 private fun PendingOperatorAction.execute(
-    commands: ConsoleCommandSink,
+    controls: OperatorControls,
     destination: ApprovedOperatorDestination,
 ) {
     when (this) {
-        PendingOperatorAction.OpenTerminal -> commands.enterOperatorTerminal(destination)
+        PendingOperatorAction.OpenTerminal -> controls.enterOperatorTerminal(destination)
         is PendingOperatorAction.StartSerial ->
-            commands.startOperatorSerial(destination, configuration)
-        is PendingOperatorAction.UploadScript -> commands.uploadOperatorScript(
+            controls.startOperatorSerial(destination, configuration)
+        is PendingOperatorAction.UploadScript -> controls.uploadOperatorScript(
             destination,
             OperatorScriptUploadRequest(fileName, takeContent()),
         )
         is PendingOperatorAction.RunScript ->
-            commands.runOperatorScript(destination, script.id, mode)
+            controls.runOperatorScript(destination, script.id, mode)
         is PendingOperatorAction.DeleteScript ->
-            commands.deleteOperatorScript(destination, script.id)
+            controls.deleteOperatorScript(destination, script.id)
     }
 }
 
@@ -678,5 +782,30 @@ private val SAFE_SCRIPT_NAME = Regex(
     RegexOption.IGNORE_CASE,
 )
 
-private const val MAX_SCRIPT_UPLOAD_BYTES = 512 * 1024
+private val operatorSerialConfigurationSaver = Saver<OperatorSerialConfiguration, List<Int>>(
+    save = { configuration ->
+        listOf(
+            configuration.port.ordinal,
+            configuration.baud.ordinal,
+            configuration.parity.ordinal,
+            configuration.flowControl.ordinal,
+            configuration.dataBits.ordinal,
+            configuration.stopBits.ordinal,
+        )
+    },
+    restore = { values ->
+        runCatching {
+            OperatorSerialConfiguration(
+                port = OperatorSerialPort.entries[values[0]],
+                baud = OperatorSerialBaud.entries[values[1]],
+                parity = OperatorSerialParity.entries[values[2]],
+                flowControl = OperatorSerialFlowControl.entries[values[3]],
+                dataBits = OperatorSerialDataBits.entries[values[4]],
+                stopBits = OperatorSerialStopBits.entries[values[5]],
+            )
+        }.getOrDefault(OperatorSerialConfiguration())
+    },
+)
+
+private const val MAX_SCRIPT_UPLOAD_BYTES = MAX_RETAINED_OPERATOR_SCRIPT_BYTES
 private const val MAX_TERMINAL_INPUT_BYTES = 64 * 1024

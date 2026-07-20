@@ -711,12 +711,8 @@ internal class NanoKvmOperatorScriptUploadReceipt internal constructor(
 
 internal class NanoKvmOperatorScriptOutput internal constructor(content: String) {
     val content: String = content
-    val utf8ByteCount: Int = content.encodeToByteArray().size
-
-    init {
-        require(content.hasBoundedUtf8Length(256 * 1024)) {
-            "Script output exceeds the app limit"
-        }
+    val utf8ByteCount: Int = requireNotNull(content.utf8SizeAtMost(256 * 1024)) {
+        "Script output exceeds the app limit"
     }
 
     override fun toString(): String =
@@ -840,7 +836,7 @@ internal class NanoKvmOperatorGateway internal constructor(
                 }
                 if (
                     result.mode != mode ||
-                    !result.output.hasBoundedUtf8Length(MAX_SCRIPT_OUTPUT_BYTES)
+                    result.output.utf8SizeAtMost(MAX_SCRIPT_OUTPUT_BYTES) == null
                 ) {
                     return@withLock NanoKvmOperatorScriptCommandResult.Indeterminate(
                         dispatchError = operatorError(
@@ -1037,27 +1033,9 @@ private val SAFE_OPERATOR_SCRIPT_BASENAME = Regex(
 )
 
 private fun isSafeScriptBasename(value: String): Boolean =
-    value.hasBoundedUtf8Length(255) && SAFE_OPERATOR_SCRIPT_BASENAME.matches(value) && ".." !in value
-
-private fun String.hasBoundedUtf8Length(limit: Int): Boolean {
-    var bytes = 0
-    var index = 0
-    while (index < length) {
-        val value = this[index]
-        bytes += when {
-            value.code < 0x80 -> 1
-            value.code < 0x800 -> 2
-            value.isHighSurrogate() && index + 1 < length && this[index + 1].isLowSurrogate() -> {
-                index++
-                4
-            }
-            else -> 3
-        }
-        if (bytes > limit) return false
-        index++
-    }
-    return true
-}
+    value.utf8SizeAtMost(255) != null &&
+        SAFE_OPERATOR_SCRIPT_BASENAME.matches(value) &&
+        ".." !in value
 
 private fun operatorError(
     operation: NanoKvmOperatorOperation,

@@ -34,13 +34,18 @@ enum class ClipboardRejectionReason {
     IntentContent,
     NonPlainText,
     MissingDirectText,
+    TooLarge,
 }
 
 enum class ClipboardTextWarning {
     ContainsNewline,
     ContainsTab,
     ContainsOtherControlCharacter,
-    ExceedsServerPasteLimit,
+}
+
+sealed interface ClipboardPayloadAnalysis {
+    data class Accepted(val payload: ClipboardPayload) : ClipboardPayloadAnalysis
+    data object TooLarge : ClipboardPayloadAnalysis
 }
 
 /**
@@ -56,15 +61,6 @@ class ClipboardPayload internal constructor(
     val utf8ByteCount: Int,
     val warnings: Set<ClipboardTextWarning>,
 ) {
-    val serverPasteLimitBytes: Int
-        get() = ClipboardPayloadAnalyzer.SERVER_PASTE_LIMIT_BYTES
-
-    val bytesOverServerPasteLimit: Int
-        get() = (utf8ByteCount - serverPasteLimitBytes).coerceAtLeast(0)
-
-    val fitsServerPasteLimit: Boolean
-        get() = bytesOverServerPasteLimit == 0
-
     override fun toString(): String =
         "ClipboardPayload(text=<redacted>, isSensitive=$isSensitive, " +
             "characterCount=$characterCount, utf8ByteCount=$utf8ByteCount, " +
@@ -74,48 +70,97 @@ class ClipboardPayload internal constructor(
 object ClipboardPayloadAnalyzer {
     const val SERVER_PASTE_LIMIT_BYTES = 1_024
 
-    /** Creates an immutable analysis snapshot; callers should discard it after the paste attempt. */
-    fun analyzeDirectPlainText(
+    /**
+     * Applies the remote paste limit before copying or retaining text from an Android ingress.
+     * Counting stops as soon as the normalized UTF-8 representation is known to be too large.
+     */
+    fun analyzeDirectPlainTextAtIngress(
         text: CharSequence,
         isSensitive: Boolean = false,
-    ): ClipboardPayload {
+    ): ClipboardPayloadAnalysis {
+        val metrics = text.boundedNormalizedMetrics(SERVER_PASTE_LIMIT_BYTES)
+            ?: return ClipboardPayloadAnalysis.TooLarge
         val normalized = text.toString()
             .replace("\r\n", "\n")
             .replace('\r', '\n')
-        val utf8ByteCount = normalized.toByteArray(Charsets.UTF_8).size
-        val warnings = buildSet {
-            if ('\n' in normalized) add(ClipboardTextWarning.ContainsNewline)
-            if ('\t' in normalized) add(ClipboardTextWarning.ContainsTab)
-            if (normalized.hasOtherControlCharacter()) {
-                add(ClipboardTextWarning.ContainsOtherControlCharacter)
-            }
-            if (utf8ByteCount > SERVER_PASTE_LIMIT_BYTES) {
-                add(ClipboardTextWarning.ExceedsServerPasteLimit)
-            }
-        }
-        return ClipboardPayload(
-            text = normalized,
-            isSensitive = isSensitive,
-            characterCount = normalized.codePointCount(0, normalized.length),
-            utf8ByteCount = utf8ByteCount,
-            warnings = warnings,
+        return ClipboardPayloadAnalysis.Accepted(
+            ClipboardPayload(
+                text = normalized,
+                isSensitive = isSensitive,
+                characterCount = metrics.characterCount,
+                utf8ByteCount = metrics.utf8ByteCount,
+                warnings = metrics.warnings,
+            ),
         )
     }
 
-    private fun String.hasOtherControlCharacter(): Boolean {
+    /** Creates a bounded immutable snapshot for app-owned text and test fixtures. */
+    fun analyzeDirectPlainText(
+        text: CharSequence,
+        isSensitive: Boolean = false,
+    ): ClipboardPayload = when (val analysis = analyzeDirectPlainTextAtIngress(text, isSensitive)) {
+        is ClipboardPayloadAnalysis.Accepted -> analysis.payload
+        ClipboardPayloadAnalysis.TooLarge -> throw IllegalArgumentException(
+            "Clipboard text exceeds the ${SERVER_PASTE_LIMIT_BYTES}-byte remote paste limit",
+        )
+    }
+
+    private fun CharSequence.boundedNormalizedMetrics(limit: Int): ClipboardTextMetrics? {
+        var characterCount = 0
+        var utf8ByteCount = 0
+        var containsNewline = false
+        var containsTab = false
+        var containsOtherControl = false
         var index = 0
         while (index < length) {
-            val codePoint = codePointAt(index)
-            if (codePoint != '\n'.code &&
-                codePoint != '\t'.code &&
-                Character.isISOControl(codePoint)
-            ) {
-                return true
+            val first = this[index]
+            val normalizedCodePoint: Int
+            val consumedChars: Int
+            if (first == '\r') {
+                normalizedCodePoint = '\n'.code
+                consumedChars = if (index + 1 < length && this[index + 1] == '\n') 2 else 1
+            } else if (first.isHighSurrogate() && index + 1 < length && this[index + 1].isLowSurrogate()) {
+                normalizedCodePoint = Character.toCodePoint(first, this[index + 1])
+                consumedChars = 2
+            } else {
+                normalizedCodePoint = first.code
+                consumedChars = 1
             }
-            index += Character.charCount(codePoint)
+
+            utf8ByteCount += normalizedCodePoint.utf8ByteCount()
+            if (utf8ByteCount > limit) return null
+            characterCount++
+            when {
+                normalizedCodePoint == '\n'.code -> containsNewline = true
+                normalizedCodePoint == '\t'.code -> containsTab = true
+                Character.isISOControl(normalizedCodePoint) -> containsOtherControl = true
+            }
+            index += consumedChars
         }
-        return false
+
+        return ClipboardTextMetrics(
+            characterCount = characterCount,
+            utf8ByteCount = utf8ByteCount,
+            warnings = buildSet {
+                if (containsNewline) add(ClipboardTextWarning.ContainsNewline)
+                if (containsTab) add(ClipboardTextWarning.ContainsTab)
+                if (containsOtherControl) add(ClipboardTextWarning.ContainsOtherControlCharacter)
+            },
+        )
     }
+
+    private fun Int.utf8ByteCount(): Int = when {
+        this < 0x80 -> 1
+        this < 0x800 -> 2
+        this <= 0xffff -> 3
+        else -> 4
+    }
+
+    private data class ClipboardTextMetrics(
+        val characterCount: Int,
+        val utf8ByteCount: Int,
+        val warnings: Set<ClipboardTextWarning>,
+    )
 }
 
 /** Identifies the exact remote session and destination approved by a later confirmation step. */

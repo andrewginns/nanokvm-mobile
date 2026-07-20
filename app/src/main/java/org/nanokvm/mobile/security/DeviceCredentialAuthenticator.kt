@@ -1,16 +1,36 @@
 package org.nanokvm.mobile.security
 
 import android.os.Build
+import androidx.annotation.StringRes
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import org.nanokvm.mobile.R
 
 /** UI-facing seam for the Android system authentication prompt. */
 interface CredentialAuthenticator {
     val canProtectPasswords: Boolean
     fun authenticate(request: CredentialPromptRequest)
     fun cancel()
+}
+
+@StringRes
+internal fun credentialPromptTitleResource(kind: CredentialPromptKind): Int = when (kind) {
+    CredentialPromptKind.Unlock -> R.string.credential_prompt_unlock_title
+    CredentialPromptKind.Save -> R.string.credential_prompt_save_title
+}
+
+@StringRes
+internal fun credentialPromptSubtitleResource(kind: CredentialPromptKind): Int = when (kind) {
+    CredentialPromptKind.Unlock -> R.string.credential_prompt_unlock_subtitle
+    CredentialPromptKind.Save -> R.string.credential_prompt_save_subtitle
+}
+
+@StringRes
+internal fun credentialPromptNegativeButtonResource(kind: CredentialPromptKind): Int = when (kind) {
+    CredentialPromptKind.Unlock -> R.string.credential_prompt_use_password
+    CredentialPromptKind.Save -> R.string.credential_prompt_not_now
 }
 
 /**
@@ -38,7 +58,7 @@ class DeviceCredentialAuthenticator internal constructor(
             when (coordinator.begin(hostToken, request)) {
                 PromptBeginResult.Started -> coordinator.cancel(
                     hostToken,
-                    "Set up a screen lock or strong biometric before saving or unlocking a password.",
+                    CredentialPromptFailure.DeviceProtectionUnavailable,
                 )
                 else -> Unit
             }
@@ -65,30 +85,25 @@ class DeviceCredentialAuthenticator internal constructor(
     private fun startPrompt(request: CredentialPromptRequest) {
         val builder = BiometricPrompt.PromptInfo.Builder()
             .setTitle(
-                if (request.kind == CredentialPromptKind.Unlock) {
-                    "Unlock saved NanoKVM password"
-                } else {
-                    "Protect NanoKVM password"
-                },
+                activity.getString(credentialPromptTitleResource(request.kind)),
             )
             .setSubtitle(
-                if (request.kind == CredentialPromptKind.Unlock) {
-                    "Authenticate to connect to ${request.profileName}"
-                } else {
-                    "Authenticate before saving the password for ${request.profileName}"
-                },
+                activity.getString(
+                    credentialPromptSubtitleResource(request.kind),
+                    request.profileName,
+                ),
             )
             .setAllowedAuthenticators(allowedAuthenticators)
             .setConfirmationRequired(false)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             builder.setNegativeButtonText(
-                if (request.kind == CredentialPromptKind.Unlock) "Use password instead" else "Not now",
+                activity.getString(credentialPromptNegativeButtonResource(request.kind)),
             )
         }
         try {
             biometricPrompt.authenticate(builder.build())
         } catch (_: Throwable) {
-            coordinator.cancel(hostToken, "Android could not start device authentication.")
+            coordinator.cancel(hostToken, CredentialPromptFailure.AuthenticationStartFailed)
         }
     }
 
@@ -102,12 +117,12 @@ class DeviceCredentialAuthenticator internal constructor(
         }
 
         override fun onAuthenticationError(errorCode: Int, errorString: CharSequence) {
-            val message = if (isUserCancellation(errorCode)) {
+            val failure = if (isUserCancellation(errorCode)) {
                 null
             } else {
-                "Device authentication failed. Enter the NanoKVM password instead."
+                CredentialPromptFailure.AuthenticationFailed
             }
-            coordinator.cancel(hostToken, message)
+            coordinator.cancel(hostToken, failure)
         }
 
         private fun currentRequestId(): Long? = coordinator.pendingRequestId(hostToken)

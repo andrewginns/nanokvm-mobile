@@ -12,7 +12,9 @@
   `TextureView`) using `MediaCodec`. The raw WebSocket envelope is parsed before a
   key-frame-gated queue of at most three access units. A saturated queue drops the
   whole queued GOP and waits for another key frame; it never keeps a later P-frame
-  after discarding one of its dependencies.
+  after discarding one of its dependencies. Compression negotiation is refused;
+  an oversized access unit cancels the source immediately and enters the normal
+  fallback policy instead of leaving the peer able to send another message.
 - `/api/stream/mjpeg` is parsed as Content-Length multipart data. Callers receive
   a downsampled `RGB_565` `Bitmap` by default; raw JPEG callbacks are opt-in with
   `deliverMjpegJpegBytes`. Delivery is latest-frame-only, and superseded/stale

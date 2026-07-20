@@ -6,11 +6,11 @@ needs; there is no ceremonial domain or per-screen module layer.
 
 ```text
 Compose screens
-  | immutable AppUiState + user actions
+  | immutable AppUiState + durable app actions
   v
 AppViewModel -----------------------------------------------+
   | profile/credential repositories                         |
-  | ConsoleBackend state + low-frequency commands           |
+  | ConsoleBackend state + typed ConsoleFeatureBundle       |
   +---- RemoteInputSink (non-blocking high-frequency input) |
   +---- VideoSurfaceSink (caller-owned Surface lifecycle)   |
   v                                                         |
@@ -48,11 +48,36 @@ composables do not reach through a global backend singleton.
   passwords. A profile only records whether it has a corresponding credential
   through a derived ID set; it never embeds the password.
 - `ConsoleBackend.session` is the source of truth for transient connection,
-  video, reconnect, and release-generation state.
+  video, reconnect, and release-generation state. Connection/video status is
+  latest-wins; user-initiated action feedback carries a monotonically sequenced
+  revision so routine streaming progress cannot erase the last action outcome.
 - `AppViewModel` combines those sources into immutable `AppUiState`, accepts
   durable UI actions, and owns connection attempts, certificate-review intent,
   and pending secret actions.
-- Compose collects state with `collectAsStateWithLifecycle()`.
+- Transient app notices are semantic `PendingAppNotice` values in a
+  ViewModel-owned FIFO. Each has a process-local identity; only acknowledgement
+  of the current head removes it. Lifecycle or navigation changes cannot clear
+  the wrong notice, and transient notices are deliberately not restored after
+  process replacement.
+- Low-rate runtime actions are grouped into focused core, virtual-media/WOL,
+  administration, operator, and PicoClaw contracts. `ConsoleFeatureBundle`
+  makes unavailable surfaces explicit; production actions have no default
+  no-op implementation. The concrete backend remains one staged adapter, while
+  each UI surface receives only the contract it uses.
+- The session-bound automation dialog has a closeable state owner. It owns its
+  refreshes, mutation serialization, one-use approvals, editor state, and
+  foreground lease; Compose renders its immutable `StateFlow` and launches the
+  document picker. A ViewModel-owned `ConsoleSessionDraftOwner` retains that
+  controller and the bounded operator transcript/editor across configuration
+  recreation for one exact profile, authority, and session generation. It
+  clears them on dismissal, destination/generation change, genuine background,
+  disconnect, local-network revocation, or ViewModel teardown. Wi-Fi passwords,
+  API keys/chat, terminal input, virtual-media URLs, approvals, and other
+  secrets are never retained as drafts or written to saved instance state.
+- Compose state uses `collectAsStateWithLifecycle()`. Replay-free operator
+  output and notice presentation are collected only while the surface lifecycle
+  is at least `STARTED`. Feature/runtime messages cross into Compose as closed
+  semantic types and map exhaustively to Android string resources.
 - High-rate pointer/key operations and Surface callbacks use narrow synchronous
   ports whose implementation enqueues work; they are intentionally not routed
   through `StateFlow` or a durable action queue.
@@ -64,12 +89,18 @@ blocked until DataStore emits one of three terminal states:
 - `Unavailable` is treated as transient and exposes retry without deletion;
 - `Corrupted` blocks writes and requires an explicitly destructive reset.
 
-Resetting corrupt storage removes all user-saved profile records, pins, and
-protected credentials, then returns to an empty connection catalog. The UI and
-release test must state and confirm that consequence. Repository and credential
-file/Keystore work run on an injected I/O dispatcher. Android device tests for
-DataStore I/O/corruption and real Keystore invalidation are still release
-evidence gates.
+The profile DataStore corruption handler writes a separate corruption sentinel;
+the repository then blocks mutations until the user explicitly resets it rather
+than silently treating malformed bytes as an empty catalog. Resetting corrupt
+storage removes all user-saved profile records, pins, and protected credentials,
+then returns to an empty connection catalog. The UI states and confirms that
+consequence. Repository and credential file/Keystore work run on an injected I/O
+dispatcher. An Android device test exercises real DataStore corruption and
+reset; real Keystore invalidation remains a release evidence gate.
+
+Settings remain DataStore-authoritative. A transient collection failure keeps
+the last successful value and retries with bounded backoff until collection can
+resume; it does not publish a speculative write as authoritative state.
 
 ## Connection and trust lifecycle
 
@@ -79,17 +110,22 @@ evidence gates.
 3. Prefer Android system trust. If trust fails for a private/self-signed leaf,
    an ephemeral inspection client retrieves certificate metadata without
    sending credentials, tokens, cookies, or application requests. Hostname and
-   validity are checked before review is offered.
+   validity are checked before review is offered. Subject/issuer/SAN display
+   metadata is Unicode-neutralized and bounded; the verified identity retains a
+   slot, the complete fingerprint remains available, and the UI discloses any
+   shortening.
 4. Require explicit acceptance of the leaf SHA-256 fingerprint for that origin,
    either once or persisted in the profile.
 5. Encrypt the password in the NanoKVM web-client-compatible format and call
    `/api/auth/login`.
 6. Keep the returned JWT in memory and send it only as the `nano-kvm-token`
-   cookie to the exact origin.
+   cookie to the exact origin. Reject a token longer than 2,048 characters
+   before storing or using it.
 7. Read `/api/vm/info`; reject NanoKVM application versions older than 2.3.2.
 8. Open input plus the selected video transport. `Auto` tries direct H.264 and
-   then MJPEG. Explicit `WebRTC` tries WebRTC, direct H.264, then MJPEG, always
-   with a fresh fallback transport instance.
+   then MJPEG. The native WebRTC runtime is not constructed for `Auto`, H.264,
+   or MJPEG; explicit `WebRTC` resolves it lazily, then falls back through a
+   fresh direct H.264 and MJPEG transport when necessary.
 9. On lifecycle loss, disconnect, or cancellation, release all HID state and
    invalidate work owned by the old session generation before transports close.
 
@@ -149,13 +185,39 @@ claims a command key to reject duplicates, serializes execution with a mutex,
 and binds the lease to the current session generation. Disconnect/reconnect
 invalidates old leases. REST controls are not automatically retried.
 
+All REST execution, body reads, and JSON decoding dispatch below the caller on
+the protocol I/O dispatcher. OkHttp connection retries and HTTP/HTTPS redirects
+are disabled so credentials, tokens, and one-shot request bodies are never
+replayed to an unreviewed destination. Cancellation cancels the active call;
+certificate-inspection cancellation also closes both the connecting and TLS
+sockets so blocking handshakes cannot outlive their owner.
+
+Feature catalogs expose feature-specific, latest-snapshot handles rather than
+`Any` tokens or server paths. Identity-bound lookup rejects stale, foreign, and
+lookalike handles without putting their content in diagnostics. Input WebSocket
+server messages are bounded and discarded because the client has no consumer;
+there is no unused event flow, replay cache, or ambiguous loss policy.
+
+Tailscale login navigation is a memory-only, generation-bound state handoff,
+not an ephemeral event. Android opens only an HTTPS URL after an explicit tap;
+the backend clears the request only after acknowledgement for its exact request
+ID and destination, and retains retry guidance when URI handling fails.
+
 ## Viewport, IME, and video
 
 Gestures map through the inverse viewport transform, including fit scale, user
 zoom, translation, and letterboxing. The remote `TextureView` and input layer
 fill the viewport. A measured pan/zoom overlay has an independent vertical
 handle; keyboard visibility temporarily docks it above the IME and closing the
-IME restores its prior position.
+IME restores its prior position. Saveable viewport state includes the measured
+viewport dimensions as well as zoom/pan, and a handled Fit request is restored
+with its owner so recreation cannot replay it over a later transform.
+
+Large virtual-media, Wake-on-LAN, HID, autostart, and script catalogs use one
+stable-keyed lazy list per surface. Operator output is retained in a bounded
+incremental buffer and published at most once per display frame; editor and
+paste validation count bounded UTF-8 without allocating encoded copies during
+ordinary input changes.
 
 Direct H.264 messages contain a keyframe flag, an unsigned little-endian
 microsecond timestamp, and one access unit. The decoder waits for a keyframe and
@@ -163,25 +225,38 @@ uses a bounded queue; stale delta frames may be discarded under pressure. MJPEG
 is parsed incrementally from `multipart/x-mixed-replace` and only a bounded
 latest frame is handed to decoding.
 
-Application parsers reject oversized H.264 and input WebSocket messages, but
-OkHttp has already materialized each complete WebSocket message before those
-checks run. Parser copies and decoder queues are bounded; peak transport
-allocation from a hostile configured endpoint is not yet bounded by the app.
-This residual availability risk is tracked in the threat model and audit.
+Application parsers reject oversized H.264, terminal, and input WebSocket
+messages. The transport strips `permessage-deflate` negotiation and rejects an
+unsolicited compression response, so compressed amplification is not accepted.
+Direct H.264 cancels immediately on oversize and enters normal fallback; input
+stops command acceptance and queues releases before its bounded close.
+
+OkHttp nevertheless materializes each complete uncompressed WebSocket message
+before those checks run. A raw slow-fragment fixture proves cumulative buffering
+before listener delivery and deliberately trips when the pinned OkHttp internals
+change. Parser copies, decoder queues, and post-rejection lifetime are bounded;
+peak first-message allocation from a hostile configured endpoint is not. This
+residual availability risk remains in the threat model and audit.
 
 ## Shutdown and performance evidence
 
 The backend owns its coroutine scopes, input heartbeat executor, video callback
-executor, codec thread, watchdogs, and transports. `closeAndAwait()` is the
-deterministic completion contract; lifecycle/race tests must prove that an old
-backend cannot publish into a replacement session.
+executor, codec thread, watchdogs, and transports. `close()` synchronously
+rejects new commands, detaches input/Surface ownership, releases HID/input, and
+publishes a fresh disconnected session before asynchronous transport/video
+cleanup continues. `closeAndAwait()` is the deterministic full-completion
+contract. Focused tests guard cancellation-ignoring late input/video callbacks,
+replacement sessions, stale authentication/reconnect publication, and 64
+background/reconnect/foreground/close cycles. Real physical transports,
+decoders, and long-running shutdown remain integration gates.
 
 Generated Baseline and Startup Profile rules are versioned under
 `app/src/main/generated/baselineProfiles/`. The `macrobenchmark` module defines
 cold startup runs with no compilation and with the packaged Baseline Profile,
 plus frame timing for cold startup without compilation and cold/warm/hot startup
 with the packaged Baseline Profile. Compose reports fully drawn after the
-profile catalog reaches a renderable terminal state. Current source-matched API
-37 x86_64 cold/warm/hot, fully-drawn, and frame traces are diagnostic only;
-first-frame/console CUJs, physical ARM measurements, and stable trend thresholds
-remain open release evidence.
+profile catalog reaches a renderable terminal state. Current-source profile
+generation and APK/AAB package verification pass on API 37; earlier x86_64
+cold/warm/hot, fully-drawn, and frame traces are diagnostic only. Current-source
+performance measurement, first-frame/console CUJs, physical ARM measurements,
+and stable trend thresholds remain open release evidence.

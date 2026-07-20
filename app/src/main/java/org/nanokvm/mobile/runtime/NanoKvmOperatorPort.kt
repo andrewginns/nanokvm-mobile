@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.runtime
 
+import java.util.IdentityHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,10 +52,9 @@ internal interface NanoKvmOperatorTerminalPort : AutoCloseable {
     suspend fun exitSerialAndDisconnect(): Boolean
 }
 
-/** Opaque member of one exact port catalog. Its display name is never rendered by [toString]. */
+/** Member of one exact port catalog. Its display name is never rendered by [toString]. */
 internal class NanoKvmOperatorPortScript internal constructor(
     val displayName: String,
-    internal val opaqueToken: Any,
 ) {
     init {
         require(displayName.isNotBlank()) { "Script display name must not be blank" }
@@ -66,7 +66,6 @@ internal class NanoKvmOperatorPortScript internal constructor(
 /** Immutable port snapshot. Mutations require both this object and one of its exact members. */
 internal class NanoKvmOperatorPortScriptCatalog internal constructor(
     scripts: List<NanoKvmOperatorPortScript>,
-    internal val opaqueToken: Any,
 ) {
     val scripts: List<NanoKvmOperatorPortScript> = scripts.toList()
 
@@ -106,27 +105,39 @@ internal class NanoKvmProtocolOperatorPort(
     private val client: NanoKvmClient,
 ) : NanoKvmOperatorPort {
     private val api: NanoKvmApi = client.api
+    private var latestScriptCatalog: ProtocolScriptCatalogBinding? = null
 
     override fun newTerminal(): NanoKvmOperatorTerminalPort =
         NanoKvmProtocolOperatorTerminalPort(client.newTerminalSocket())
 
     override suspend fun listScripts(): NanoKvmOperatorPortScriptCatalog {
-        val catalog = api.listScripts()
-        return NanoKvmOperatorPortScriptCatalog(
-            scripts = catalog.scripts.map { script ->
-                NanoKvmOperatorPortScript(
-                    displayName = script.name,
-                    opaqueToken = ProtocolScriptToken(script),
-                )
-            },
-            opaqueToken = ProtocolScriptCatalogToken(catalog),
+        latestScriptCatalog = null
+        val protocolCatalog = api.listScripts()
+        val members = protocolCatalog.scripts.map { script ->
+            NanoKvmOperatorPortScript(displayName = script.name) to script
+        }
+        val portCatalog = NanoKvmOperatorPortScriptCatalog(
+            scripts = members.map { it.first },
         )
+        val protocolMembers = IdentityHashMap<NanoKvmOperatorPortScript, NanoKvmScript>()
+        members.forEach { (portScript, protocolScript) ->
+            protocolMembers[portScript] = protocolScript
+        }
+        latestScriptCatalog = ProtocolScriptCatalogBinding(
+            portCatalog = portCatalog,
+            protocolCatalog = protocolCatalog,
+            members = protocolMembers,
+        )
+        return portCatalog
     }
 
     override suspend fun uploadScript(
         fileName: String,
         content: ByteArray,
     ): NanoKvmOperatorPortUploadReceipt {
+        // Upload can overwrite a member. Consume the prior authority before dispatch so a lost
+        // response never leaves an apparently reusable catalog.
+        latestScriptCatalog = null
         val receipt = api.uploadScript(fileName, content)
         return NanoKvmOperatorPortUploadReceipt(receipt.fileName, receipt.byteCount)
     }
@@ -136,8 +147,12 @@ internal class NanoKvmProtocolOperatorPort(
         script: NanoKvmOperatorPortScript,
         mode: NanoKvmScriptRunMode,
     ): NanoKvmOperatorPortRunResult {
-        catalog.requireExactMember(script)
-        val result = api.runScript(catalog.protocolCatalog(), script.protocolScript(), mode)
+        val binding = requireLatestScriptCatalog(catalog)
+        val result = api.runScript(
+            binding.protocolCatalog,
+            binding.requireProtocolScript(script),
+            mode,
+        )
         return NanoKvmOperatorPortRunResult(result.mode, result.output)
     }
 
@@ -145,24 +160,30 @@ internal class NanoKvmProtocolOperatorPort(
         catalog: NanoKvmOperatorPortScriptCatalog,
         script: NanoKvmOperatorPortScript,
     ) {
-        catalog.requireExactMember(script)
-        api.deleteScript(catalog.protocolCatalog(), script.protocolScript())
+        val binding = requireLatestScriptCatalog(catalog)
+        val protocolScript = binding.requireProtocolScript(script)
+        // Delete consumes the exact snapshot before dispatch, matching the protocol boundary.
+        latestScriptCatalog = null
+        api.deleteScript(binding.protocolCatalog, protocolScript)
     }
 
-    private fun NanoKvmOperatorPortScriptCatalog.protocolCatalog(): NanoKvmScriptCatalog =
-        (opaqueToken as? ProtocolScriptCatalogToken)?.catalog
-            ?: throw IllegalArgumentException("Foreign script catalog")
+    private fun requireLatestScriptCatalog(
+        catalog: NanoKvmOperatorPortScriptCatalog,
+    ): ProtocolScriptCatalogBinding = latestScriptCatalog
+        ?.takeIf { it.portCatalog === catalog }
+        ?: throw IllegalArgumentException("Foreign or stale script catalog")
 
-    private fun NanoKvmOperatorPortScript.protocolScript(): NanoKvmScript =
-        (opaqueToken as? ProtocolScriptToken)?.script
-            ?: throw IllegalArgumentException("Foreign script handle")
+    private class ProtocolScriptCatalogBinding(
+        val portCatalog: NanoKvmOperatorPortScriptCatalog,
+        val protocolCatalog: NanoKvmScriptCatalog,
+        private val members: Map<NanoKvmOperatorPortScript, NanoKvmScript>,
+    ) {
+        fun requireProtocolScript(script: NanoKvmOperatorPortScript): NanoKvmScript {
+            portCatalog.requireExactMember(script)
+            return members[script] ?: throw IllegalArgumentException("Foreign script handle")
+        }
 
-    private class ProtocolScriptCatalogToken(val catalog: NanoKvmScriptCatalog) {
-        override fun toString(): String = "ProtocolScriptCatalogToken(<redacted>)"
-    }
-
-    private class ProtocolScriptToken(val script: NanoKvmScript) {
-        override fun toString(): String = "ProtocolScriptToken(<redacted>)"
+        override fun toString(): String = "ProtocolScriptCatalogBinding(<redacted>)"
     }
 }
 

@@ -255,7 +255,7 @@ internal class NanoKvmWebRtcSource(
         synchronized(lock) {
             if (!active || socket !== webSocket) return
             heartbeat?.cancel(false)
-            heartbeat = heartbeatExecutor.scheduleAtFixedRate(
+            heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
                 { sendHeartbeat(webSocket) },
                 heartbeatIntervalMillis,
                 heartbeatIntervalMillis,

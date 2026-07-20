@@ -11,7 +11,7 @@ Thank you for helping improve NanoKVM Mobile.
 3. Keep secrets and appliance data out of source, fixtures, screenshots, traces,
    and build logs. Never commit passwords, JWTs, private keys, signing keys,
    private network inventories, or another person's console capture.
-4. Treat `main` as the 0.3.0 development milestone until a named, signed release
+4. Treat `main` as the 0.3.2 development milestone until a named, signed release
    is approved. Changed distributable bytes require a new Android version code;
    do not rename an old-version APK and present it as an update.
 
@@ -22,9 +22,10 @@ Thank you for helping improve NanoKVM Mobile.
 - Trust inspection happens before password collection or saved-password unlock.
   The inspection-only TLS client must never carry credentials, tokens, or
   application traffic.
-- Authenticated profiles are HTTPS-only. Cleartext is allowed only inside the
-  explicit pre-authentication AP-onboarding flow; it must stay user-entered,
-  cookie-free, non-persistent, and isolated from saved account credentials.
+- NanoKVM origin, authenticated signaling, and application control traffic must
+  remain HTTPS-only. Cleartext must remain disabled in the manifest and Network
+  Security Config; initial access-point setup stays outside the app. Explicit
+  WebRTC STUN/TURN ICE traffic is the documented exception.
 - WebRTC signaling remains bound to the authenticated NanoKVM origin. Treat
   appliance-supplied ICE server URLs and credentials as untrusted bounded input,
   and document any resulting STUN/TURN network disclosure.

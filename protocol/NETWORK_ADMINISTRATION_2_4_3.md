@@ -10,22 +10,22 @@ sources. It adds no inferred endpoint and performs no real-appliance mutation du
 | Information | `GET /api/network/wifi` | NanoKVM session | Returns `supported`, `apMode`, `connected`, and `ssid` |
 | Connect | `POST /api/network/wifi/connect` | NanoKVM session | Manual `ssid` and `password`; waits for connection |
 | Disconnect | `POST /api/network/wifi/disconnect` | NanoKVM session | Stops Wi-Fi and deletes the saved SSID/password |
-| Verify AP password | `POST /api/network/wifi/verify` | `X-AP-Key`; no session cookie | Accepted only while supported hardware is in AP mode |
-| AP-mode connect | `POST /api/network/wifi` | `X-AP-Key`; no session cookie | Rechecks AP mode/password, then writes manual credentials |
 
 There is **no Wi-Fi scan or network-list endpoint** in the pinned source. Both WebUI paths use a
 manually entered SSID. The protocol therefore omits scan instead of inventing one.
 
 `NanoKvmWifiCredentials` takes ownership of a mutable password and clears it after its only JSON
-serialization. Successful AP verification returns a same-client authorization which retains the
-mutable AP password only until one connect attempt (or explicit `close`). AP requests are tagged so
-the transport does not attach an existing `nano-kvm-token` account cookie. Credential and AP
-objects redact their string forms, and typed Wi-Fi failures discard server message/body text.
+serialization. Its string form is redacted, and typed Wi-Fi failures discard server message/body
+text.
 
-SSID input is limited to the IEEE 32-byte maximum. Passwords and AP keys are nonempty, bounded,
-valid UTF-16 without control characters. These are local memory/request-safety limits, not a claim
-that every accepted value is valid for every wireless security mode. The server accepts only a
-nonempty password and does not expose an open-network variant.
+SSID input is limited to the IEEE 32-byte maximum. Passwords are nonempty, bounded, valid UTF-16
+without control characters. These are local memory/request-safety limits, not a claim that every
+accepted value is valid for every wireless security mode. The server accepts only a nonempty
+password and does not expose an open-network variant.
+
+The pinned server also has unauthenticated AP-password verification and AP-mode connect routes.
+This client intentionally does not expose them: every supported Wi-Fi mutation requires an
+authenticated HTTPS session.
 
 Connect/disconnect can move the appliance or terminate the current route. Every mutation is one
 HTTP request with transport replay disabled. After a timeout or disconnect, rediscover and read
@@ -33,8 +33,7 @@ state; never repeat from an ambiguous result.
 
 Capability floors from the pinned changelog are:
 
-- manual PCIe Wi-Fi configuration: application 2.1.2, still runtime/hardware-gated by `supported`;
-- AP password authentication: application 2.3.6, still runtime-gated by physical AP mode.
+- manual PCIe Wi-Fi configuration: application 2.1.2, still runtime/hardware-gated by `supported`.
 
 ## Tailscale extension
 
@@ -71,7 +70,7 @@ never server text which could contain account or authorization material.
 
 ## Verification
 
-`NanoKvmNetworkAdministrationApiTest` provides MockWebServer goldens for every route, cookie/body
-boundary, mutable-secret clearing, redaction, URL allowlists, bounded unknown reads, latest-status
-identity, legal-state gates, and post-dispatch no-replay behavior. Capability tests pin 2.1.2,
-2.1.6, and 2.3.6 floors.
+`NanoKvmNetworkAdministrationApiTest` provides MockWebServer goldens for every supported route,
+cookie/body boundary, mutable-secret clearing, redaction, URL allowlists, bounded unknown reads,
+latest-status identity, legal-state gates, and post-dispatch no-replay behavior. Capability tests
+pin the 2.1.2 and 2.1.6 floors.

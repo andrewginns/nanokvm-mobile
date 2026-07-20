@@ -29,12 +29,15 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
@@ -62,13 +65,18 @@ import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.data.ThemeMode
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
+import org.nanokvm.mobile.runtime.TrustPreflightOutcome
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
+import org.nanokvm.mobile.runtime.ConnectionFailure
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
+import org.nanokvm.mobile.runtime.ConsoleMessage
+import org.nanokvm.mobile.runtime.withActionFeedback
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.runtime.NanoKvmDeviceStatus
@@ -77,6 +85,7 @@ import org.nanokvm.mobile.runtime.Phase3FeatureUiState
 import org.nanokvm.mobile.runtime.Phase3HidModeSelection
 import org.nanokvm.mobile.runtime.Phase3HidModeUiState
 import org.nanokvm.mobile.runtime.Phase3MediaImageUiState
+import org.nanokvm.mobile.runtime.Phase3Notice
 import org.nanokvm.mobile.runtime.Phase3VirtualMediaUiState
 import org.nanokvm.mobile.runtime.Phase3WakeOnLanTargetUiState
 import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
@@ -86,8 +95,10 @@ import org.nanokvm.mobile.runtime.PicoClawUiState
 import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.runtime.VideoSettings
+import org.nanokvm.mobile.runtime.VideoStreamDescriptor
 import org.nanokvm.mobile.runtime.VideoTransportPreference
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
+import org.nanokvm.mobile.ui.screens.ConsoleSessionDraftOwner
 import org.nanokvm.mobile.ui.components.PointerMode
 import org.nanokvm.mobile.ui.components.RemoteViewport
 import org.nanokvm.mobile.ui.theme.DarkConsoleColorScheme
@@ -102,6 +113,7 @@ class ConsoleScreenInstrumentedTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private val backend = RecordingConsoleBackend()
+    private val sessionDraftOwner = ConsoleSessionDraftOwner()
     private val profile = HostProfile(
         id = "instrumented-console",
         name = "Lab NanoKVM",
@@ -441,10 +453,15 @@ class ConsoleScreenInstrumentedTest {
                     session = session,
                     input = backend,
                     videoSurface = backend,
-                    commands = backend,
+                    features = backend.features,
                     onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
                     clipboardGateway = clipboard,
+                    onSharedPasteConsumed = {},
                     sensitiveWorkGeneration = sensitiveGeneration.longValue,
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                 )
             }
         }
@@ -573,10 +590,15 @@ class ConsoleScreenInstrumentedTest {
                     session = connectedSession,
                     input = backend,
                     videoSurface = backend,
-                    commands = backend,
+                    features = backend.features,
                     onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
                     scrollSensitivity = sensitivity.floatValue,
                     onScrollSensitivityChange = { sensitivity.floatValue = it },
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                 )
             }
         }
@@ -856,7 +878,9 @@ class ConsoleScreenInstrumentedTest {
 
         // Connected diagnostics are available on demand and never obscure the remote image.
         composeRule.onNodeWithText("Lab NanoKVM").assertDoesNotExist()
-        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.console_message_video_settings_applied),
+        ).assertDoesNotExist()
         val previewBeforeSheet = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
         val actionBounds = composeRule.onNodeWithTag("console-quick-actions")
@@ -892,7 +916,9 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText("H.264 direct", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Drops 7", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Stalls 2", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Video diagnostics visible").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.console_message_video_settings_applied),
+        ).assertIsDisplayed()
         val previewWithSheet = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
         assertEquals(
@@ -915,7 +941,9 @@ class ConsoleScreenInstrumentedTest {
             .assertHasClickAction()
             .performClick()
         composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
-        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.console_message_video_settings_applied),
+        ).assertDoesNotExist()
         assertEquals(previewBeforeSheet, composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot)
         assertEquals(attachCallsBeforeSheet, backend.attachSurfaceCalls)
         assertEquals(detachCallsBeforeSheet, backend.detachSurfaceCalls)
@@ -951,9 +979,9 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText("Virtual media device (reported state)")
             .performScrollTo()
             .assertIsDisplayed()
-        composeRule.onNodeWithText("installer.iso")
-            .performScrollTo()
-            .assertIsDisplayed()
+        composeRule.onNodeWithTag("phase3-virtual-media-list")
+            .performScrollToNode(hasText("installer.iso"))
+        composeRule.onNodeWithText("installer.iso").assertIsDisplayed()
         composeRule.onNodeWithText("Currently mounted").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Close").performClick()
         composeRule.runOnIdle { assertEquals(false, backend.phase3SurfaceIsVisible) }
@@ -972,6 +1000,12 @@ class ConsoleScreenInstrumentedTest {
 
     @Test
     fun phase3NoticesStayWithTheirOwningDialog() {
+        val virtualMediaNoticeText = composeRule.activity.getString(
+            R.string.feature_notice_phase3_guidance_refresh_select,
+        )
+        val wakeOnLanNoticeText = composeRule.activity.getString(
+            R.string.feature_notice_phase3_guidance_mac,
+        )
         renderConsole()
 
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
@@ -979,8 +1013,8 @@ class ConsoleScreenInstrumentedTest {
             .performScrollTo()
             .performClick()
         composeRule.onNodeWithTag("phase3-virtual-media-action").performClick()
-        composeRule.onNodeWithText("Virtual-media-only notice").assertIsDisplayed()
-        composeRule.onNodeWithText("Wake-on-LAN-only notice").assertDoesNotExist()
+        composeRule.onNodeWithText(virtualMediaNoticeText).assertIsDisplayed()
+        composeRule.onNodeWithText(wakeOnLanNoticeText).assertDoesNotExist()
         composeRule.onNodeWithText("Close").performClick()
 
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
@@ -988,8 +1022,8 @@ class ConsoleScreenInstrumentedTest {
             .performScrollTo()
             .performClick()
         composeRule.onNodeWithTag("phase3-wol-action").performClick()
-        composeRule.onNodeWithText("Wake-on-LAN-only notice").assertIsDisplayed()
-        composeRule.onNodeWithText("Virtual-media-only notice").assertDoesNotExist()
+        composeRule.onNodeWithText(wakeOnLanNoticeText).assertIsDisplayed()
+        composeRule.onNodeWithText(virtualMediaNoticeText).assertDoesNotExist()
     }
 
     @Test
@@ -1006,6 +1040,43 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText("2.4.3").assertIsDisplayed()
         composeRule.onNodeWithText("NanoKVM-Full").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("192.0.2.250").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun selectedConsoleOverlaySurvivesStateRestoration() {
+        val connectedSession = backend.session.value
+        val restorationTester = StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = connectedSession,
+                    input = backend,
+                    videoSurface = backend,
+                    features = backend.features,
+                    onDisconnect = { backend.disconnectCalls++ },
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("device-info-action").performClick()
+        composeRule.onNodeWithTag("device-info-dialog").assertIsDisplayed()
+        composeRule.onNodeWithText("Console actions").assertDoesNotExist()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("device-info-dialog").assertIsDisplayed()
+        composeRule.onNodeWithText("Console actions").assertDoesNotExist()
     }
 
     @Test
@@ -1305,7 +1376,10 @@ class ConsoleScreenInstrumentedTest {
         composeRule.waitForIdle()
         val afterSlowPinch = captureTextureTransform()
         assertTrue(
-            "A slow pinch must accumulate into a video transform scale change after dimensions change",
+            "A slow pinch must accumulate into a video transform scale change after dimensions " +
+                "change (before=${afterDimensionChange[Matrix.MSCALE_X]}x" +
+                "${afterDimensionChange[Matrix.MSCALE_Y]}, " +
+                "after=${afterSlowPinch[Matrix.MSCALE_X]}x${afterSlowPinch[Matrix.MSCALE_Y]})",
             afterSlowPinch[Matrix.MSCALE_X] > afterDimensionChange[Matrix.MSCALE_X] + 0.02f &&
                 afterSlowPinch[Matrix.MSCALE_Y] > afterDimensionChange[Matrix.MSCALE_Y] + 0.02f,
         )
@@ -1331,10 +1405,93 @@ class ConsoleScreenInstrumentedTest {
             panelBeforeGestures,
             composeRule.onNodeWithTag("view-navigation-panel").fetchSemanticsNode().boundsInRoot,
         )
+
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Zoom in").performClick()
+        composeRule.waitForIdle()
+        val afterButtonZoom = captureTextureTransform()
+        assertTrue(
+            "View-control callbacks must target the replacement transform after dimensions change",
+            afterButtonZoom[Matrix.MSCALE_X] > afterDrag[Matrix.MSCALE_X] + 0.02f &&
+                afterButtonZoom[Matrix.MSCALE_Y] > afterDrag[Matrix.MSCALE_Y] + 0.02f,
+        )
         assertEquals(
             "View navigation gestures must not send mouse or wheel input to the remote computer",
             remoteInputCallsBeforeGestures,
             backend.remoteInputCallCount,
+        )
+    }
+
+    @Test
+    fun handledFitDoesNotReplayAndEraseLaterViewportTransformAfterStateRestoration() {
+        val connectedSession = backend.session.value
+        val restorationTester = StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = connectedSession,
+                    input = backend,
+                    videoSurface = backend,
+                    features = backend.features,
+                    onDisconnect = { backend.disconnectCalls++ },
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls >= 1 }
+
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Fit remote view").performClick()
+        composeRule.waitForIdle()
+        val fittedTransform = captureTextureTransform()
+
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            pinch(
+                start0 = Offset(centerX - 24f, centerY),
+                end0 = Offset(centerX - 104f, centerY),
+                start1 = Offset(centerX + 24f, centerY),
+                end1 = Offset(centerX + 104f, centerY),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("view-navigation-pad").performTouchInput {
+            swipe(
+                start = Offset(width * 0.30f, height * 0.70f),
+                end = Offset(width * 0.65f, height * 0.35f),
+                durationMillis = 500,
+            )
+        }
+        composeRule.waitForIdle()
+        val transformedBeforeRestore = captureTextureTransform()
+        assertTrue(
+            "The test must establish a zoomed viewport after the handled Fit request",
+            transformedBeforeRestore[Matrix.MSCALE_X] > fittedTransform[Matrix.MSCALE_X] + 0.05f &&
+                transformedBeforeRestore[Matrix.MSCALE_Y] > fittedTransform[Matrix.MSCALE_Y] + 0.05f,
+        )
+        assertTrue(
+            "The test must establish a panned viewport after the handled Fit request",
+            kotlin.math.abs(
+                transformedBeforeRestore[Matrix.MTRANS_X] - fittedTransform[Matrix.MTRANS_X],
+            ) > 4f || kotlin.math.abs(
+                transformedBeforeRestore[Matrix.MTRANS_Y] - fittedTransform[Matrix.MTRANS_Y],
+            ) > 4f,
+        )
+
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+
+        assertMatrixEquals(
+            message = "Recreation must not replay the already-handled Fit request",
+            expected = transformedBeforeRestore,
+            actual = captureTextureTransform(),
+            tolerance = 0.02f,
         )
     }
 
@@ -1412,7 +1569,9 @@ class ConsoleScreenInstrumentedTest {
     fun videoSettingsReflectCurrentSessionAndApplyTypedTransport() {
         renderConsole()
 
-        composeRule.onNodeWithText("Video diagnostics visible").assertDoesNotExist()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.console_message_video_settings_applied),
+        ).assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
         composeRule.onNodeWithContentDescription("Video settings")
             .performScrollTo()
@@ -1511,8 +1670,14 @@ class ConsoleScreenInstrumentedTest {
                         session = session,
                         input = backend,
                         videoSurface = backend,
-                        commands = backend,
+                        features = backend.features,
                         onDisconnect = { backend.disconnectCalls++ },
+                        sessionDraftOwner = sessionDraftOwner,
+                        clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                        onSharedPasteConsumed = {},
+                        onScrollSensitivityChange = {},
+                        onMjpegFrameDetectionEnabledChange = {},
+                        onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                     )
                 }
             }
@@ -1561,6 +1726,70 @@ class ConsoleScreenInstrumentedTest {
             originalTextureView,
             composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
         )
+    }
+
+    @Test
+    fun pendingDestructivePowerConfirmationIsInvalidatedBySessionChanges() {
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.session as MutableStateFlow<BackendSession>
+        composeRule.setContent {
+            val session by mutableSession.collectAsState()
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = session,
+                    input = backend,
+                    videoSurface = backend,
+                    features = backend.features,
+                    onDisconnect = { backend.disconnectCalls++ },
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+
+        openResetConfirmation()
+        composeRule.runOnIdle {
+            mutableSession.value = mutableSession.value.copy(
+                sessionGeneration = mutableSession.value.sessionGeneration + 1,
+            )
+        }
+        composeRule.onNodeWithText("Reset the host now?").assertDoesNotExist()
+        composeRule.onNodeWithText("Send").assertDoesNotExist()
+
+        openResetConfirmation()
+        composeRule.runOnIdle {
+            mutableSession.value = mutableSession.value.copy(
+                connection = ConnectionState.Reconnecting,
+            )
+        }
+        composeRule.onNodeWithText("Reset the host now?").assertDoesNotExist()
+        composeRule.onNodeWithText("Send").assertDoesNotExist()
+
+        composeRule.runOnIdle {
+            mutableSession.value = mutableSession.value.copy(
+                connection = ConnectionState.Connected,
+                sessionGeneration = mutableSession.value.sessionGeneration + 1,
+            )
+            assertTrue(
+                "A stale confirmation must never dispatch a destructive command to the new session",
+                backend.powerActions.isEmpty(),
+            )
+        }
+    }
+
+    private fun openResetConfirmation() {
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Power controls")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Reset button").performClick()
+        composeRule.onNodeWithText("Reset the host now?").assertIsDisplayed()
+        composeRule.onNodeWithText("Send").assertIsDisplayed()
     }
 
     private fun performViewPadCustomAction(label: String) {
@@ -1691,14 +1920,19 @@ class ConsoleScreenInstrumentedTest {
                                 session = connectedSession,
                                 input = backend,
                                 videoSurface = backend,
-                                commands = backend,
+                                features = backend.features,
                                 onDisconnect = { backend.disconnectCalls++ },
+                                sessionDraftOwner = sessionDraftOwner,
                                 clipboardGateway = clipboardGateway,
                                 pendingSharedPaste = pendingSharedPaste,
                                 onSharedPasteConsumed = onSharedPasteConsumed,
+                                onScrollSensitivityChange = {},
                                 mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
                                 onMjpegFrameDetectionEnabledChange =
                                     onMjpegFrameDetectionEnabledChange,
+                                onPasswordChange = { _, _, password, _ ->
+                                    password.fill('\u0000')
+                                },
                             )
                         }
                     } else {
@@ -1707,14 +1941,19 @@ class ConsoleScreenInstrumentedTest {
                             session = connectedSession,
                             input = backend,
                             videoSurface = backend,
-                            commands = backend,
+                            features = backend.features,
                             onDisconnect = { backend.disconnectCalls++ },
+                            sessionDraftOwner = sessionDraftOwner,
                             clipboardGateway = clipboardGateway,
                             pendingSharedPaste = pendingSharedPaste,
                             onSharedPasteConsumed = onSharedPasteConsumed,
+                            onScrollSensitivityChange = {},
                             mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
                             onMjpegFrameDetectionEnabledChange =
                                 onMjpegFrameDetectionEnabledChange,
+                            onPasswordChange = { _, _, password, _ ->
+                                password.fill('\u0000')
+                            },
                         )
                     }
                 }
@@ -1778,8 +2017,6 @@ private fun assertColorNear(expected: Int, actual: Int) {
 private val TEST_VIDEO_COLOR = Color.rgb(31, 190, 142)
 
 private class RecordingConsoleBackend : ConsoleBackend {
-    override val picoClawState: StateFlow<PicoClawUiState>
-        get() = mutablePicoClawState
     val mutablePicoClawState = MutableStateFlow(
         PicoClawUiState(support = PicoClawSupport.Supported),
     )
@@ -1788,7 +2025,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
             connection = ConnectionState.Connected,
             remoteWidth = 1920,
             remoteHeight = 1080,
-            streamLabel = "H.264 direct",
+            streamLabel = VideoStreamDescriptor.DirectH264,
             videoSettings = VideoSettings(
                 transportPreference = VideoTransportPreference.MJPEG,
                 resolutionHeight = 600,
@@ -1844,11 +2081,14 @@ private class RecordingConsoleBackend : ConsoleBackend {
                         name = "Test server",
                     ),
                 ),
-                virtualMediaNotice = "Virtual-media-only notice",
-                wakeOnLanNotice = "Wake-on-LAN-only notice",
+                virtualMediaNotice = Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.RefreshMediaBeforeSelectingImage,
+                ),
+                wakeOnLanNotice = Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.EnterValidMacAddress,
+                ),
             ),
-            message = "Video diagnostics visible",
-        ),
+        ).withActionFeedback(ConsoleMessage.VideoSettingsApplied),
     )
 
     val committedText = mutableListOf<Pair<String, KeyboardLayout>>()
@@ -1864,6 +2104,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     val mouseButtonEvents = mutableListOf<Pair<MouseButton, Boolean>>()
     val scrollSteps = mutableListOf<Int>()
     val horizontalScrollSteps = mutableListOf<Int>()
+    val powerActions = mutableListOf<PowerAction>()
     @Volatile var attachSurfaceCalls = 0
     @Volatile var detachSurfaceCalls = 0
     @Volatile var phase3SurfaceIsVisible = false
@@ -1871,6 +2112,52 @@ private class RecordingConsoleBackend : ConsoleBackend {
     val phase3NetworkChanges = mutableListOf<Boolean>()
     @Volatile var picoClawSurfaceIsVisible = false
     var picoClawEntryCalls = 0
+    private val phase3Controls = object : NoOpPhase3Controls() {
+        override fun setPhase3SurfaceVisible(visible: Boolean) {
+            phase3SurfaceIsVisible = visible
+        }
+
+        override fun setPhase3HidMode(
+            destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
+            selection: Phase3HidModeSelection,
+        ) {
+            phase3HidModeChanges += selection
+        }
+
+        override fun setPhase3NetworkEnabled(
+            destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
+            enabled: Boolean,
+        ) {
+            phase3NetworkChanges += enabled
+        }
+    }
+    private val picoClawControls = object : NoOpPicoClawControls() {
+        override val picoClawState: StateFlow<PicoClawUiState>
+            get() = mutablePicoClawState
+
+        override fun setPicoClawSurfaceVisible(visible: Boolean) {
+            picoClawSurfaceIsVisible = visible
+        }
+
+        override fun enterPicoClaw(destination: ApprovedPicoClawDestination) {
+            picoClawEntryCalls++
+            mutablePicoClawState.value = mutablePicoClawState.value.copy(
+                entered = true,
+                installed = true,
+            )
+        }
+    }
+    override val features = ConsoleFeatureBundle(
+        core = this,
+        phase3 = phase3Controls,
+        picoClaw = picoClawControls,
+    )
+
+    override suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome =
+        TrustPreflightOutcome.Failed(
+            failure = ConnectionFailure.Unexpected,
+            retryable = false,
+        )
 
     override suspend fun connect(request: ConnectRequest): ConnectOutcome = ConnectOutcome.Connected
     override suspend fun disconnect() {
@@ -1926,36 +2213,15 @@ private class RecordingConsoleBackend : ConsoleBackend {
     override fun updateVideo(settings: VideoSettings) {
         lastVideoSettings = settings
     }
+    override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
+    override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
+    override fun power(action: PowerAction) {
+        powerActions += action
+    }
     override fun pasteText(request: ApprovedPasteRequest) {
         pasteRequests += request
         pastedText += request.content
     }
     override fun cancelPaste() = Unit
-    override fun setPhase3SurfaceVisible(visible: Boolean) {
-        phase3SurfaceIsVisible = visible
-    }
-    override fun setPhase3HidMode(
-        destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
-        selection: Phase3HidModeSelection,
-    ) {
-        phase3HidModeChanges += selection
-    }
-    override fun setPhase3NetworkEnabled(
-        destination: org.nanokvm.mobile.runtime.ApprovedPhase3Destination,
-        enabled: Boolean,
-    ) {
-        phase3NetworkChanges += enabled
-    }
-    override fun setPicoClawSurfaceVisible(visible: Boolean) {
-        picoClawSurfaceIsVisible = visible
-    }
-    override fun enterPicoClaw(destination: ApprovedPicoClawDestination) {
-        picoClawEntryCalls++
-        mutablePicoClawState.value = mutablePicoClawState.value.copy(
-            entered = true,
-            installed = true,
-        )
-    }
 }

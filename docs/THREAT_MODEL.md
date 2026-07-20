@@ -37,10 +37,10 @@ source/dependency inputs to a signed distribution artifact.
 
 ### Network impersonation or observation
 
-- Authenticated profiles and normal application traffic require HTTPS. A narrow
-  cookie-suppressed cleartext exception exists only for explicit stock
-  NanoKVM access-point onboarding at the endpoint typed by the user; it cannot
-  reuse an authenticated session transport.
+- The NanoKVM origin, authenticated signaling, and application control traffic
+  require HTTPS, and Android cleartext support is disabled. Initial NanoKVM
+  access-point setup is outside the app. Explicit WebRTC ICE traffic is the
+  limited exception described below.
 - On Android 17 and later, local-network access is requested only after an
   explicit Connect action. The permission is checked before trust preflight,
   before credentials are collected or unlocked, and again before transport
@@ -50,8 +50,9 @@ source/dependency inputs to a signed distribution artifact.
   inspection client retrieves only the leaf certificate. It sends no password,
   token, cookie, or application request, independently checks hostname/date,
   returns metadata, and is discarded before normal traffic.
-- Explicit leaf-pin acceptance is scoped to one canonical origin. Cookies are
-  scoped to that origin and must not follow a cross-origin redirect.
+- Explicit leaf-pin acceptance is scoped to one canonical origin. Every client
+  disables redirects, so cookies, credentials, and mutation bodies never follow
+  any 3xx response.
 - A saved-pin mismatch is a hard stop. Rotation is not automatic. The review
   compares the stored and presented fingerprints and requires the user to
   reject, connect once while preserving the saved pin, or explicitly replace
@@ -89,20 +90,26 @@ out of scope.
 
 ### Malformed or resource-exhausting endpoint
 
-- REST, credential records, endpoint fields, paste input, GPIO duration, video
-  settings, H.264 payloads, input messages, and MJPEG headers/frames have
-  application-level limits and boundary tests.
+- REST, credential records, endpoint fields, certificate pins, session tokens,
+  paste input, GPIO duration, video settings, H.264 payloads, input messages,
+  and MJPEG headers/frames have application-level limits and boundary tests.
+  Clipboard/share text above 1,024 normalized UTF-8 bytes is rejected before
+  retention; a session token above 2,048 characters is rejected before use.
 - Video queues and latest-frame dispatch are bounded. Stale video frames may be
   dropped; key/button transitions are not dropped.
 - Timeouts, watchdogs, coroutine cancellation, session generations, and
   deterministic ownership limit stale work.
 
-Residual risk: OkHttp allocates a complete WebSocket `ByteString` before the
-H.264 or input callback can reject it. The current limits bound parser copies
-and downstream work, not the first transport allocation. A hostile configured
-endpoint can therefore cause memory pressure proportional to an incoming
-WebSocket message. Treat this as open availability hardening; do not claim a
-pre-allocation or end-to-end WebSocket memory bound.
+The client removes WebSocket compression negotiation and rejects unsolicited
+`permessage-deflate`, preventing compressed-payload amplification before a
+callback. Oversized direct H.264 cancels immediately and drives normal fallback;
+input stops command acceptance, queues releases, and has a bounded close
+handshake. Residual risk remains: OkHttp allocates a complete uncompressed
+WebSocket `ByteString` before the H.264, terminal, or input callback can reject
+it. Slow-fragment tests confirm cumulative pre-callback buffering. Treat the
+first uncompressed allocation as open availability hardening; do not claim a
+pre-allocation or end-to-end WebSocket memory bound without physical-device
+measurement and an explicit disposition.
 
 ### Stale lifecycle or command execution
 
@@ -117,11 +124,16 @@ pre-allocation or end-to-end WebSocket memory bound.
 - Destructive controls require consequence confirmation. The runtime rejects a
   duplicate command key, serializes REST controls through a mutex, and checks a
   session-generation lease immediately before execution. Generation changes
-  invalidate queued leases; controls are not automatically retried.
+  invalidate queued leases; controls are not automatically retried. The UI also
+  clears its ephemeral confirmation on destination, connection, or generation
+  change, so an old dialog cannot be retargeted to a replacement session.
 
-Residual evidence gaps are real process-death testing, cancellation-ignoring
-transport races, repeated background/foreground cycles, and signed-candidate
-execution on a physical device and appliance.
+Deterministic tests now cover cancellation-ignoring input/video callbacks and
+repeated background/reconnect/foreground/close cycles. An API 37 out-of-process
+test covers non-secret profile-draft restoration. Residual gaps are process
+replacement across credential, console, sharing, and Surface/HID states, real
+network suspension, and signed-candidate execution on a physical device and
+appliance.
 
 ### Supply-chain or distribution compromise
 
@@ -153,7 +165,7 @@ for an open-source GPL application.
 | DataStore read is temporarily unavailable | Retry path; no reset or credential deletion |
 | DataStore content is corrupt | Writes blocked; explicit reset consequence includes all credentials |
 | Duplicate or queued power/reset command | Duplicate rejected; generation change invalidates old lease; no retry/replay |
-| Input/video endpoint sends oversized WebSocket message | Parser rejects downstream work; transient pre-check OkHttp allocation remains possible |
+| Input/video endpoint sends oversized WebSocket message | Compression is refused; parser rejects downstream work and transport terminates, but transient first uncompressed OkHttp allocation remains possible |
 | App backgrounds with held input or pending password | HID release; connection/non-prompt secret cancellation; stopped prompt callback clears without connecting; no background reconnect/control |
 | Decoder/input callback arrives from old session | Generation/ownership checks prevent new-session mutation |
 

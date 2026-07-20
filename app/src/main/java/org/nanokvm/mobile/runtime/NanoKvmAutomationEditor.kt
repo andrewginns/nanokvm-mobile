@@ -158,13 +158,11 @@ internal class NanoKvmAutostartEditorBuffer private constructor(
     }
 }
 
-internal fun isSafeAutostartEditorText(value: String): Boolean = runCatching {
-    val bytes = value.toValidatedAutostartBytes(allowEmpty = true)
-    bytes.fill(0)
-}.isSuccess
+internal fun isSafeAutostartEditorText(value: String): Boolean =
+    value.safeScalarTextUtf8SizeAtMost(MAX_AUTOSTART_CONTENT_BYTES) != null
 
 internal fun isSafeAutostartBasename(value: String): Boolean =
-    value.encodeToByteArray().size <= 255 &&
+    value.utf8SizeAtMost(255) != null &&
         SAFE_AUTOSTART_BASENAME.matches(value) &&
         ".." !in value
 

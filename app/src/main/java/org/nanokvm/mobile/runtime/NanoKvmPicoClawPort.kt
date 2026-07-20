@@ -1,6 +1,7 @@
 package org.nanokvm.mobile.runtime
 
 import java.time.Instant
+import java.util.IdentityHashMap
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.nanokvm.protocol.NanoKvmApplicationVersion
@@ -80,22 +81,20 @@ internal enum class NanoKvmPicoClawHistoryPresence {
     UNKNOWN,
 }
 
-/** Opaque port identity for one exact server-issued history handle. */
+/** Port member for one exact server-issued history handle. */
 internal class NanoKvmPicoClawPortHistorySession internal constructor(
     val title: String,
     val preview: String,
     val messageCount: Int,
     val createdAt: Instant,
     val updatedAt: Instant,
-    internal val opaqueToken: Any,
 ) {
-    override fun toString(): String = "NanoKvmPicoClawPortHistorySession(<opaque>)"
+    override fun toString(): String = "NanoKvmPicoClawPortHistorySession(<redacted>)"
 }
 
 /** Immutable port page. Detail and deletion require an exact member of this exact object. */
 internal class NanoKvmPicoClawPortHistoryCatalog internal constructor(
     sessions: List<NanoKvmPicoClawPortHistorySession>,
-    internal val opaqueToken: Any,
 ) {
     val sessions = sessions.toList()
 
@@ -152,6 +151,8 @@ internal interface NanoKvmPicoClawChatPort : AutoCloseable {
 internal class NanoKvmProtocolPicoClawPort(
     private val picoClaw: NanoKvmPicoClaw,
 ) : NanoKvmPicoClawPort {
+    private var latestHistoryCatalog: ProtocolHistoryCatalogBinding? = null
+
     override suspend fun runtimeStatus(): NanoKvmPicoClawRuntimeStatus =
         picoClaw.runtimeStatus()
 
@@ -187,28 +188,42 @@ internal class NanoKvmProtocolPicoClawPort(
     }
 
     override suspend fun histories(limit: Int): NanoKvmPicoClawPortHistoryCatalog {
-        val catalog = picoClaw.histories(limit = limit)
-        return NanoKvmPicoClawPortHistoryCatalog(
-            sessions = catalog.entries.map { summary ->
-                NanoKvmPicoClawPortHistorySession(
-                    title = summary.title,
-                    preview = summary.preview,
-                    messageCount = summary.messageCount,
-                    createdAt = summary.createdAt,
-                    updatedAt = summary.updatedAt,
-                    opaqueToken = ProtocolHistorySessionToken(summary.session),
-                )
-            },
-            opaqueToken = ProtocolHistoryCatalogToken(catalog),
+        latestHistoryCatalog = null
+        val protocolCatalog = picoClaw.histories(limit = limit)
+        val members = protocolCatalog.entries.map { summary ->
+            NanoKvmPicoClawPortHistorySession(
+                title = summary.title,
+                preview = summary.preview,
+                messageCount = summary.messageCount,
+                createdAt = summary.createdAt,
+                updatedAt = summary.updatedAt,
+            ) to summary.session
+        }
+        val portCatalog = NanoKvmPicoClawPortHistoryCatalog(
+            sessions = members.map { it.first },
         )
+        val protocolMembers =
+            IdentityHashMap<NanoKvmPicoClawPortHistorySession, NanoKvmPicoClawHistorySession>()
+        members.forEach { (portSession, protocolSession) ->
+            protocolMembers[portSession] = protocolSession
+        }
+        latestHistoryCatalog = ProtocolHistoryCatalogBinding(
+            portCatalog = portCatalog,
+            protocolCatalog = protocolCatalog,
+            members = protocolMembers,
+        )
+        return portCatalog
     }
 
     override suspend fun history(
         catalog: NanoKvmPicoClawPortHistoryCatalog,
         session: NanoKvmPicoClawPortHistorySession,
     ): NanoKvmPicoClawPortHistoryDetail {
-        catalog.requireExactMember(session)
-        return picoClaw.history(catalog.protocolCatalog(), session.protocolSession())
+        val binding = requireLatestHistoryCatalog(catalog)
+        return picoClaw.history(
+            binding.protocolCatalog,
+            binding.requireProtocolSession(session),
+        )
             .toPortDetail(session)
     }
 
@@ -216,9 +231,9 @@ internal class NanoKvmProtocolPicoClawPort(
         catalog: NanoKvmPicoClawPortHistoryCatalog,
         session: NanoKvmPicoClawPortHistorySession,
     ) {
-        catalog.requireExactMember(session)
-        val protocolCatalog = catalog.protocolCatalog()
-        val protocolSession = session.protocolSession()
+        val binding = requireLatestHistoryCatalog(catalog)
+        val protocolCatalog = binding.protocolCatalog
+        val protocolSession = binding.requireProtocolSession(session)
         picoClaw.deleteHistory(
             protocolCatalog,
             protocolSession,
@@ -227,15 +242,17 @@ internal class NanoKvmProtocolPicoClawPort(
                 protocolSession,
             ),
         )
+        latestHistoryCatalog = null
     }
 
     override suspend fun historyPresence(
         catalog: NanoKvmPicoClawPortHistoryCatalog,
         session: NanoKvmPicoClawPortHistorySession,
     ): NanoKvmPicoClawHistoryPresence {
-        catalog.requireExactMember(session)
+        val binding = requireLatestHistoryCatalog(catalog)
+        val protocolSession = binding.requireProtocolSession(session)
         return try {
-            picoClaw.history(catalog.protocolCatalog(), session.protocolSession())
+            picoClaw.history(binding.protocolCatalog, protocolSession)
             NanoKvmPicoClawHistoryPresence.PRESENT
         } catch (_: IllegalStateException) {
             // The protocol invalidates its latest catalog after an acknowledged deletion. That is
@@ -255,15 +272,11 @@ internal class NanoKvmProtocolPicoClawPort(
             ),
         )
 
-    private fun NanoKvmPicoClawPortHistoryCatalog.protocolCatalog():
-        NanoKvmPicoClawHistoryCatalog =
-        (opaqueToken as? ProtocolHistoryCatalogToken)?.catalog
-            ?: throw IllegalArgumentException("Foreign PicoClaw history catalog")
-
-    private fun NanoKvmPicoClawPortHistorySession.protocolSession():
-        NanoKvmPicoClawHistorySession =
-        (opaqueToken as? ProtocolHistorySessionToken)?.session
-            ?: throw IllegalArgumentException("Foreign PicoClaw history session")
+    private fun requireLatestHistoryCatalog(
+        catalog: NanoKvmPicoClawPortHistoryCatalog,
+    ): ProtocolHistoryCatalogBinding = latestHistoryCatalog
+        ?.takeIf { it.portCatalog === catalog }
+        ?: throw IllegalArgumentException("Foreign or stale PicoClaw history catalog")
 
     private fun NanoKvmPicoClawHistoryDetail.toPortDetail(
         appSession: NanoKvmPicoClawPortHistorySession,
@@ -278,12 +291,20 @@ internal class NanoKvmProtocolPicoClawPort(
     private fun NanoKvmPicoClawHistoryMessage.toPortMessage() =
         NanoKvmPicoClawPortHistoryMessage(role, content)
 
-    private class ProtocolHistoryCatalogToken(val catalog: NanoKvmPicoClawHistoryCatalog) {
-        override fun toString(): String = "ProtocolHistoryCatalogToken(<redacted>)"
-    }
+    private class ProtocolHistoryCatalogBinding(
+        val portCatalog: NanoKvmPicoClawPortHistoryCatalog,
+        val protocolCatalog: NanoKvmPicoClawHistoryCatalog,
+        private val members: Map<NanoKvmPicoClawPortHistorySession, NanoKvmPicoClawHistorySession>,
+    ) {
+        fun requireProtocolSession(
+            session: NanoKvmPicoClawPortHistorySession,
+        ): NanoKvmPicoClawHistorySession {
+            portCatalog.requireExactMember(session)
+            return members[session]
+                ?: throw IllegalArgumentException("Foreign PicoClaw history session")
+        }
 
-    private class ProtocolHistorySessionToken(val session: NanoKvmPicoClawHistorySession) {
-        override fun toString(): String = "ProtocolHistorySessionToken(<redacted>)"
+        override fun toString(): String = "ProtocolHistoryCatalogBinding(<redacted>)"
     }
 }
 

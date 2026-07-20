@@ -34,9 +34,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,21 +48,24 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.runtime.AdministrationDnsMode
 import org.nanokvm.mobile.runtime.AdministrationMouseJigglerSelection
+import org.nanokvm.mobile.runtime.AdministrationNotice
 import org.nanokvm.mobile.runtime.AdministrationNoticeKind
 import org.nanokvm.mobile.runtime.AdministrationOledPreset
 import org.nanokvm.mobile.runtime.AdministrationSwapPreset
 import org.nanokvm.mobile.runtime.AdministrationTailscaleCommand
 import org.nanokvm.mobile.runtime.AdministrationTailscaleSelection
 import org.nanokvm.mobile.runtime.AdministrationUiState
+import org.nanokvm.mobile.runtime.AdministrationControls
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.ui.components.PoliteStatus
+import org.nanokvm.mobile.ui.displayText
 
 @Composable
 internal fun AdministrationDialog(
     destinationLabel: String,
     destination: ApprovedAdministrationDestination,
     state: AdministrationUiState,
-    commands: ConsoleCommandSink,
+    controls: AdministrationControls,
     passwordChangeInProgress: Boolean = false,
     canProtectPassword: Boolean = false,
     onPasswordChange: (
@@ -66,21 +73,54 @@ internal fun AdministrationDialog(
         username: String,
         password: CharArray,
         saveProtectedCredential: Boolean,
-    ) -> Unit = { _, _, password, _ -> password.fill('\u0000') },
+    ) -> Unit,
     offlineUpdateAvailable: Boolean = false,
-    onOfflineUpdate: () -> Unit = {},
+    onOfflineUpdate: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var pendingAction by remember { mutableStateOf<PendingAdministrationAction?>(null) }
-    var hostnameInput by remember { mutableStateOf("") }
-    var titleInput by remember { mutableStateOf("") }
-    var dnsInput by remember { mutableStateOf("") }
-    var hostnameEdited by remember { mutableStateOf(false) }
-    var titleEdited by remember { mutableStateOf(false) }
-    var dnsEdited by remember { mutableStateOf(false) }
-    var wifiSsid by remember { mutableStateOf("") }
+    var hostnameInput by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    var titleInput by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    var dnsInput by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    var hostnameEdited by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf(false) }
+    var titleEdited by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf(false) }
+    var dnsEdited by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf(false) }
+    var wifiSsid by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    // Passwords deliberately remain composition-memory-only and are cleared on every disposal.
     var wifiPassword by remember { mutableStateOf("") }
     var showPasswordChange by remember { mutableStateOf(false) }
+    var navigationOpenFailureRequestId by remember(destination) {
+        mutableStateOf<Long?>(null)
+    }
+    val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(destination) {
         // Never carry a reviewed mutation into another authenticated generation.
@@ -98,15 +138,29 @@ internal fun AdministrationDialog(
     }
 
     LaunchedEffect(state.hostname) {
-        if (!hostnameEdited) hostnameInput = state.hostname.orEmpty()
+        if (!hostnameEdited) hostnameInput = state.hostname.orEmpty().take(MAX_HOSTNAME_DRAFT_CHARS)
     }
     LaunchedEffect(state.webTitle, state.webTitleIsDefault) {
         if (!titleEdited) {
-            titleInput = if (state.webTitleIsDefault == false) state.webTitle.orEmpty() else ""
+            titleInput = if (state.webTitleIsDefault == false) {
+                state.webTitle.orEmpty().take(MAX_WEB_TITLE_DRAFT_CHARS)
+            } else {
+                ""
+            }
         }
     }
     LaunchedEffect(state.dns) {
-        if (!dnsEdited) dnsInput = state.dns?.configuredServers?.joinToString(", ").orEmpty()
+        if (!dnsEdited) {
+            dnsInput = state.dns?.configuredServers
+                ?.joinToString(", ")
+                .orEmpty()
+                .take(MAX_DNS_DRAFT_CHARS)
+        }
+    }
+    LaunchedEffect(state.pendingHttpsNavigation?.requestId) {
+        if (navigationOpenFailureRequestId != state.pendingHttpsNavigation?.requestId) {
+            navigationOpenFailureRequestId = null
+        }
     }
 
     val controlsEnabled = state.available && !state.loading && !state.operationInProgress &&
@@ -121,7 +175,7 @@ internal fun AdministrationDialog(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = commands::refreshAdministration,
+                    onClick = controls::refreshAdministration,
                     enabled = !state.operationInProgress,
                     modifier = Modifier.testTag("administration-refresh"),
                 ) {
@@ -150,7 +204,7 @@ internal fun AdministrationDialog(
                     }
                 }
                 state.notice?.let { notice ->
-                    AdministrationNoticeCard(notice.kind, notice.message)
+                    AdministrationNoticeCard(notice)
                 }
 
                 AdministrationSection(stringResource(R.string.console_admin_account)) {
@@ -274,8 +328,9 @@ internal fun AdministrationDialog(
                         else -> {
                             if (oled.preset == null) {
                                 Text(
-                                    stringResource(
-                                        R.string.console_admin_oled_unknown,
+                                    pluralStringResource(
+                                        R.plurals.console_admin_oled_unknown,
+                                        oled.sleepSeconds,
                                         oled.sleepSeconds,
                                     ),
                                 )
@@ -526,7 +581,7 @@ internal fun AdministrationDialog(
                         value = hostnameInput,
                         onValueChange = {
                             hostnameEdited = true
-                            hostnameInput = it
+                            hostnameInput = it.take(MAX_HOSTNAME_DRAFT_CHARS)
                         },
                         enabled = state.hostname != null && !state.operationInProgress,
                         label = { Text(stringResource(R.string.console_admin_hostname)) },
@@ -556,7 +611,7 @@ internal fun AdministrationDialog(
                         value = titleInput,
                         onValueChange = {
                             titleEdited = true
-                            titleInput = it
+                            titleInput = it.take(MAX_WEB_TITLE_DRAFT_CHARS)
                         },
                         enabled = state.webTitle != null && !state.operationInProgress,
                         label = { Text(stringResource(R.string.console_admin_web_title)) },
@@ -617,7 +672,7 @@ internal fun AdministrationDialog(
                             )
                             OutlinedTextField(
                                 value = wifiSsid,
-                                onValueChange = { wifiSsid = it },
+                                onValueChange = { wifiSsid = it.take(MAX_WIFI_SSID_DRAFT_CHARS) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("administration-wifi-ssid"),
@@ -626,7 +681,7 @@ internal fun AdministrationDialog(
                             )
                             OutlinedTextField(
                                 value = wifiPassword,
-                                onValueChange = { wifiPassword = it },
+                                onValueChange = { wifiPassword = it.take(MAX_WIFI_PASSWORD_CHARS) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("administration-wifi-password"),
@@ -715,6 +770,43 @@ internal fun AdministrationDialog(
                             }
                         }
                     }
+                    state.pendingHttpsNavigation?.let { request ->
+                        val navigationOpenFailed =
+                            navigationOpenFailureRequestId == request.requestId
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    request.open(uriHandler::openUri)
+                                    navigationOpenFailureRequestId = null
+                                    controls.acknowledgeAdministrationNavigationOpened(
+                                        destination,
+                                        request.requestId,
+                                    )
+                                } catch (_: Exception) {
+                                    navigationOpenFailureRequestId = request.requestId
+                                }
+                            },
+                            enabled = controlsEnabled,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("administration-tailscale-open-login"),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    if (navigationOpenFailed) {
+                                        R.string.console_admin_tailscale_open_login_failed
+                                    } else {
+                                        R.string.console_admin_tailscale_open_login
+                                    },
+                                ),
+                                color = if (navigationOpenFailed) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    Color.Unspecified
+                                },
+                            )
+                        }
+                    }
                 }
 
                 AdministrationSection(stringResource(R.string.console_admin_dns)) {
@@ -739,7 +831,7 @@ internal fun AdministrationDialog(
                             value = dnsInput,
                             onValueChange = {
                                 dnsEdited = true
-                                dnsInput = it
+                                dnsInput = it.take(MAX_DNS_DRAFT_CHARS)
                             },
                             enabled = !state.operationInProgress,
                             label = { Text(stringResource(R.string.console_admin_dns_servers)) },
@@ -791,7 +883,7 @@ internal fun AdministrationDialog(
                 pendingAction = null
             },
             onConfirm = {
-                action.execute(commands, destination)
+                action.execute(controls, destination)
                 pendingAction = null
             },
         )
@@ -841,7 +933,12 @@ private fun AdministrationUnavailable() {
 }
 
 @Composable
-private fun AdministrationNoticeCard(kind: AdministrationNoticeKind, message: String) {
+internal fun AdministrationNoticeCard(notice: AdministrationNotice) {
+    AdministrationNoticeSurface(kind = notice.kind, message = notice.displayText())
+}
+
+@Composable
+private fun AdministrationNoticeSurface(kind: AdministrationNoticeKind, message: String) {
     val container = when (kind) {
         AdministrationNoticeKind.Applied -> MaterialTheme.colorScheme.primaryContainer
         AdministrationNoticeKind.Reconciled -> MaterialTheme.colorScheme.tertiaryContainer
@@ -856,13 +953,15 @@ private fun AdministrationNoticeCard(kind: AdministrationNoticeKind, message: St
         AdministrationNoticeKind.Rejected -> MaterialTheme.colorScheme.onErrorContainer
         AdministrationNoticeKind.Information -> MaterialTheme.colorScheme.onSurface
     }
-    Card(colors = CardDefaults.cardColors(containerColor = container)) {
-        Text(
-            text = message,
-            modifier = Modifier.padding(12.dp),
-            color = content,
-            style = MaterialTheme.typography.bodySmall,
-        )
+    PoliteStatus {
+        Card(colors = CardDefaults.cardColors(containerColor = container)) {
+            Text(
+                text = message,
+                modifier = Modifier.padding(12.dp),
+                color = content,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -919,19 +1018,19 @@ private fun ConfirmAdministrationActionDialog(
 private fun AdministrationOledPreset.displayLabel(): String = when (this) {
     AdministrationOledPreset.Never -> stringResource(R.string.console_admin_oled_never)
     AdministrationOledPreset.Seconds15 ->
-        stringResource(R.string.console_admin_oled_seconds, 15)
+        pluralStringResource(R.plurals.console_admin_oled_seconds, 15, 15)
     AdministrationOledPreset.Seconds30 ->
-        stringResource(R.string.console_admin_oled_seconds, 30)
+        pluralStringResource(R.plurals.console_admin_oled_seconds, 30, 30)
     AdministrationOledPreset.Minute1 ->
-        stringResource(R.string.console_admin_oled_minutes, 1)
+        pluralStringResource(R.plurals.console_admin_oled_minutes, 1, 1)
     AdministrationOledPreset.Minutes3 ->
-        stringResource(R.string.console_admin_oled_minutes, 3)
+        pluralStringResource(R.plurals.console_admin_oled_minutes, 3, 3)
     AdministrationOledPreset.Minutes5 ->
-        stringResource(R.string.console_admin_oled_minutes, 5)
+        pluralStringResource(R.plurals.console_admin_oled_minutes, 5, 5)
     AdministrationOledPreset.Minutes10 ->
-        stringResource(R.string.console_admin_oled_minutes, 10)
+        pluralStringResource(R.plurals.console_admin_oled_minutes, 10, 10)
     AdministrationOledPreset.Minutes30 ->
-        stringResource(R.string.console_admin_oled_minutes, 30)
+        pluralStringResource(R.plurals.console_admin_oled_minutes, 30, 30)
     AdministrationOledPreset.Hour1 -> stringResource(R.string.console_admin_oled_hour)
 }
 
@@ -1065,50 +1164,50 @@ private fun booleanLabel(enabled: Boolean): String = stringResource(
 )
 
 private fun PendingAdministrationAction.execute(
-    commands: ConsoleCommandSink,
+    controls: AdministrationControls,
     destination: ApprovedAdministrationDestination,
 ) {
     when (this) {
         is PendingAdministrationAction.PreviewUpdates ->
-            commands.setAdministrationPreviewUpdates(destination, enabled)
+            controls.setAdministrationPreviewUpdates(destination, enabled)
         is PendingAdministrationAction.OnlineUpdate ->
-            commands.startAdministrationOnlineUpdate(destination)
+            controls.startAdministrationOnlineUpdate(destination)
         PendingAdministrationAction.Reboot ->
-            commands.rebootAdministrationAppliance(destination)
+            controls.rebootAdministrationAppliance(destination)
         is PendingAdministrationAction.OledSleep ->
-            commands.setAdministrationOledSleep(destination, preset)
+            controls.setAdministrationOledSleep(destination, preset)
         is PendingAdministrationAction.Ssh ->
-            commands.setAdministrationSshEnabled(destination, enabled)
+            controls.setAdministrationSshEnabled(destination, enabled)
         is PendingAdministrationAction.Hostname ->
-            commands.setAdministrationHostname(destination, hostname)
+            controls.setAdministrationHostname(destination, hostname)
         is PendingAdministrationAction.Mdns ->
-            commands.setAdministrationMdnsEnabled(destination, enabled)
+            controls.setAdministrationMdnsEnabled(destination, enabled)
         is PendingAdministrationAction.CustomTitle ->
-            commands.setAdministrationWebTitle(destination, title)
+            controls.setAdministrationWebTitle(destination, title)
         PendingAdministrationAction.ResetTitle ->
-            commands.resetAdministrationWebTitle(destination)
+            controls.resetAdministrationWebTitle(destination)
         is PendingAdministrationAction.ManualDns ->
-            commands.setAdministrationManualDns(destination, servers)
+            controls.setAdministrationManualDns(destination, servers)
         PendingAdministrationAction.DhcpDns ->
-            commands.setAdministrationDhcpDns(destination)
+            controls.setAdministrationDhcpDns(destination)
         is PendingAdministrationAction.Hdmi ->
-            commands.setAdministrationHdmiEnabled(destination, enabled)
+            controls.setAdministrationHdmiEnabled(destination, enabled)
         PendingAdministrationAction.ResetHdmi ->
-            commands.resetAdministrationHdmi(destination)
+            controls.resetAdministrationHdmi(destination)
         is PendingAdministrationAction.MouseJiggler ->
-            commands.setAdministrationMouseJiggler(destination, selection)
+            controls.setAdministrationMouseJiggler(destination, selection)
         is PendingAdministrationAction.MemoryLimit ->
-            commands.setAdministrationMemoryLimitEnabled(destination, enabled)
+            controls.setAdministrationMemoryLimitEnabled(destination, enabled)
         is PendingAdministrationAction.Swap ->
-            commands.setAdministrationSwapSize(destination, preset)
+            controls.setAdministrationSwapSize(destination, preset)
         PendingAdministrationAction.EnableTls ->
-            commands.enableAdministrationTls(destination)
+            controls.enableAdministrationTls(destination)
         is PendingAdministrationAction.WifiConnect ->
-            commands.connectAdministrationWifi(destination, ssid, takePassword())
+            controls.connectAdministrationWifi(destination, ssid, takePassword())
         PendingAdministrationAction.WifiDisconnect ->
-            commands.disconnectAdministrationWifi(destination)
+            controls.disconnectAdministrationWifi(destination)
         is PendingAdministrationAction.Tailscale ->
-            commands.executeAdministrationTailscale(destination, command)
+            controls.executeAdministrationTailscale(destination, command)
     }
 }
 
@@ -1188,3 +1287,9 @@ private fun AdministrationTailscaleCommand.consequenceResource(): Int = when (th
     AdministrationTailscaleCommand.Login -> R.string.console_admin_consequence_tailscale_login
     AdministrationTailscaleCommand.Logout -> R.string.console_admin_consequence_tailscale_logout
 }
+
+private const val MAX_HOSTNAME_DRAFT_CHARS = 255
+private const val MAX_WEB_TITLE_DRAFT_CHARS = 255
+private const val MAX_DNS_DRAFT_CHARS = 2_048
+private const val MAX_WIFI_SSID_DRAFT_CHARS = 255
+private const val MAX_WIFI_PASSWORD_CHARS = 4_096

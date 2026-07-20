@@ -1,5 +1,9 @@
 package org.nanokvm.mobile.security
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -51,6 +55,27 @@ class CredentialAuthenticationCoordinatorTest {
     }
 
     @Test
+    fun authenticationFailureIsReportedAsClosedSemanticData() = runTest {
+        val coordinator = CredentialAuthenticationCoordinator()
+        val host = coordinator.activateNewHost()
+        val request = request(51)
+        assertEquals(PromptBeginResult.Started, coordinator.begin(host, request))
+        val result = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.results.first()
+        }
+
+        coordinator.cancel(host, CredentialPromptFailure.AuthenticationStartFailed)
+
+        assertEquals(
+            CredentialPromptResult.Failed(
+                requestId = request.id,
+                failure = CredentialPromptFailure.AuthenticationStartFailed,
+            ),
+            result.await(),
+        )
+    }
+
+    @Test
     fun aReplacedHostCannotRegisterAnotherOperation() {
         val coordinator = CredentialAuthenticationCoordinator()
         val staleHost = coordinator.activateNewHost()
@@ -58,6 +83,60 @@ class CredentialAuthenticationCoordinatorTest {
 
         assertEquals(PromptBeginResult.StaleHost, coordinator.begin(staleHost, request(1)))
         assertEquals(PromptBeginResult.Started, coordinator.begin(activeHost, request(2)))
+    }
+
+    @Test
+    fun olderHostCannotReclaimPromptRoutingAfterReplacement() {
+        val coordinator = CredentialAuthenticationCoordinator()
+        val staleHost = coordinator.activateNewHost()
+        val activeHost = coordinator.activateNewHost()
+        val activeRequest = request(91)
+        assertEquals(PromptBeginResult.Started, coordinator.begin(activeHost, activeRequest))
+
+        coordinator.activateHost(staleHost)
+
+        assertNull(coordinator.pendingRequestId(staleHost))
+        assertEquals(activeRequest.id, coordinator.pendingRequestId(activeHost))
+        assertFalse(
+            coordinator.complete(
+                staleHost,
+                CredentialPromptResult.Authenticated(activeRequest.id),
+            ),
+        )
+        assertTrue(
+            coordinator.complete(
+                activeHost,
+                CredentialPromptResult.Authenticated(activeRequest.id),
+            ),
+        )
+    }
+
+    @Test
+    fun repeatedHostReplacementRejectsEveryLateAuthenticationCallback() {
+        val coordinator = CredentialAuthenticationCoordinator()
+        val hosts = buildList {
+            repeat(64) { add(coordinator.activateNewHost()) }
+        }
+        val activeHost = hosts.last()
+        val activeRequest = request(112)
+        assertEquals(PromptBeginResult.Started, coordinator.begin(activeHost, activeRequest))
+
+        hosts.dropLast(1).forEach { staleHost ->
+            assertFalse(
+                coordinator.complete(
+                    staleHost,
+                    CredentialPromptResult.Authenticated(activeRequest.id),
+                ),
+            )
+        }
+
+        assertEquals(activeRequest.id, coordinator.pendingRequestId(activeHost))
+        assertTrue(
+            coordinator.complete(
+                activeHost,
+                CredentialPromptResult.Authenticated(activeRequest.id),
+            ),
+        )
     }
 
     private fun request(id: Long) = CredentialPromptRequest(

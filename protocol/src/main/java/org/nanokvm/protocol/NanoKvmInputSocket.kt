@@ -3,11 +3,8 @@ package org.nanokvm.protocol
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,14 +27,6 @@ sealed interface InputConnectionState {
         val cause: Throwable,
         val httpStatus: Int? = null,
     ) : InputConnectionState
-}
-
-sealed interface InputServerEvent {
-    data class Text(val value: String) : InputServerEvent
-    data class Binary(val value: ByteArray) : InputServerEvent
-    data class PeerClosing(val code: Int, val reason: String) : InputServerEvent
-    data class Closed(val code: Int, val reason: String) : InputServerEvent
-    data class Failure(val cause: Throwable, val httpStatus: Int?) : InputServerEvent
 }
 
 data class CommittedTextResult(
@@ -110,7 +99,6 @@ class NanoKvmInputSocket internal constructor(
 ) : Closeable {
     private val lock = Any()
     private val mutableState = MutableStateFlow<InputConnectionState>(InputConnectionState.Disconnected)
-    private val mutableEvents = MutableSharedFlow<InputServerEvent>(extraBufferCapacity = 32)
     private val heartbeatExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "nanokvm-input-heartbeat").apply { isDaemon = true }
     }
@@ -123,7 +111,6 @@ class NanoKvmInputSocket internal constructor(
     private var disposed = false
 
     val state: StateFlow<InputConnectionState> = mutableState.asStateFlow()
-    val events: SharedFlow<InputServerEvent> = mutableEvents.asSharedFlow()
 
     init {
         require(heartbeatIntervalMillis >= 1_000L) { "Heartbeat interval must be at least one second" }
@@ -377,7 +364,7 @@ class NanoKvmInputSocket internal constructor(
 
     private fun startHeartbeatLocked(current: WebSocket) {
         stopHeartbeatLocked()
-        heartbeat = heartbeatExecutor.scheduleAtFixedRate(
+        heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
             {
                 synchronized(lock) {
                     if (socket === current && mutableState.value is InputConnectionState.Connected) {
@@ -410,21 +397,15 @@ class NanoKvmInputSocket internal constructor(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!isCurrent(webSocket)) return
-            val event = boundedInputTextEvent(text)
-            if (event != null) {
-                mutableEvents.tryEmit(event)
-            } else {
-                webSocket.close(MESSAGE_TOO_BIG_CLOSE_CODE, "input text message too large")
+            if (!isInputTextMessageWithinLimit(text)) {
+                closeForOversizedMessage(webSocket, "input text message too large")
             }
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             if (!isCurrent(webSocket)) return
-            val event = boundedInputBinaryEvent(bytes)
-            if (event != null) {
-                mutableEvents.tryEmit(event)
-            } else {
-                webSocket.close(MESSAGE_TOO_BIG_CLOSE_CODE, "input binary message too large")
+            if (!isInputBinaryMessageWithinLimit(bytes)) {
+                closeForOversizedMessage(webSocket, "input binary message too large")
             }
         }
 
@@ -434,7 +415,6 @@ class NanoKvmInputSocket internal constructor(
                 stopHeartbeatLocked()
                 mutableState.value = InputConnectionState.Closing
                 sendReleaseFramesLocked(webSocket)
-                mutableEvents.tryEmit(InputServerEvent.PeerClosing(code, reason))
                 webSocket.close(code, reason.take(123))
             }
         }
@@ -445,7 +425,6 @@ class NanoKvmInputSocket internal constructor(
                 stopHeartbeatLocked()
                 socket = null
                 mutableState.value = InputConnectionState.Disconnected
-                mutableEvents.tryEmit(InputServerEvent.Closed(code, reason))
             }
         }
 
@@ -455,7 +434,6 @@ class NanoKvmInputSocket internal constructor(
                 stopHeartbeatLocked()
                 socket = null
                 mutableState.value = InputConnectionState.Failed(t, response?.code)
-                mutableEvents.tryEmit(InputServerEvent.Failure(t, response?.code))
                 response?.close()
             }
         }
@@ -464,24 +442,36 @@ class NanoKvmInputSocket internal constructor(
             socket === webSocket
         }
     }
+
+    /**
+     * Stops command acceptance before beginning the close handshake. OkHttp delivers only a
+     * complete WebSocket message, so this cannot undo its first transport allocation; it does
+     * prevent further HID work and lets the client-level close timeout tear down an uncooperative
+     * peer promptly.
+     */
+    private fun closeForOversizedMessage(webSocket: WebSocket, reason: String) {
+        synchronized(lock) {
+            if (socket !== webSocket) return
+            stopHeartbeatLocked()
+            mutableState.value = InputConnectionState.Closing
+            sendReleaseFramesLocked(webSocket)
+            if (!webSocket.close(MESSAGE_TOO_BIG_CLOSE_CODE, reason)) {
+                webSocket.cancel()
+                socket = null
+                mutableState.value = InputConnectionState.Disconnected
+            }
+        }
+    }
 }
 
 internal const val MAX_INPUT_SERVER_MESSAGE_BYTES = 64 * 1024
 private const val MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 
-internal fun boundedInputBinaryEvent(bytes: ByteString): InputServerEvent.Binary? =
-    if (bytes.size <= MAX_INPUT_SERVER_MESSAGE_BYTES) {
-        InputServerEvent.Binary(bytes.toByteArray())
-    } else {
-        null
-    }
+internal fun isInputBinaryMessageWithinLimit(bytes: ByteString): Boolean =
+    bytes.size <= MAX_INPUT_SERVER_MESSAGE_BYTES
 
-internal fun boundedInputTextEvent(text: String): InputServerEvent.Text? =
-    if (text.hasUtf8LengthAtMost(MAX_INPUT_SERVER_MESSAGE_BYTES)) {
-        InputServerEvent.Text(text)
-    } else {
-        null
-    }
+internal fun isInputTextMessageWithinLimit(text: String): Boolean =
+    text.hasUtf8LengthAtMost(MAX_INPUT_SERVER_MESSAGE_BYTES)
 
 /** Counts UTF-8 bytes without creating a second, potentially attacker-sized byte array. */
 private fun String.hasUtf8LengthAtMost(limit: Int): Boolean {

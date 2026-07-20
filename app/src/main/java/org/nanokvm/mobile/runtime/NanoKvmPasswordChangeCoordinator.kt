@@ -29,6 +29,18 @@ internal fun interface NanoKvmPasswordChangeSessionTerminator {
     suspend fun endSession(reason: NanoKvmPasswordChangeSessionEndReason)
 }
 
+/** Inputs for one coordinator, kept typed and redacted at the app-internal boundary. */
+internal class NanoKvmPasswordChangeRequest(
+    val destination: ApprovedAdministrationDestination,
+    val profile: HostProfile,
+    val savedCredentials: SavedCredentials,
+    val profilesRepository: ProfilesRepository,
+    val sessionTerminator: NanoKvmPasswordChangeSessionTerminator,
+) {
+    override fun toString(): String =
+        "NanoKvmPasswordChangeRequest(destination=<redacted>, profile=<redacted>)"
+}
+
 /**
  * A redacted result for one user-authorized password-change attempt.
  *

@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.ui.screens
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,9 +18,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
 import org.nanokvm.mobile.R
@@ -36,7 +37,6 @@ internal enum class DeviceCapabilityDisplayState {
 
 internal data class DeviceCapabilityDisplayRow(
     val capability: NanoKvmCapability,
-    val label: String,
     val state: DeviceCapabilityDisplayState,
 )
 
@@ -46,7 +46,6 @@ internal fun deviceCapabilityDisplayRows(
     ?.map { (capability, support) ->
         DeviceCapabilityDisplayRow(
             capability = capability,
-            label = capabilityDisplayLabel(capability),
             state = when (support) {
                 is NanoKvmCapabilitySupport.Supported -> DeviceCapabilityDisplayState.Available
                 is NanoKvmCapabilitySupport.Unsupported -> DeviceCapabilityDisplayState.Unavailable
@@ -54,30 +53,68 @@ internal fun deviceCapabilityDisplayRows(
             },
         )
     }
-    ?.sortedWith(compareBy<DeviceCapabilityDisplayRow>({ it.state.ordinal }, { it.label }))
+    ?.sortedWith(
+        compareBy<DeviceCapabilityDisplayRow>({ it.state.ordinal }, { it.capability.ordinal }),
+    )
     .orEmpty()
 
-internal fun capabilityDisplayLabel(capability: NanoKvmCapability): String = capability.name
-    .lowercase()
-    .split('_')
-    .mapIndexed { index, word ->
-        when (word) {
-            "dns" -> "DNS"
-            "gpio" -> "GPIO"
-            "h264" -> "H.264"
-            "hdmi" -> "HDMI"
-            "hid" -> "HID"
-            "lt6911d" -> "LT6911D"
-            "oled" -> "OLED"
-            "pcie" -> "PCIe"
-            "picoclaw" -> "PicoClaw"
-            "tls" -> "TLS"
-            "usb" -> "USB"
-            "wifi" -> "Wi-Fi"
-            else -> if (index == 0) word.replaceFirstChar(Char::uppercaseChar) else word
-        }
-    }
-    .joinToString(" ")
+@StringRes
+internal fun capabilityLabelResource(capability: NanoKvmCapability): Int = when (capability) {
+    NanoKvmCapability.VM_INFORMATION -> R.string.console_device_capability_vm_information
+    NanoKvmCapability.HARDWARE_INFORMATION ->
+        R.string.console_device_capability_hardware_information
+    NanoKvmCapability.GPIO_STATUS -> R.string.console_device_capability_gpio_status
+    NanoKvmCapability.GPIO_CONTROL -> R.string.console_device_capability_gpio_control
+    NanoKvmCapability.STREAM_CONFIGURATION ->
+        R.string.console_device_capability_stream_configuration
+    NanoKvmCapability.DIRECT_H264 -> R.string.console_device_capability_direct_h264
+    NanoKvmCapability.STANDARD_HID_WEBSOCKET ->
+        R.string.console_device_capability_standard_hid_websocket
+    NanoKvmCapability.SERVER_BATCH_PASTE ->
+        R.string.console_device_capability_server_batch_paste
+    NanoKvmCapability.SAVED_HID_SHORTCUTS ->
+        R.string.console_device_capability_saved_hid_shortcuts
+    NanoKvmCapability.HID_LEADER_KEY -> R.string.console_device_capability_hid_leader_key
+    NanoKvmCapability.MOUSE_BACK_FORWARD ->
+        R.string.console_device_capability_mouse_back_forward
+    NanoKvmCapability.MEMORY_LIMIT_CONFIGURATION ->
+        R.string.console_device_capability_memory_limit_configuration
+    NanoKvmCapability.PCIE_HDMI_RESET -> R.string.console_device_capability_pcie_hdmi_reset
+    NanoKvmCapability.PCIE_HDMI_CONTROL ->
+        R.string.console_device_capability_pcie_hdmi_control
+    NanoKvmCapability.MOUSE_JIGGLER -> R.string.console_device_capability_mouse_jiggler
+    NanoKvmCapability.SWAP_CONFIGURATION ->
+        R.string.console_device_capability_swap_configuration
+    NanoKvmCapability.TLS_ENABLE -> R.string.console_device_capability_tls_enable
+    NanoKvmCapability.VIRTUAL_USB_DEVICE_CONFIGURATION ->
+        R.string.console_device_capability_virtual_usb_device_configuration
+    NanoKvmCapability.OFFLINE_UPDATE -> R.string.console_device_capability_offline_update
+    NanoKvmCapability.VIRTUAL_MEDIA_UPLOAD ->
+        R.string.console_device_capability_virtual_media_upload
+    NanoKvmCapability.VIRTUAL_MEDIA_MOUNT ->
+        R.string.console_device_capability_virtual_media_mount
+    NanoKvmCapability.WAKE_ON_LAN -> R.string.console_device_capability_wake_on_lan
+    NanoKvmCapability.WIFI_CONFIGURATION ->
+        R.string.console_device_capability_wifi_configuration
+    NanoKvmCapability.TAILSCALE_EXTENSION ->
+        R.string.console_device_capability_tailscale_extension
+    NanoKvmCapability.OLED_CONFIGURATION ->
+        R.string.console_device_capability_oled_configuration
+    NanoKvmCapability.TERMINAL -> R.string.console_device_capability_terminal
+    NanoKvmCapability.SCRIPT_RUNNER -> R.string.console_device_capability_script_runner
+    NanoKvmCapability.AUTOSTART_SCRIPTS ->
+        R.string.console_device_capability_autostart_scripts
+    NanoKvmCapability.RESOLUTION_640_X_480 ->
+        R.string.console_device_capability_resolution_640_x_480
+    NanoKvmCapability.PICOCLAW -> R.string.console_device_capability_picoclaw
+    NanoKvmCapability.DNS_CONFIGURATION ->
+        R.string.console_device_capability_dns_configuration
+    NanoKvmCapability.FRENCH_KEYBOARD_MAPPING ->
+        R.string.console_device_capability_french_keyboard_mapping
+    NanoKvmCapability.CAPTURE_STATUS_REPORTING ->
+        R.string.console_device_capability_capture_status_reporting
+    NanoKvmCapability.LT6911D_CAPTURE -> R.string.console_device_capability_lt6911d_capture
+}
 
 @Composable
 internal fun DeviceInfoDialog(
@@ -181,9 +218,21 @@ internal fun DeviceInfoDialog(
                         Text(
                             stringResource(
                                 R.string.console_device_capability_summary,
-                                availableCount,
-                                unavailableCount,
-                                runtimeCheckCount,
+                                pluralStringResource(
+                                    R.plurals.console_device_capability_available_count,
+                                    availableCount,
+                                    availableCount,
+                                ),
+                                pluralStringResource(
+                                    R.plurals.console_device_capability_unavailable_count,
+                                    unavailableCount,
+                                    unavailableCount,
+                                ),
+                                pluralStringResource(
+                                    R.plurals.console_device_capability_runtime_check_count,
+                                    runtimeCheckCount,
+                                    runtimeCheckCount,
+                                ),
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -258,11 +307,9 @@ private fun DeviceCapabilityRow(row: DeviceCapabilityDisplayRow) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            row.label,
+            stringResource(capabilityLabelResource(row.capability)),
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
         )
         Text(
             when (row.state) {

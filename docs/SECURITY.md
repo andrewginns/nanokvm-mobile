@@ -7,14 +7,12 @@ passed.
 
 ## TLS and endpoint identity
 
-Authenticated profiles and normal application traffic require HTTPS. The
-manifest permits cleartext only because the explicit pre-authentication stock
-NanoKVM AP-onboarding client needs it; code isolates that cookie-suppressed,
-user-entered flow from all authenticated clients. Network Security Config alone
-is therefore not the boundary, and release tests must prove that no normal
-profile, credential, or token can enter HTTP. System trust is the default. A
-private or self-signed NanoKVM can be pinned by the SHA-256 digest of its leaf
-certificate to one canonical HTTPS origin.
+The NanoKVM origin, authenticated signaling, and application control traffic
+require HTTPS. The manifest and Network Security Config both deny cleartext,
+and initial access-point setup is outside the app. System trust is the default.
+A private or self-signed NanoKVM can be pinned by the SHA-256 digest of its leaf
+certificate to one canonical HTTPS origin. Explicit WebRTC mode may separately
+contact validated appliance-supplied STUN/STUNS/TURN/TURNS peers for ICE.
 
 Certificate discovery uses a short-lived inspection client whose trust manager
 accepts the presented chain only to retrieve certificate metadata. That client:
@@ -89,17 +87,32 @@ clients.
 ## Parser and resource bounds
 
 REST bodies, H.264 payloads, input messages, MJPEG headers/frames, credential
-records, paste input, endpoint syntax, GPIO duration, and video settings have
-application-level validation. Video queues and latest-frame dispatch are
-bounded; key/button transitions are ordered rather than dropped.
+records, paste input, endpoint syntax, certificate pins, session tokens, GPIO
+duration, and video settings have application-level validation. Clipboard and
+share text over 1,024 normalized UTF-8 bytes is rejected before retention, and
+session tokens over 2,048 characters are rejected before storage/use. Video
+queues and latest-frame dispatch are bounded; key/button transitions are
+ordered rather than dropped. Certificate subject and issuer display values are
+limited to 1,024 UTF-8 bytes each, each alternative name to 512 bytes, and the
+combined alternative-name list to 64 entries. Controls, bidi/format characters,
+line separators, and malformed surrogates are neutralized while preserving the
+verified identity and full fingerprint for review.
 
-There is an important transport-layer limitation: OkHttp materializes a full
-WebSocket `ByteString` before the H.264 or input callback can apply its size
-check. The checks bound parser copies and downstream decoder work, but do not
-bound the first allocation. A faulty or hostile configured endpoint can
-therefore cause transient memory pressure proportional to a received WebSocket
-message. A pre-allocation-capped transport or equivalent mitigation remains
-open; the app must not claim end-to-end WebSocket memory bounds until it exists.
+WebSocket compression is disabled at the handshake: the client removes
+OkHttp's unconditional `permessage-deflate` offer and rejects an unsolicited
+server extension. This prevents a small compressed wire payload from expanding
+before an application callback. Oversized direct-H.264 input cancels its socket
+and enters normal fallback immediately; input control stops command acceptance,
+queues HID releases, and all session WebSockets use a two-second close timeout.
+
+An important transport-layer limitation remains: OkHttp materializes a complete
+uncompressed WebSocket message before the H.264, terminal, or input callback can
+apply its size check. Deterministic slow-fragment tests confirm cumulative
+buffering before callback delivery. The checks bound parser copies, downstream
+decoder work, compressed amplification, and post-rejection lifetime, but not the
+first uncompressed allocation. Do not claim an end-to-end WebSocket memory bound
+until a pre-allocation-capped transport exists or measured physical-device risk
+is explicitly accepted.
 
 ## Lifecycle, reconnect, and control safety
 
@@ -112,9 +125,14 @@ open; the app must not claim end-to-end WebSocket memory bounds until it exists.
   queued for later replay, or automatically retried.
 - Destructive controls require consequence confirmation. Runtime execution
   rejects duplicate command keys, serializes commands, and invalidates leases
-  when the session generation changes.
+  when the session generation changes. UI confirmations are ephemeral and are
+  cleared on profile, authority, connection, or generation change before they
+  can target a replacement session.
 - `closeAndAwait()` defines deterministic backend shutdown; cancellation and
   lifecycle tests remain required evidence for every production candidate.
+  Current deterministic tests cover cancellation-ignoring callbacks and 64
+  repeated background/reconnect/foreground/close cycles; an API 37 process
+  replacement test confirms only a non-secret profile draft is restored.
 
 ## Permissions and platform surface
 

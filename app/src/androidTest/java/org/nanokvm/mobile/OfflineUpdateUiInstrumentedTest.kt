@@ -14,14 +14,10 @@ import org.junit.Test
 import org.nanokvm.mobile.runtime.AdministrationUiState
 import org.nanokvm.mobile.runtime.AdministrationUpdateUiState
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
-import org.nanokvm.mobile.runtime.ApprovedPasteRequest
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdatePhase
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateReview
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateUiState
 import org.nanokvm.mobile.runtime.NanoKvmSessionBinding
-import org.nanokvm.mobile.runtime.PowerAction
-import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.ui.screens.AdministrationDialog
 import org.nanokvm.mobile.ui.screens.OfflineUpdateDialog
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
@@ -50,7 +46,8 @@ class OfflineUpdateUiInstrumentedTest {
                             previewUpdatesEnabled = false,
                         ),
                     ),
-                    commands = OfflineUpdateNoOpCommands,
+                    controls = OfflineUpdateNoOpControls,
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                     offlineUpdateAvailable = true,
                     onOfflineUpdate = { opens++ },
                     onDismiss = {},
@@ -113,11 +110,4 @@ class OfflineUpdateUiInstrumentedTest {
     }
 }
 
-private object OfflineUpdateNoOpCommands : ConsoleCommandSink {
-    override fun reconnect() = Unit
-    override fun updateVideo(settings: VideoSettings) = Unit
-    override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
-    override fun pasteText(request: ApprovedPasteRequest) = Unit
-    override fun cancelPaste() = Unit
-}
+private object OfflineUpdateNoOpControls : NoOpAdministrationControls()

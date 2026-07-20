@@ -173,11 +173,6 @@ class NanoKvmCapabilityProbeTest {
             NanoKvmCapability.WIFI_CONFIGURATION,
             "2.1.2",
         )
-        assertRuntimeProbeRequired(
-            capabilities,
-            NanoKvmCapability.ACCESS_POINT_AUTHENTICATION,
-            "2.3.6",
-        )
         assertVersionSupported(capabilities, NanoKvmCapability.TAILSCALE_EXTENSION, "2.1.6")
     }
 
@@ -192,11 +187,6 @@ class NanoKvmCapabilityProbeTest {
         assertVersionUnsupported(capabilities, NanoKvmCapability.RESOLUTION_640_X_480, "2.3.6")
         assertVersionUnsupported(capabilities, NanoKvmCapability.PICOCLAW, "2.4.0")
         assertVersionUnsupported(capabilities, NanoKvmCapability.FRENCH_KEYBOARD_MAPPING, "2.4.1")
-        assertVersionUnsupported(
-            capabilities,
-            NanoKvmCapability.ACCESS_POINT_AUTHENTICATION,
-            "2.3.6",
-        )
         assertVersionSupported(capabilities, NanoKvmCapability.SAVED_HID_SHORTCUTS, "2.3.2")
         assertVersionSupported(capabilities, NanoKvmCapability.AUTOSTART_SCRIPTS, "2.3.1")
         assertVersionUnsupported(capabilities, NanoKvmCapability.HID_LEADER_KEY, "2.3.4")

@@ -12,13 +12,14 @@ evidence or release record.
   command serialization, ViewModel attempt ownership, credential staging,
   profile codec, viewport math, WebRTC's bounded double-JSON signaling and
   candidate ordering/teardown, H.264 queues, fallback policy, and MJPEG parsing.
-- **Android instrumentation:** launcher/onboarding semantics, profile editing,
-  certificate review, IME focus, gesture/control geometry, credential opt-in,
-  rotation/recreation, and background/foreground behavior. The `video` module also
-  creates a real EGL-backed native WebRTC peer and waits for a local offer, catching
-  missing permissions, native-library loading failures, and process aborts. These
-  tests normally run against `debug`; they do not satisfy the signed-production-
-  candidate gate.
+- **Android instrumentation:** launcher/profile-catalogue semantics, real
+  DataStore corruption/reset, profile editing, certificate review, IME focus,
+  gesture/control geometry, credential opt-in, configuration restoration,
+  generation-bound action invalidation, and background/foreground behavior.
+  The `video` module also creates a real EGL-backed native WebRTC peer and waits
+  for a local offer, catching missing permissions, native-library loading
+  failures, and process aborts. These tests normally run against `debug`; they
+  do not satisfy the signed-production-candidate gate.
 - **Macrobenchmark/profile generation:** the separate `macrobenchmark` module
   drives the target out of process. It generates versioned Baseline and Startup
   Profiles and defines cold startup/frame runs with no compilation and with the
@@ -53,7 +54,9 @@ With a booted emulator or USB device:
 The `video` task is intentionally included: it creates a real native WebRTC
 peer and is the regression gate for the process-abort failure previously seen
 when selecting WebRTC. It does not connect to a NanoKVM or prove ICE/frame
-continuity on an appliance.
+continuity on an appliance. This normal device command does not include the
+protocol module's hostile-ingress heap/PSS fixture; run and record that fixture
+only as a separate, intentional memory investigation.
 
 With a supported API 33+ profile-generation device, regenerate versioned rules
 when startup or profile-catalog code changes:
@@ -68,6 +71,14 @@ With an API 36+ benchmark device:
 .\gradlew.bat --no-problems-report --dependency-verification=strict -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark :macrobenchmark:connectedBenchmarkAndroidTest
 ```
 
+The focused non-secret process-restart regression can be run independently:
+
+```powershell
+.\gradlew.bat --no-problems-report --dependency-verification=strict `
+    '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.mobile.macrobenchmark.ProcessRestartInstrumentedTest' `
+    :macrobenchmark:connectedBenchmarkAndroidTest
+```
+
 Emulator results are diagnostic. Do not establish production performance
 thresholds from an unlocked x86_64 emulator.
 
@@ -80,9 +91,9 @@ thresholds from an unlocked x86_64 emulator.
 | API 31 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 33 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 34 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 35 / Android 15 | No retained current-commit result is claimed here | Run instrumentation locally for the current commit and separately run the signed/minified candidate through onboarding, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
+| API 35 / Android 15 | No retained current-commit result is claimed here | Run instrumentation locally for the current commit and separately run the signed/minified candidate through profile creation, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
 | API 36 / Android 16 | No retained current-commit result is claimed here | Run instrumentation locally and retain the current-commit result |
-| API 37 | The 2026-07-19 public-source checkpoint passed 59/59 app instrumentation tests plus 1/1 real-native WebRTC peer test; exact local scope is recorded in `BUILD_VERIFICATION.md` | Retain a clean current-commit local run and its private evidence; this emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, or signed-candidate evidence |
+| API 37 | The 2026-07-20 0.3.2 checkpoint passed 76/76 app instrumentation tests, 1/1 real-native WebRTC peer test, and 1/1 real process-restart test for a non-secret profile draft; exact scope and exclusions are recorded in `BUILD_VERIFICATION.md` | Repeat and retain the eventual release-source result; this emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, real Keystore, or signed-production-candidate evidence |
 | Representative physical ARM | Not automated | Required for signed-candidate smoke, startup/frame comparison, real Keystore, input/video, thermal/OEM behavior, memory, and power/network observations |
 | Real NanoKVM | Requires local hardware and private credentials | Run at least 30 continuous minutes each on direct H.264 and forced/fallback MJPEG. If WebRTC is enabled and supported for the candidate, also run 30 minutes and force negotiation/ICE/decoder failure, retaining proof of the fresh WebRTC to H.264 to MJPEG chain; otherwise record WebRTC as an explicit capability-gated exclusion. Include keyboard, pointer, reconnect, foreground loss, frame continuity, memory, and input-release checks |
 
@@ -140,9 +151,41 @@ complete until it also includes:
   context on controlled physical ARM hardware; and
 - three stable reference runs before regression thresholds become blocking.
 
-The current API 37 emulator run contains the four named compilation/startup modes
-and frame traces. Its timing and jank values are diagnostic only; production
-benefit and regression thresholds require controlled physical ARM evidence.
+An earlier 2026-07-18 API 37 emulator diagnostic contains the four named
+compilation/startup modes and frame traces. The latest 2026-07-20 modernization
+checkpoint regenerated and verified 18,528 Baseline and 15,838 Startup rules;
+the four startup benchmark cases were intentionally skipped rather than rerun as
+performance measurements. The older timing and jank values are diagnostic only;
+production benefit and regression thresholds require controlled physical ARM
+evidence.
+
+## WebSocket ingress evidence
+
+`OkHttpWebSocketIngressBehaviorTest` is an intentional dependency tripwire. A
+raw peer controls slow RFC 6455 fragment boundaries and confirms that OkHttp
+5.4.0 accumulates the complete uncompressed message before listener delivery.
+It also proves production handshakes omit compression, unsolicited negotiation
+fails, and an RSV1 frame with a declared 8 MiB body fails from its header without
+waiting for that body. Input and direct-H.264 integration tests verify exact
+boundary acceptance, HID release/command rejection, immediate H.264 cancellation,
+and normal fallback notification.
+
+`WebSocketIngressMemoryInstrumentedTest` can repeat an 8 MiB slow-fragment case
+on Android and emit Java-heap and PSS samples. It was deliberately **not
+invoked** for the 2026-07-20 checkpoint, so no Android memory sample or
+termination result is claimed. When it is intentionally run, retain API level,
+ABI, device/emulator, build identity, samples, and termination result. A
+representative physical run and explicit availability budget remain required
+before accepting the residual uncompressed first-allocation risk.
+
+This fixture is intentionally opt-in and must not be added to the routine device
+gate. Its exact class-filtered command is:
+
+```powershell
+.\gradlew.bat --no-problems-report --dependency-verification=strict `
+    '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.protocol.WebSocketIngressMemoryInstrumentedTest' `
+    :protocol:connectedDebugAndroidTest
+```
 
 ## Evidence record
 

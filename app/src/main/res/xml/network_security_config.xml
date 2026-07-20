@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Authenticated profiles remain HTTPS-only in AppViewModel and use reviewed certificate
-         pins. Cleartext is enabled solely so the explicit, pre-auth AP bootstrap flow can reach
-         stock NanoKVM AP firmware; that flow is manual, one-shot, cookie-suppressed, and never
-         stores either password. No authenticated session may downgrade to HTTP. -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- Every app connection is HTTPS. Self-signed NanoKVM certificates are reviewed and pinned
+         by the app before authentication; no authenticated session may downgrade to HTTP. -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

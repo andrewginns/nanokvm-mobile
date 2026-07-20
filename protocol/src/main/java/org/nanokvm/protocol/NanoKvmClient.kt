@@ -5,12 +5,8 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.Closeable
+import java.net.ProtocolException
 import java.util.concurrent.TimeUnit
-
-/** Request tag used only by deliberately public appliance routes such as AP-mode onboarding. */
-internal enum class SessionCookiePolicy {
-    OMIT,
-}
 
 /**
  * Owns the origin-scoped HTTP transport, token store, REST API and input WebSocket factory.
@@ -68,6 +64,7 @@ class NanoKvmClient private constructor(
             ignoreUnknownKeys = true
             explicitNulls = false
         }
+        private const val WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 2L
 
         @JvmStatic
         @JvmOverloads
@@ -75,18 +72,22 @@ class NanoKvmClient private constructor(
             endpoint: NanoKvmEndpoint,
             tlsMode: TlsMode = TlsMode.SystemTrusted,
             tokenStore: SessionTokenStore = InMemorySessionTokenStore(),
-            configure: (OkHttpClient.Builder.() -> Unit)? = null,
         ): NanoKvmClient {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
+                // Once an application message is rejected, do not leave a hostile peer up to
+                // OkHttp's one-minute default to acknowledge the close handshake.
+                .webSocketCloseTimeout(WEBSOCKET_CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 // Appliance mutations include toggles and physical controls; never replay them.
                 .retryOnConnectionFailure(false)
-                // A network interceptor runs again for redirects, preventing cookie forwarding.
+                // Redirects can cross origins or replay a mutation body. Surface every 3xx.
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .addInterceptor(UncompressedWebSocketInterceptor)
                 .addNetworkInterceptor(OriginCookieInterceptor(endpoint, tokenStore))
                 .applyTlsMode(endpoint, tlsMode)
-            configure?.invoke(builder)
             val httpClient = builder.build()
             return createInternal(endpoint, tokenStore, httpClient, ownsHttpClient = true)
         }
@@ -101,6 +102,10 @@ class NanoKvmClient private constructor(
             val scopedClient = httpClient.newBuilder()
                 // Do not inherit replay behavior from a caller-owned transport.
                 .retryOnConnectionFailure(false)
+                .webSocketCloseTimeout(WEBSOCKET_CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .addInterceptor(UncompressedWebSocketInterceptor)
                 .addNetworkInterceptor(OriginCookieInterceptor(endpoint, tokenStore))
                 .build()
             return createInternal(endpoint, tokenStore, scopedClient, ownsHttpClient = false)
@@ -118,6 +123,30 @@ class NanoKvmClient private constructor(
     }
 }
 
+/**
+ * OkHttp advertises per-message deflate for every WebSocket and has no public opt-out. Removing the
+ * offer prevents a small compressed wire message from inflating into an attacker-sized buffer
+ * before an application callback can enforce its limit. An unsolicited server negotiation is a
+ * handshake failure; without negotiation, RSV1 fails at the frame header.
+ */
+private object UncompressedWebSocketInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+        val request = chain.request()
+        if (!request.header("Upgrade").equals("websocket", ignoreCase = true)) {
+            return chain.proceed(request)
+        }
+        val uncompressedRequest = request.newBuilder()
+            .removeHeader("Sec-WebSocket-Extensions")
+            .build()
+        val response = chain.proceed(uncompressedRequest)
+        if (response.header("Sec-WebSocket-Extensions") != null) {
+            response.close()
+            throw ProtocolException("WebSocket compression negotiation is not permitted")
+        }
+        return response
+    }
+}
+
 private class OriginCookieInterceptor(
     private val endpoint: NanoKvmEndpoint,
     private val tokenStore: SessionTokenStore,
@@ -127,7 +156,6 @@ private class OriginCookieInterceptor(
         val sameOrigin = original.url.scheme == endpoint.baseUrl.scheme &&
             original.url.host == endpoint.baseUrl.host &&
             original.url.port == endpoint.baseUrl.port
-        val omitSession = original.tag(SessionCookiePolicy::class.java) == SessionCookiePolicy.OMIT
         val otherCookies = original.header("Cookie")
             ?.split(';')
             ?.map(String::trim)
@@ -136,7 +164,7 @@ private class OriginCookieInterceptor(
         val token = tokenStore.read()
         val cookies = buildList {
             addAll(otherCookies)
-            if (sameOrigin && token != null && !omitSession) {
+            if (sameOrigin && token != null) {
                 validateCookieValue(token)
                 add("nano-kvm-token=$token")
             }

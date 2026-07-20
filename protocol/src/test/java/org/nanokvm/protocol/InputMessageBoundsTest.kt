@@ -1,29 +1,24 @@
 package org.nanokvm.protocol
 
 import okio.ByteString.Companion.toByteString
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InputMessageBoundsTest {
     @Test
-    fun `binary input-server message at boundary is copied into event`() {
+    fun `binary input-server message at boundary is accepted without a second payload copy`() {
         val payload = ByteArray(MAX_INPUT_SERVER_MESSAGE_BYTES) { (it and 0xff).toByte() }
 
-        val event = boundedInputBinaryEvent(payload.toByteString())
-
-        assertNotNull(event)
-        event as InputServerEvent.Binary
-        assertArrayEquals(payload, event.value)
+        assertTrue(isInputBinaryMessageWithinLimit(payload.toByteString()))
     }
 
     @Test
     fun `oversized binary input-server message is rejected before array copy`() {
         val payload = ByteArray(MAX_INPUT_SERVER_MESSAGE_BYTES + 1).toByteString()
 
-        assertNull(boundedInputBinaryEvent(payload))
+        assertFalse(isInputBinaryMessageWithinLimit(payload))
     }
 
     @Test
@@ -31,9 +26,7 @@ class InputMessageBoundsTest {
         val boundary = "€".repeat(MAX_INPUT_SERVER_MESSAGE_BYTES / 3) + "a"
         assertEquals(MAX_INPUT_SERVER_MESSAGE_BYTES, boundary.encodeToByteArray().size)
 
-        val event = boundedInputTextEvent(boundary)
-        assertNotNull(event)
-        assertEquals(boundary, (event as InputServerEvent.Text).value)
-        assertNull(boundedInputTextEvent(boundary + "a"))
+        assertTrue(isInputTextMessageWithinLimit(boundary))
+        assertFalse(isInputTextMessageWithinLimit(boundary + "a"))
     }
 }

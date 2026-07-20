@@ -27,6 +27,38 @@ import kotlinx.coroutines.flow.flowOf
 @OptIn(ExperimentalCoroutinesApi::class)
 class NanoKvmPasswordChangeCoordinatorTest {
     @Test
+    fun typedRequestRedactsDestinationAndProfileDiagnostics() {
+        val events = mutableListOf<String>()
+        val profile = HostProfile(
+            id = "private-profile-id",
+            name = "Private NanoKVM",
+            host = "private.nanokvm.test",
+            username = "private-operator",
+        )
+        val request = NanoKvmPasswordChangeRequest(
+            destination = ApprovedAdministrationDestination(
+                profileId = profile.id,
+                authority = profile.authority,
+                sessionGeneration = 7L,
+            ),
+            profile = profile,
+            savedCredentials = FakeSavedCredentials(events, failCommit = false),
+            profilesRepository = FakeProfilesRepository(events),
+            sessionTerminator = NanoKvmPasswordChangeSessionTerminator { _ -> },
+        )
+
+        val diagnostic = request.toString()
+
+        assertEquals(
+            "NanoKvmPasswordChangeRequest(destination=<redacted>, profile=<redacted>)",
+            diagnostic,
+        )
+        listOf(profile.id, profile.name, profile.host, profile.username).forEach { value ->
+            assertFalse(diagnostic.contains(value))
+        }
+    }
+
+    @Test
     fun protectedReplacementStagesOnlyAfterAuthenticationThenCommitsAndEndsSession() = runTest {
         val fixture = Fixture()
         val password = "replacement-pass".toCharArray()

@@ -3,14 +3,18 @@ package org.nanokvm.mobile
 import android.view.Surface
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.nanokvm.mobile.runtime.NanoKvmAutomationGateway
@@ -31,7 +35,8 @@ import org.nanokvm.mobile.runtime.NanoKvmSessionBinding
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ConnectionState
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.runtime.ConsoleCoreControls
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.runtime.PowerAction
@@ -40,8 +45,11 @@ import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoSurfaceSink
 import org.nanokvm.mobile.data.HostProfile
+import org.nanokvm.mobile.clipboard.ClipboardGateway
+import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.ui.screens.AutomationDialog
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
+import org.nanokvm.mobile.ui.screens.ConsoleSessionDraftOwner
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
 
 class AutomationDialogInstrumentedTest {
@@ -127,6 +135,79 @@ class AutomationDialogInstrumentedTest {
     }
 
     @Test
+    fun largeAutomationCatalogsComposeBoundedRowsAndReachLastStableActions() {
+        val shortcuts = List(512) { index ->
+            NanoKvmAutomationPortHidShortcut(
+                stableId = "instrumented-shortcut-$index",
+                keys = listOf(
+                    NanoKvmAutomationPortHidKey(
+                        code = "KeyA",
+                        label = "Shortcut $index",
+                        known = true,
+                    ),
+                ),
+                runnable = true,
+            )
+        }
+        val autostartNames = List(512) { index -> "autostart-$index.sh" }
+        val lastShortcut = shortcuts.last()
+        val lastAutostartName = autostartNames.last()
+        val port = AutomationDialogFakePort(
+            hidShortcuts = shortcuts,
+            initialAutostartNames = autostartNames,
+        )
+        val binding = NanoKvmSessionBinding(
+            profileId = "automation-large-catalog-ui",
+            authority = "192.0.2.77",
+            sessionGeneration = 11,
+        )
+        val gateway = NanoKvmAutomationGateway(port, binding) { binding }
+
+        composeRule.setContent {
+            NanoKvmTheme {
+                AutomationDialog(
+                    destinationLabel = "Lab NanoKVM",
+                    gateway = gateway,
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            port.hidListCalls > 0 && port.autostartListCalls > 0
+        }
+        composeRule.onNodeWithTag("automation-surface")
+            .performScrollToKey("hid-shortcut:${lastShortcut.stableId}")
+        composeRule.waitForIdle()
+
+        val composedHidRows = composeRule.onAllNodesWithTag("automation-hid-shortcut")
+            .fetchSemanticsNodes()
+            .size
+        assertTrue(composedHidRows in 1 until shortcuts.size)
+        composeRule.onNodeWithTag("automation-hid-run-${lastShortcut.stableId}")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("automation-confirmation").assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").performClick()
+
+        composeRule.onNodeWithTag("automation-surface").performScrollToKey("tabs")
+        composeRule.onNodeWithText("Autostart scripts").performClick()
+        composeRule.onNodeWithTag("automation-surface")
+            .performScrollToKey("autostart-script:$lastAutostartName")
+        composeRule.waitForIdle()
+
+        val composedAutostartRows =
+            composeRule.onAllNodesWithTag("automation-autostart-script")
+                .fetchSemanticsNodes()
+                .size
+        assertTrue(composedAutostartRows in 1 until autostartNames.size)
+        composeRule.onNodeWithTag("automation-autostart-delete-$lastAutostartName")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag("automation-confirmation").assertIsDisplayed()
+    }
+
+    @Test
     fun consoleEntryOwnsAutomationSurfaceLifecycle() {
         val profile = HostProfile(
             id = "automation-console",
@@ -138,6 +219,7 @@ class AutomationDialogInstrumentedTest {
             binding = NanoKvmSessionBinding(profile.id, profile.authority, 12L),
             port = port,
         )
+        val sessionDraftOwner = ConsoleSessionDraftOwner()
 
         composeRule.setContent {
             NanoKvmTheme {
@@ -149,8 +231,14 @@ class AutomationDialogInstrumentedTest {
                     ),
                     input = bridge,
                     videoSurface = bridge,
-                    commands = bridge,
+                    features = bridge.features,
                     onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                 )
             }
         }
@@ -168,27 +256,126 @@ class AutomationDialogInstrumentedTest {
         composeRule.onNodeWithTag("automation-surface").assertDoesNotExist()
         composeRule.waitUntil(timeoutMillis = 5_000) { !bridge.surfaceVisible }
     }
+
+    @Test
+    fun automationCatalogHandleRemainsUsableAcrossConsoleStateRestoration() {
+        val profile = HostProfile(
+            id = "automation-restoration",
+            name = "Restoration NanoKVM",
+            host = "192.0.2.78",
+        )
+        val runnableShortcut = NanoKvmAutomationPortHidShortcut(
+            stableId = "restoration-shortcut",
+            keys = listOf(
+                NanoKvmAutomationPortHidKey(
+                    code = "KeyA",
+                    label = "A",
+                    known = true,
+                ),
+            ),
+            runnable = true,
+        )
+        val port = AutomationDialogFakePort(hidShortcuts = listOf(runnableShortcut))
+        val bridge = AutomationConsoleBridge(
+            binding = NanoKvmSessionBinding(profile.id, profile.authority, 13L),
+            port = port,
+        )
+        val sessionDraftOwner = ConsoleSessionDraftOwner()
+        val restorationTester = StateRestorationTester(composeRule)
+
+        restorationTester.setContent {
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = BackendSession(
+                        connection = ConnectionState.Connected,
+                        sessionGeneration = 13L,
+                    ),
+                    input = bridge,
+                    videoSurface = bridge,
+                    features = bridge.features,
+                    onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("automation-action").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            port.hidListCalls > 0 && port.autostartListCalls > 0
+        }
+        composeRule.onNodeWithTag("automation-hid-run-${runnableShortcut.stableId}")
+            .assertIsDisplayed()
+        val loadedHidCatalogCount = port.hidListCalls
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("automation-surface").assertIsDisplayed()
+        composeRule.onNodeWithTag("automation-hid-run-${runnableShortcut.stableId}")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.runOnIdle {
+            assertEquals(
+                "Configuration recreation must not background the live automation gateway",
+                0,
+                bridge.backgroundTransitions,
+            )
+            assertEquals(
+                "The retained controller must keep its loaded catalog without a manual refresh",
+                loadedHidCatalogCount,
+                port.hidListCalls,
+            )
+        }
+        composeRule.onNodeWithTag("automation-confirmation").assertIsDisplayed()
+        composeRule.onNodeWithTag("automation-confirm").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 5_000) { port.hidRunCalls == 1 }
+        composeRule.onNodeWithText("Action completed. State was refreshed.")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(0, bridge.backgroundTransitions)
+            assertEquals(1, port.hidRunCalls)
+        }
+        composeRule.onNodeWithText("Close").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { !bridge.surfaceVisible }
+    }
 }
 
 private class AutomationConsoleBridge(
     private val binding: NanoKvmSessionBinding,
     port: NanoKvmAutomationPort,
-) : ConsoleCommandSink, RemoteInputSink, VideoSurfaceSink, NanoKvmAutomationFeatureOwner {
+) : ConsoleCoreControls, RemoteInputSink, VideoSurfaceSink, NanoKvmAutomationFeatureOwner {
+    val features = ConsoleFeatureBundle(core = this, automation = this)
     var surfaceVisible = false
+        private set
+    var backgroundTransitions = 0
         private set
     private val gateway = NanoKvmAutomationGateway(port, binding) {
         binding.takeIf { surfaceVisible }
     }
 
     override fun setAutomationSurfaceVisible(visible: Boolean) {
+        if (surfaceVisible && !visible) backgroundTransitions++
         surfaceVisible = visible
         if (visible) gateway.onForeground() else gateway.onBackground()
     }
 
-    override fun currentAutomationGatewayToken(): Any? = gateway.takeIf { surfaceVisible }
+    override fun currentAutomationGateway(): NanoKvmAutomationGateway? =
+        gateway.takeIf { surfaceVisible }
 
     override fun reconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
+    override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
     override fun power(action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
@@ -206,29 +393,22 @@ private class AutomationConsoleBridge(
     override fun detachVideoSurface(surface: Surface) = Unit
 }
 
-private class AutomationDialogFakePort : NanoKvmAutomationPort {
+private class AutomationDialogFakePort(
+    private val hidShortcuts: List<NanoKvmAutomationPortHidShortcut> =
+        defaultAutomationHidShortcuts(),
+    initialAutostartNames: List<String> = emptyList(),
+) : NanoKvmAutomationPort {
     var hidListCalls = 0
+    var autostartListCalls = 0
     var leaderReadCalls = 0
     var createCalls = 0
-    val autostartNames = mutableListOf<String>()
+    var hidRunCalls = 0
+    val autostartNames = initialAutostartNames.toMutableList()
 
     override suspend fun listHidShortcuts(): NanoKvmAutomationPortHidCatalog {
         hidListCalls++
         return NanoKvmAutomationPortHidCatalog(
-            shortcuts = listOf(
-                NanoKvmAutomationPortHidShortcut(
-                    keys = listOf(
-                        NanoKvmAutomationPortHidKey(
-                            code = "FutureKey",
-                            label = "Future key",
-                            known = false,
-                        ),
-                    ),
-                    runnable = false,
-                    opaqueToken = Any(),
-                ),
-            ),
-            opaqueToken = Any(),
+            shortcuts = hidShortcuts,
         )
     }
 
@@ -237,7 +417,11 @@ private class AutomationDialogFakePort : NanoKvmAutomationPort {
     override fun runHidShortcut(
         catalog: NanoKvmAutomationPortHidCatalog,
         shortcut: NanoKvmAutomationPortHidShortcut,
-    ): NanoKvmAutomationPortHidRunResult = NanoKvmAutomationPortHidRunResult.Rejected
+    ): NanoKvmAutomationPortHidRunResult {
+        catalog.requireExactMember(shortcut)
+        hidRunCalls++
+        return NanoKvmAutomationPortHidRunResult.Completed(reportsSent = 1)
+    }
 
     override suspend fun deleteHidShortcut(
         catalog: NanoKvmAutomationPortHidCatalog,
@@ -257,13 +441,14 @@ private class AutomationDialogFakePort : NanoKvmAutomationPort {
     override suspend fun setLeaderKey(wireCode: String) = Unit
     override suspend fun disableLeaderKey() = Unit
 
-    override suspend fun listAutostartScripts(): NanoKvmAutomationPortAutostartCatalog =
-        NanoKvmAutomationPortAutostartCatalog(
+    override suspend fun listAutostartScripts(): NanoKvmAutomationPortAutostartCatalog {
+        autostartListCalls++
+        return NanoKvmAutomationPortAutostartCatalog(
             scripts = autostartNames.map {
-                NanoKvmAutomationPortAutostartScript(it, Any())
+                NanoKvmAutomationPortAutostartScript(it)
             },
-            opaqueToken = Any(),
         )
+    }
 
     override suspend fun readAutostartContent(
         catalog: NanoKvmAutomationPortAutostartCatalog,
@@ -298,3 +483,17 @@ private class AutomationDialogFakePort : NanoKvmAutomationPort {
         script: NanoKvmAutomationPortAutostartScript,
     ) = Unit
 }
+
+private fun defaultAutomationHidShortcuts(): List<NanoKvmAutomationPortHidShortcut> = listOf(
+    NanoKvmAutomationPortHidShortcut(
+        stableId = "instrumented-shortcut-a",
+        keys = listOf(
+            NanoKvmAutomationPortHidKey(
+                code = "FutureKey",
+                label = "Future key",
+                known = false,
+            ),
+        ),
+        runnable = false,
+    ),
+)

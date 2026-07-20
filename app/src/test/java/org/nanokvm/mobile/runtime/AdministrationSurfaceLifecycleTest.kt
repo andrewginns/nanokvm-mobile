@@ -1,6 +1,10 @@
 package org.nanokvm.mobile.runtime
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -57,6 +61,63 @@ class AdministrationSurfaceLifecycleTest {
                 installedBinding = binding(generation = 12L),
             ),
         )
+    }
+
+    @Test
+    fun `pending https navigation is redacted and acknowledged only by exact destination and id`() {
+        val request = PendingAdministrationHttpsNavigationRequest(
+            requestId = 41L,
+            profileId = "office",
+            authority = "192.0.2.4",
+            sessionGeneration = 7L,
+            value = "https://login.tailscale.com/a/auth-token",
+        )
+        val state = AdministrationUiState(pendingHttpsNavigation = request)
+        val destination = ApprovedAdministrationDestination(
+            profileId = "office",
+            authority = "192.0.2.4",
+            sessionGeneration = 7L,
+        )
+
+        assertSame(state, state.acknowledgeOpenedHttpsNavigation(destination, 40L))
+        assertSame(
+            state,
+            state.acknowledgeOpenedHttpsNavigation(
+                destination.copy(sessionGeneration = 8L),
+                41L,
+            ),
+        )
+
+        var openedUrl: String? = null
+        request.open { openedUrl = it }
+        assertEquals("https://login.tailscale.com/a/auth-token", openedUrl)
+
+        val acknowledged = state.acknowledgeOpenedHttpsNavigation(destination, 41L)
+        assertNull(acknowledged.pendingHttpsNavigation)
+        assertEquals(
+            AdministrationNotice.Guidance(
+                AdministrationNotice.GuidanceReason.TailscaleAuthorizationPageOpened,
+            ),
+            acknowledged.notice,
+        )
+
+        val diagnostic = request.toString()
+        assertFalse(diagnostic.contains("192.0.2.4"))
+        assertFalse(diagnostic.contains("login.tailscale.com"))
+        assertFalse(diagnostic.contains("auth-token"))
+    }
+
+    @Test
+    fun `pending administration navigation rejects cleartext urls`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            PendingAdministrationHttpsNavigationRequest(
+                requestId = 1L,
+                profileId = "office",
+                authority = "192.0.2.4",
+                sessionGeneration = 7L,
+                value = "http://login.tailscale.com/a/auth-token",
+            )
+        }
     }
 
     private fun binding(generation: Long) = NanoKvmSessionBinding(

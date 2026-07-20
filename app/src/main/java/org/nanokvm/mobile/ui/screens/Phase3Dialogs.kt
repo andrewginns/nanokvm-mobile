@@ -9,7 +9,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -32,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,8 +47,12 @@ import org.nanokvm.mobile.runtime.Phase3FeatureUiState
 import org.nanokvm.mobile.runtime.Phase3HidModeSelection
 import org.nanokvm.mobile.runtime.Phase3ImageMountMode
 import org.nanokvm.mobile.runtime.Phase3MediaImageUiState
+import org.nanokvm.mobile.runtime.Phase3Notice
+import org.nanokvm.mobile.runtime.Phase3NoticeKind
 import org.nanokvm.mobile.runtime.Phase3TransferPhase
 import org.nanokvm.mobile.runtime.Phase3WakeOnLanTargetUiState
+import org.nanokvm.mobile.ui.displayText
+import org.nanokvm.mobile.ui.components.PoliteStatus
 
 @Composable
 internal fun VirtualMediaDialog(
@@ -61,6 +67,7 @@ internal fun VirtualMediaDialog(
     onSetDiskEnabled: (Boolean) -> Unit,
     onStartTransfer: (String) -> Unit,
 ) {
+    // Remote URLs commonly carry signed query tokens or embedded credentials; never save them.
     var sourceUrl by remember { mutableStateOf("") }
     val busy = state.loading || state.operationInProgress ||
         state.virtualMedia.transferPhase == Phase3TransferPhase.InProgress
@@ -76,154 +83,187 @@ internal fun VirtualMediaDialog(
             )
         },
         text = {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 560.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .testTag("phase3-virtual-media-list"),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (!state.available) {
-                    Text(stringResource(R.string.console_phase3_connect_required))
+                    item(key = "availability") {
+                        Text(stringResource(R.string.console_phase3_connect_required))
+                    }
                 }
-                Phase3Loading(state.loading)
-                (state.virtualMediaNotice ?: state.notice)?.let { Phase3NoticeCard(it) }
+                if (state.loading) {
+                    item(key = "loading") { Phase3Loading(true) }
+                }
+                (state.virtualMediaNotice ?: state.notice)?.let { notice ->
+                    item(key = "notice") { Phase3NoticeCard(notice) }
+                }
 
-                Text(
-                    stringResource(R.string.console_hid_mode),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                val hidMode = state.hidMode
-                if (hidMode == null) {
-                    Text(stringResource(R.string.console_state_unknown))
-                } else {
-                    Text(
-                        when (hidMode.selection) {
-                            Phase3HidModeSelection.Normal ->
-                                stringResource(R.string.console_hid_mode_normal)
-                            Phase3HidModeSelection.HidOnly ->
-                                stringResource(R.string.console_hid_mode_only)
-                            Phase3HidModeSelection.Other -> stringResource(
-                                R.string.console_hid_mode_unknown,
-                                hidMode.reportedMode.orEmpty(),
-                            )
-                        },
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf(
-                            Phase3HidModeSelection.Normal,
-                            Phase3HidModeSelection.HidOnly,
-                        ).forEach { selection ->
-                            FilterChip(
-                                selected = hidMode.selection == selection,
-                                onClick = { onSetHidMode(selection) },
-                                enabled = !busy &&
-                                    hidMode.selection != Phase3HidModeSelection.Other,
-                                label = {
-                                    Text(
-                                        stringResource(
-                                            if (selection == Phase3HidModeSelection.Normal) {
-                                                R.string.console_hid_mode_normal
-                                            } else {
-                                                R.string.console_hid_mode_only
-                                            },
-                                        ),
+                item(key = "hid-mode") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_hid_mode),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        val hidMode = state.hidMode
+                        if (hidMode == null) {
+                            Text(stringResource(R.string.console_state_unknown))
+                        } else {
+                            Text(
+                                when (hidMode.selection) {
+                                    Phase3HidModeSelection.Normal ->
+                                        stringResource(R.string.console_hid_mode_normal)
+                                    Phase3HidModeSelection.HidOnly ->
+                                        stringResource(R.string.console_hid_mode_only)
+                                    Phase3HidModeSelection.Other -> stringResource(
+                                        R.string.console_hid_mode_unknown,
+                                        hidMode.reportedMode.orEmpty(),
                                     )
                                 },
                             )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                listOf(
+                                    Phase3HidModeSelection.Normal,
+                                    Phase3HidModeSelection.HidOnly,
+                                ).forEach { selection ->
+                                    FilterChip(
+                                        selected = hidMode.selection == selection,
+                                        onClick = { onSetHidMode(selection) },
+                                        enabled = !busy &&
+                                            hidMode.selection != Phase3HidModeSelection.Other,
+                                        label = {
+                                            Text(
+                                                stringResource(
+                                                    if (selection == Phase3HidModeSelection.Normal) {
+                                                        R.string.console_hid_mode_normal
+                                                    } else {
+                                                        R.string.console_hid_mode_only
+                                                    },
+                                                ),
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                            Text(
+                                stringResource(R.string.console_hid_mode_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
-                    Text(
-                        stringResource(R.string.console_hid_mode_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
 
-                Text(
-                    stringResource(R.string.console_virtual_network_device),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(reportedEnabledLabel(media.networkEnabled))
-                    Switch(
-                        checked = media.networkEnabled == true,
-                        enabled = !busy && media.networkEnabled != null,
-                        onCheckedChange = onSetNetworkEnabled,
-                        modifier = Modifier.testTag("phase3-network-toggle"),
-                    )
-                }
-
-                Text(
-                    stringResource(R.string.console_virtual_media_device),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(reportedEnabledLabel(media.mediaEnabled))
-                Text(
-                    stringResource(R.string.console_virtual_media_read_only),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Text(
-                    stringResource(R.string.console_virtual_disk_device),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(reportedEnabledLabel(media.diskEnabled))
-                    Switch(
-                        checked = media.diskEnabled == true,
-                        enabled = !busy && media.diskEnabled != null,
-                        onCheckedChange = onSetDiskEnabled,
-                        modifier = Modifier.testTag("phase3-disk-toggle"),
-                    )
-                }
-                Text(
-                    stringResource(R.string.console_usb_reset_explanation),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                HorizontalDivider()
-                Text(
-                    stringResource(R.string.console_mounted_media),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(mountedMediaLabel(state))
-                if (media.mountedDisplayName != null || media.hasUnlistedMountedImage) {
-                    OutlinedButton(
-                        onClick = onRestore,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.console_restore_physical_media))
+                item(key = "network-device") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_virtual_network_device),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(reportedEnabledLabel(media.networkEnabled))
+                            Switch(
+                                checked = media.networkEnabled == true,
+                                enabled = !busy && media.networkEnabled != null,
+                                onCheckedChange = onSetNetworkEnabled,
+                                modifier = Modifier.testTag("phase3-network-toggle"),
+                            )
+                        }
                     }
                 }
 
-                Text(
-                    stringResource(R.string.console_available_images),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                if (media.loaded && media.images.isEmpty()) {
-                    Text(
-                        stringResource(R.string.console_no_virtual_images),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                item(key = "media-device") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_virtual_media_device),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(reportedEnabledLabel(media.mediaEnabled))
+                        Text(
+                            stringResource(R.string.console_virtual_media_read_only),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-                media.images.forEach { image ->
+
+                item(key = "disk-device") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_virtual_disk_device),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(reportedEnabledLabel(media.diskEnabled))
+                            Switch(
+                                checked = media.diskEnabled == true,
+                                enabled = !busy && media.diskEnabled != null,
+                                onCheckedChange = onSetDiskEnabled,
+                                modifier = Modifier.testTag("phase3-disk-toggle"),
+                            )
+                        }
+                        Text(
+                            stringResource(R.string.console_usb_reset_explanation),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                item(key = "mounted-media") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HorizontalDivider()
+                        Text(
+                            stringResource(R.string.console_mounted_media),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(mountedMediaLabel(state))
+                        if (media.mountedDisplayName != null || media.hasUnlistedMountedImage) {
+                            OutlinedButton(
+                                onClick = onRestore,
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.console_restore_physical_media))
+                            }
+                        }
+                    }
+                }
+
+                item(key = "available-images") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_available_images),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        if (media.loaded && media.images.isEmpty()) {
+                            Text(
+                                stringResource(R.string.console_no_virtual_images),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                items(
+                    items = media.images,
+                    key = Phase3MediaImageUiState::id,
+                ) { image ->
                     MediaImageCard(
                         image = image,
                         cdRomEnabled = media.cdRomEnabled,
@@ -233,40 +273,44 @@ internal fun VirtualMediaDialog(
                     )
                 }
 
-                HorizontalDivider()
-                Text(
-                    stringResource(R.string.console_remote_image_transfer),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                TransferStatus(state)
-                Text(
-                    stringResource(R.string.console_remote_image_warning),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (media.remoteTransferEnabled == false) {
-                    Text(
-                        stringResource(R.string.console_remote_image_disabled),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                OutlinedTextField(
-                    value = sourceUrl,
-                    onValueChange = { sourceUrl = it.take(MAX_REMOTE_URL_INPUT_CHARS) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !busy && media.remoteTransferEnabled == true,
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.console_image_url)) },
-                    supportingText = { Text(stringResource(R.string.console_image_url_hint)) },
-                )
-                Button(
-                    onClick = { onStartTransfer(sourceUrl) },
-                    enabled = !busy && sourceUrl.isNotBlank() &&
-                        media.remoteTransferEnabled == true,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.console_download_image))
+                item(key = "remote-transfer") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HorizontalDivider()
+                        Text(
+                            stringResource(R.string.console_remote_image_transfer),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        TransferStatus(state)
+                        Text(
+                            stringResource(R.string.console_remote_image_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (media.remoteTransferEnabled == false) {
+                            Text(
+                                stringResource(R.string.console_remote_image_disabled),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        OutlinedTextField(
+                            value = sourceUrl,
+                            onValueChange = { sourceUrl = it.take(MAX_REMOTE_URL_INPUT_CHARS) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy && media.remoteTransferEnabled == true,
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.console_image_url)) },
+                            supportingText = { Text(stringResource(R.string.console_image_url_hint)) },
+                        )
+                        Button(
+                            onClick = { onStartTransfer(sourceUrl) },
+                            enabled = !busy && sourceUrl.isNotBlank() &&
+                                media.remoteTransferEnabled == true,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.console_download_image))
+                        }
+                    }
                 }
             }
         },
@@ -341,6 +385,7 @@ private fun MediaImageCard(
                 TextButton(
                     onClick = { onMount(image, Phase3ImageMountMode.MassStorage) },
                     enabled = !busy && !(image.mounted && !cdRomEnabled),
+                    modifier = Modifier.testTag("phase3-media-mount-${image.id}"),
                 ) { Text(stringResource(R.string.console_mount_as_disk)) }
                 TextButton(
                     onClick = { onMount(image, Phase3ImageMountMode.CdRom) },
@@ -385,9 +430,10 @@ internal fun WakeOnLanDialog(
     onRename: (Phase3WakeOnLanTargetUiState, String) -> Unit,
     onDelete: (Phase3WakeOnLanTargetUiState) -> Unit,
 ) {
-    var macAddress by remember { mutableStateOf("") }
-    var renameTarget by remember { mutableStateOf<Phase3WakeOnLanTargetUiState?>(null) }
-    var renameName by remember { mutableStateOf("") }
+    var macAddress by rememberSaveable { mutableStateOf("") }
+    var renameTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var renameName by rememberSaveable { mutableStateOf("") }
+    val renameTarget = state.wakeOnLanTargets.firstOrNull { it.id == renameTargetId }
     val busy = state.loading || state.operationInProgress
     AlertDialog(
         onDismissRequest = { if (!state.operationInProgress) onDismiss() },
@@ -400,52 +446,65 @@ internal fun WakeOnLanDialog(
             )
         },
         text = {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 560.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .testTag("phase3-wol-list"),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Phase3Loading(state.loading)
-                (state.wakeOnLanNotice ?: state.notice)?.let { Phase3NoticeCard(it) }
-                Text(
-                    stringResource(R.string.console_wol_delivery_warning),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = macAddress,
-                    onValueChange = { macAddress = it.take(MAX_MAC_INPUT_CHARS) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !busy,
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.console_mac_address)) },
-                    supportingText = { Text(stringResource(R.string.console_mac_address_hint)) },
-                )
-                Button(
-                    onClick = { onWake(macAddress) },
-                    enabled = !busy && macAddress.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.console_send_wake_packet)) }
-                HorizontalDivider()
-                Text(
-                    stringResource(R.string.console_wol_history),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                if (state.wakeOnLanLoaded && state.wakeOnLanTargets.isEmpty()) {
-                    Text(
-                        stringResource(R.string.console_wol_history_empty),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                if (state.loading) {
+                    item(key = "loading") { Phase3Loading(true) }
                 }
-                state.wakeOnLanTargets.forEach { target ->
+                (state.wakeOnLanNotice ?: state.notice)?.let { notice ->
+                    item(key = "notice") { Phase3NoticeCard(notice) }
+                }
+                item(key = "manual-wake") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(R.string.console_wol_delivery_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = macAddress,
+                            onValueChange = { macAddress = it.take(MAX_MAC_INPUT_CHARS) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy,
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.console_mac_address)) },
+                            supportingText = {
+                                Text(stringResource(R.string.console_mac_address_hint))
+                            },
+                        )
+                        Button(
+                            onClick = { onWake(macAddress) },
+                            enabled = !busy && macAddress.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(stringResource(R.string.console_send_wake_packet)) }
+                        HorizontalDivider()
+                        Text(
+                            stringResource(R.string.console_wol_history),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        if (state.wakeOnLanLoaded && state.wakeOnLanTargets.isEmpty()) {
+                            Text(
+                                stringResource(R.string.console_wol_history_empty),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                items(
+                    items = state.wakeOnLanTargets,
+                    key = Phase3WakeOnLanTargetUiState::id,
+                ) { target ->
                     WakeTargetCard(
                         target = target,
                         busy = busy,
                         onWake = onWake,
                         onRename = {
-                            renameTarget = target
+                            renameTargetId = target.id
                             renameName = target.name.orEmpty()
                         },
                         onDelete = { onDelete(target) },
@@ -462,7 +521,7 @@ internal fun WakeOnLanDialog(
 
     renameTarget?.let { target ->
         AlertDialog(
-            onDismissRequest = { renameTarget = null },
+            onDismissRequest = { renameTargetId = null },
             title = { Text(stringResource(R.string.console_rename_wol_target)) },
             text = {
                 OutlinedTextField(
@@ -476,13 +535,13 @@ internal fun WakeOnLanDialog(
                 Button(
                     onClick = {
                         onRename(target, renameName)
-                        renameTarget = null
+                        renameTargetId = null
                     },
                     enabled = renameName.isNotBlank() && !busy,
                 ) { Text(stringResource(R.string.console_rename)) }
             },
             dismissButton = {
-                TextButton(onClick = { renameTarget = null }) {
+                TextButton(onClick = { renameTargetId = null }) {
                     Text(stringResource(R.string.console_cancel))
                 }
             },
@@ -499,7 +558,9 @@ private fun WakeTargetCard(
     onDelete: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("phase3-wol-target"),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
@@ -522,7 +583,11 @@ private fun WakeTargetCard(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TextButton(onClick = { onWake(target.macAddress) }, enabled = !busy) {
+                TextButton(
+                    onClick = { onWake(target.macAddress) },
+                    enabled = !busy,
+                    modifier = Modifier.testTag("phase3-wol-wake-${target.id}"),
+                ) {
                     Text(stringResource(R.string.console_wake))
                 }
                 TextButton(onClick = onRename, enabled = !busy) {
@@ -566,14 +631,35 @@ private fun Phase3Loading(visible: Boolean) {
 }
 
 @Composable
-private fun Phase3NoticeCard(message: String) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        ),
-    ) {
-        Text(message, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+internal fun Phase3NoticeCard(notice: Phase3Notice) {
+    Phase3NoticeSurface(message = notice.displayText(), kind = notice.kind)
+}
+
+@Composable
+private fun Phase3NoticeSurface(message: String, kind: Phase3NoticeKind) {
+    val containerColor = when (kind) {
+        Phase3NoticeKind.Applied -> MaterialTheme.colorScheme.primaryContainer
+        Phase3NoticeKind.Reconciled -> MaterialTheme.colorScheme.tertiaryContainer
+        Phase3NoticeKind.Indeterminate,
+        Phase3NoticeKind.Rejected -> MaterialTheme.colorScheme.errorContainer
+        Phase3NoticeKind.Information -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = when (kind) {
+        Phase3NoticeKind.Applied -> MaterialTheme.colorScheme.onPrimaryContainer
+        Phase3NoticeKind.Reconciled -> MaterialTheme.colorScheme.onTertiaryContainer
+        Phase3NoticeKind.Indeterminate,
+        Phase3NoticeKind.Rejected -> MaterialTheme.colorScheme.onErrorContainer
+        Phase3NoticeKind.Information -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    PoliteStatus {
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = containerColor,
+                contentColor = contentColor,
+            ),
+        ) {
+            Text(message, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 

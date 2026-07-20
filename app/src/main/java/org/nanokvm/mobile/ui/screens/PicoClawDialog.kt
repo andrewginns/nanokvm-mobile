@@ -2,6 +2,7 @@
 
 package org.nanokvm.mobile.ui.screens
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -25,6 +26,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -33,30 +36,75 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.runtime.PicoClawControls
 import org.nanokvm.mobile.runtime.PicoClawChatUiPhase
 import org.nanokvm.mobile.runtime.PicoClawManualInputUiState
+import org.nanokvm.mobile.runtime.PicoClawMessageContent
+import org.nanokvm.mobile.runtime.PicoClawMessageRole
 import org.nanokvm.mobile.runtime.PicoClawMessageUiState
 import org.nanokvm.mobile.runtime.PicoClawModelConfigurationRequest
+import org.nanokvm.mobile.runtime.PicoClawNotice
+import org.nanokvm.mobile.runtime.PicoClawNoticeKind
 import org.nanokvm.mobile.runtime.PicoClawProfile
+import org.nanokvm.mobile.runtime.PicoClawRuntimeUiPhase
 import org.nanokvm.mobile.runtime.PicoClawSupport
 import org.nanokvm.mobile.runtime.PicoClawUiState
+import org.nanokvm.mobile.ui.components.PoliteStatus
+import org.nanokvm.mobile.ui.displayText
 
 private enum class PicoClawSection { Runtime, History, Chat }
+
+@StringRes
+internal fun picoClawRuntimePhaseLabelResource(phase: PicoClawRuntimeUiPhase): Int = when (phase) {
+    PicoClawRuntimeUiPhase.NotEntered -> R.string.picoclaw_phase_not_entered
+    PicoClawRuntimeUiPhase.Checking -> R.string.picoclaw_phase_checking
+    PicoClawRuntimeUiPhase.Installing -> R.string.picoclaw_phase_installing
+    PicoClawRuntimeUiPhase.Installed -> R.string.picoclaw_phase_installed
+    PicoClawRuntimeUiPhase.Ready -> R.string.picoclaw_phase_ready
+    PicoClawRuntimeUiPhase.Stopped -> R.string.picoclaw_phase_stopped
+    PicoClawRuntimeUiPhase.NotInstalled -> R.string.picoclaw_phase_not_installed
+    PicoClawRuntimeUiPhase.ModelNotConfigured -> R.string.picoclaw_phase_model_not_configured
+    PicoClawRuntimeUiPhase.ConfigError -> R.string.picoclaw_phase_config_error
+    PicoClawRuntimeUiPhase.Unavailable -> R.string.picoclaw_phase_unavailable
+    PicoClawRuntimeUiPhase.Error -> R.string.picoclaw_phase_error
+    PicoClawRuntimeUiPhase.Other -> R.string.picoclaw_phase_other
+}
+
+@StringRes
+internal fun picoClawMessageRoleLabelResource(role: PicoClawMessageRole): Int = when (role) {
+    PicoClawMessageRole.User -> R.string.picoclaw_role_user
+    PicoClawMessageRole.Assistant -> R.string.picoclaw_role_assistant
+    PicoClawMessageRole.Observation -> R.string.picoclaw_role_observation
+    PicoClawMessageRole.Tool -> R.string.picoclaw_role_tool
+}
 
 @Composable
 internal fun PicoClawDialog(
     destinationLabel: String,
     destination: ApprovedPicoClawDestination,
     state: PicoClawUiState,
-    commands: ConsoleCommandSink,
+    controls: PicoClawControls,
     onDismiss: () -> Unit,
 ) {
-    var section by remember { mutableStateOf(PicoClawSection.Runtime) }
-    var model by remember { mutableStateOf("") }
-    var apiBase by remember { mutableStateOf("") }
+    var section by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+        stateSaver = picoClawSectionSaver,
+    ) { mutableStateOf(PicoClawSection.Runtime) }
+    var model by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
+    var apiBase by rememberSaveable(
+        destination.profileId,
+        destination.authority,
+        destination.sessionGeneration,
+    ) { mutableStateOf("") }
     // Deliberately not saveable: this plaintext must not survive recreation or enter saved state.
     var apiKey by remember { mutableStateOf("") }
+    // Chat can contain private operator context, so it follows the same memory-only rule.
     var chatMessage by remember { mutableStateOf("") }
     var confirmUninstall by remember { mutableStateOf(false) }
     var historyToDelete by remember { mutableStateOf<Long?>(null) }
@@ -90,7 +138,7 @@ internal fun PicoClawDialog(
                     )
                     !state.entered -> PicoClawConsent(
                         enabled = !state.operationInProgress,
-                        onEnter = { commands.enterPicoClaw(destination) },
+                        onEnter = { controls.enterPicoClaw(destination) },
                     )
                     else -> {
                         PicoClawManualInputWarning(state)
@@ -117,11 +165,7 @@ internal fun PicoClawDialog(
                             }
                         }
                         state.notice?.let { notice ->
-                            Card(colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            )) {
-                                Text(notice.message, Modifier.padding(12.dp))
-                            }
+                            PicoClawNoticeCard(notice)
                         }
                         when (section) {
                             PicoClawSection.Runtime -> PicoClawRuntimeSection(
@@ -132,16 +176,16 @@ internal fun PicoClawDialog(
                                 onApiBaseChange = { apiBase = it.take(2_048) },
                                 apiKey = apiKey,
                                 onApiKeyChange = { apiKey = it.take(4_096) },
-                                onRefresh = { commands.refreshPicoClaw(destination) },
-                                onInstall = { commands.installPicoClawRuntime(destination) },
-                                onStart = { commands.startPicoClawRuntime(destination) },
-                                onStop = { commands.stopPicoClawRuntime(destination) },
+                                onRefresh = { controls.refreshPicoClaw(destination) },
+                                onInstall = { controls.installPicoClawRuntime(destination) },
+                                onStart = { controls.startPicoClawRuntime(destination) },
+                                onStop = { controls.stopPicoClawRuntime(destination) },
                                 onUninstall = { confirmUninstall = true },
-                                onProfile = { commands.setPicoClawProfile(destination, it) },
+                                onProfile = { controls.setPicoClawProfile(destination, it) },
                                 onConfigure = {
                                     val ownedKey = apiKey.toCharArray()
                                     apiKey = ""
-                                    commands.configurePicoClawModel(
+                                    controls.configurePicoClawModel(
                                         destination,
                                         PicoClawModelConfigurationRequest(model, apiBase, ownedKey),
                                     )
@@ -149,22 +193,22 @@ internal fun PicoClawDialog(
                             )
                             PicoClawSection.History -> PicoClawHistorySection(
                                 state = state,
-                                onRefresh = { commands.refreshPicoClawHistories(destination) },
-                                onOpen = { commands.loadPicoClawHistory(destination, it) },
+                                onRefresh = { controls.refreshPicoClawHistories(destination) },
+                                onOpen = { controls.loadPicoClawHistory(destination, it) },
                                 onDelete = { historyToDelete = it },
                             )
                             PicoClawSection.Chat -> PicoClawChatSection(
                                 state = state,
                                 message = chatMessage,
                                 onMessageChange = { chatMessage = it.take(32 * 1_024) },
-                                onOpen = { commands.openPicoClawChat(destination) },
+                                onOpen = { controls.openPicoClawChat(destination) },
                                 onSend = {
                                     val content = chatMessage
                                     chatMessage = ""
-                                    commands.sendPicoClawChatMessage(destination, content)
+                                    controls.sendPicoClawChatMessage(destination, content)
                                 },
-                                onCancel = { commands.cancelPicoClawChat(destination) },
-                                onRelease = { commands.closeAndReleasePicoClaw(destination) },
+                                onCancel = { controls.cancelPicoClawChat(destination) },
+                                onRelease = { controls.closeAndReleasePicoClaw(destination) },
                             )
                         }
                     }
@@ -190,7 +234,7 @@ internal fun PicoClawDialog(
             onDismiss = { confirmUninstall = false },
             onConfirm = {
                 confirmUninstall = false
-                commands.uninstallPicoClawRuntime(destination)
+                controls.uninstallPicoClawRuntime(destination)
             },
         )
     }
@@ -201,9 +245,49 @@ internal fun PicoClawDialog(
             onDismiss = { historyToDelete = null },
             onConfirm = {
                 historyToDelete = null
-                commands.deletePicoClawHistory(destination, historyId)
+                controls.deletePicoClawHistory(destination, historyId)
             },
         )
+    }
+}
+
+private val picoClawSectionSaver = Saver<PicoClawSection, String>(
+    save = { section -> section.name },
+    restore = { saved ->
+        PicoClawSection.entries.firstOrNull { it.name == saved } ?: PicoClawSection.Runtime
+    },
+)
+
+@Composable
+internal fun PicoClawNoticeCard(notice: PicoClawNotice) {
+    PicoClawNoticeSurface(kind = notice.kind, message = notice.displayText())
+}
+
+@Composable
+private fun PicoClawNoticeSurface(kind: PicoClawNoticeKind, message: String) {
+    val containerColor = when (kind) {
+        PicoClawNoticeKind.Applied -> MaterialTheme.colorScheme.primaryContainer
+        PicoClawNoticeKind.Reconciled -> MaterialTheme.colorScheme.tertiaryContainer
+        PicoClawNoticeKind.Indeterminate,
+        PicoClawNoticeKind.Rejected -> MaterialTheme.colorScheme.errorContainer
+        PicoClawNoticeKind.Information -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val contentColor = when (kind) {
+        PicoClawNoticeKind.Applied -> MaterialTheme.colorScheme.onPrimaryContainer
+        PicoClawNoticeKind.Reconciled -> MaterialTheme.colorScheme.onTertiaryContainer
+        PicoClawNoticeKind.Indeterminate,
+        PicoClawNoticeKind.Rejected -> MaterialTheme.colorScheme.onErrorContainer
+        PicoClawNoticeKind.Information -> MaterialTheme.colorScheme.onSurface
+    }
+    PoliteStatus {
+        Card(colors = CardDefaults.cardColors(containerColor = containerColor)) {
+            Text(
+                text = message,
+                modifier = Modifier.padding(12.dp),
+                color = contentColor,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -278,7 +362,7 @@ private fun PicoClawRuntimeSection(
             R.string.picoclaw_status,
             stringResource(if (state.installed) R.string.picoclaw_yes else R.string.picoclaw_no),
             stringResource(if (state.ready) R.string.picoclaw_yes else R.string.picoclaw_no),
-            state.runtimePhase.name,
+            stringResource(picoClawRuntimePhaseLabelResource(state.runtimePhase)),
         ),
     )
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -384,10 +468,25 @@ private fun PicoClawChatSection(
 }
 
 @Composable
-private fun PicoClawMessages(messages: List<PicoClawMessageUiState>) {
+private fun PicoClawMessages(
+    messages: List<PicoClawMessageUiState>,
+) {
     messages.takeLast(24).forEach { message ->
+        val displayedContent = when (val content = message.content) {
+            is PicoClawMessageContent.ApplianceText -> content.value
+            is PicoClawMessageContent.ToolAction -> stringResource(
+                R.string.picoclaw_tool_action,
+                content.action,
+            )
+            PicoClawMessageContent.ScreenObservationCaptured ->
+                stringResource(R.string.picoclaw_screen_observation_captured)
+        }
         Text(
-            stringResource(R.string.picoclaw_message_line, message.role.name, message.content),
+            stringResource(
+                R.string.picoclaw_message_line,
+                stringResource(picoClawMessageRoleLabelResource(message.role)),
+                displayedContent,
+            ),
             style = MaterialTheme.typography.bodySmall,
         )
     }

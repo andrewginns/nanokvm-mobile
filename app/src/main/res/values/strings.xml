@@ -8,6 +8,47 @@
     <string name="common_delete">Delete</string>
     <string name="common_remove">Remove</string>
 
+    <!-- Typed app notices -->
+    <string name="notice_scroll_sensitivity_save_failed">Scroll sensitivity could not be saved.</string>
+    <string name="notice_theme_preference_save_failed">Theme preference could not be saved.</string>
+    <string name="notice_device_colour_preference_save_failed">Device colour preference could not be saved.</string>
+    <string name="notice_mjpeg_detection_preference_save_failed">MJPEG frame-detection preference could not be saved on this device.</string>
+    <string name="notice_profile_save_failed">The connection was not saved; local storage remains recoverable.</string>
+    <string name="notice_certificate_decision_update_failed">The saved certificate decision was not changed; local storage remains recoverable.</string>
+    <string name="notice_certificate_decision_save_failed">The certificate decision could not be saved.</string>
+    <string name="notice_profile_delete_after_credential_removal_failed">The protected password was removed, but the connection record could not be deleted.</string>
+    <string name="notice_profile_reset_failed">Saved connections and credentials could not be reset completely. No recovery was claimed.</string>
+    <string name="notice_disconnect_cleanup_failed">Could not disconnect cleanly. The session was closed locally.</string>
+    <string name="notice_profile_storage_unreadable">Saved connections cannot be read right now. No data has been changed.</string>
+    <string name="notice_profile_storage_damaged">Saved connections are damaged. Reset them before making changes.</string>
+
+    <string name="notice_password_change_unavailable">Password change is not available for this session.</string>
+    <string name="notice_password_destination_changed">The authenticated destination changed. Review the password change again.</string>
+    <string name="notice_password_changed">NanoKVM credentials changed. Reconnect with the new credentials.</string>
+    <string name="notice_password_manual_verification_required">The password-change outcome is unknown. The session ended and the saved password was invalidated; reconnect manually and verify which credentials are active.</string>
+    <string name="notice_password_rejected">NanoKVM rejected the password change. The existing session and saved password were preserved.</string>
+    <string name="notice_password_session_expired">The NanoKVM session expired. Sign in again; the saved password was not changed.</string>
+    <string name="notice_password_invalid_request">The username or password is not valid for NanoKVM. Nothing was sent.</string>
+    <string name="notice_password_android_authentication_failed">Android authentication failed. Nothing was sent to NanoKVM.</string>
+    <string name="notice_password_local_preparation_failed">Android could not prepare the protected replacement. Nothing was sent to NanoKVM.</string>
+    <string name="notice_password_busy">Another password change is already in progress.</string>
+    <string name="notice_password_disconnect_unverified">Credentials changed, but Android could not verify a clean disconnect. Reconnect manually before doing anything else.</string>
+    <string name="notice_password_profile_update_failed">Credentials changed and the session ended, but the saved profile could not be updated. Edit the username before reconnecting.</string>
+    <string name="notice_password_credential_retention_failed">Credentials changed and the session ended, but Android could not safely retain the replacement password. Enter it manually when reconnecting.</string>
+    <string name="notice_password_local_state_unverified">Credentials changed and the session ended. Verify the local profile before reconnecting.</string>
+
+    <string name="notice_credential_remove_before_endpoint_change">Remove the saved password before changing the address, HTTPS setting, port, or username.</string>
+    <string name="notice_credential_key_creation_failed">Android could not create a protected credential key.</string>
+    <string name="notice_credential_profile_delete_unverified">The connection was not deleted because local credential removal could not be verified.</string>
+    <string name="notice_credential_removal_unverified">Android could not verify that the protected password was removed.</string>
+    <string name="notice_credential_unlock_failed">The saved password could not be unlocked. Enter it again.</string>
+    <string name="notice_credential_unlock_and_removal_failed">The saved password could not be unlocked or removed safely. Enter the password manually.</string>
+    <string name="notice_credential_protection_failed">The password could not be protected by Android Keystore.</string>
+    <string name="notice_credential_connected_save_failed">Connected, but Android could not save the protected password.</string>
+    <string name="notice_credential_device_protection_unavailable">Set up a screen lock or strong biometric before saving or unlocking a password.</string>
+    <string name="notice_credential_authentication_start_failed">Android could not start device authentication.</string>
+    <string name="notice_credential_authentication_failed">Device authentication failed. Enter the NanoKVM password instead.</string>
+
     <string name="profiles_connections_section">Connections</string>
     <string name="profiles_about_content_description">About and open-source licence</string>
     <string name="appearance_content_description">Appearance</string>
@@ -86,15 +127,23 @@
     <string name="profile_pinned_certificate_title">Pinned certificate</string>
     <string name="profile_forget_certificate_action">Forget certificate</string>
     <string name="profile_save_action">Save connection</string>
+    <string name="profile_saving_action">Saving connection…</string>
     <string name="profile_delete_description">Delete this connection and all of its locally protected data.</string>
     <string name="profile_delete_action">Delete connection</string>
+    <string name="profile_deleting_action">Deleting connection…</string>
     <string name="profile_delete_dialog_title">Delete %1$s?</string>
     <string name="profile_delete_dialog_message">The saved address, username, certificate pin and protected password will be removed.</string>
 
     <string name="certificate_review_title">Review certificate</string>
     <string name="certificate_cancel_content_description">Cancel certificate review</string>
     <string name="certificate_private_title">Private certificate</string>
+    <string name="certificate_reason_not_trusted">This certificate is not trusted by Android.</string>
+    <string name="certificate_reason_trusted_by_android">Trusted by Android.</string>
+    <string name="certificate_reason_matches_saved">Matches the saved certificate.</string>
+    <string name="certificate_reason_private_not_trusted">Android does not trust this private certificate.</string>
+    <string name="certificate_reason_differs_from_saved">The presented certificate differs from the saved certificate.</string>
     <string name="certificate_review_explanation">Confirm that this fingerprint belongs to %1$s. Trusting it pins this exact certificate; a future change will require another review.</string>
+    <string name="certificate_metadata_truncated_warning">Some certificate identity details were shortened or neutralized for safe display. Verify the full SHA-256 fingerprint before trusting this certificate.</string>
     <string name="certificate_fingerprint_label">SHA-256 fingerprint</string>
     <string name="certificate_fingerprint_clip_label">NanoKVM certificate fingerprint</string>
     <string name="certificate_copy_fingerprint_content_description">Copy certificate fingerprint</string>
@@ -117,18 +166,4 @@
     <string name="certificate_replace_saved_action">Replace saved certificate</string>
     <string name="certificate_connect_once_changed_action">Connect once with new certificate</string>
     <string name="certificate_changed_security_note">Replacing the saved certificate is permanent for this connection profile. Connecting once keeps the previous pin for the next connection.</string>
-    <string name="wifi_ap_onboarding_content_description">Set up NanoKVM Wi-Fi in access-point mode</string>
-    <string name="wifi_ap_onboarding_title">AP Wi-Fi onboarding</string>
-    <string name="wifi_ap_onboarding_connection_section">NanoKVM access point</string>
-    <string name="wifi_ap_onboarding_target_section">Target Wi-Fi</string>
-    <string name="wifi_ap_onboarding_explanation">Connect this Android device to NanoKVM\'s Wi-Fi access point first, then enter its exact endpoint and AP password. This public flow is separate from saved login profiles.</string>
-    <string name="wifi_ap_endpoint">AP endpoint</string>
-    <string name="wifi_ap_password">NanoKVM AP password</string>
-    <string name="wifi_ap_target_ssid">Target SSID</string>
-    <string name="wifi_ap_target_password">Target Wi-Fi password</string>
-    <string name="wifi_ap_manual_and_memory_only">No networks are scanned or auto-discovered. Both passwords are memory-only, cleared after one attempt, and never saved to a profile.</string>
-    <string name="wifi_ap_review">Review one-time onboarding</string>
-    <string name="wifi_ap_confirm_title">Connect NanoKVM to this Wi-Fi?</string>
-    <string name="wifi_ap_confirm_consequence">The app first verifies the AP password without an account cookie, then sends the manually entered SSID and Wi-Fi password once. NanoKVM may leave its access point immediately. A lost response is never replayed; check the target network before trying again.</string>
-    <string name="wifi_ap_connect_once">Connect once</string>
 </resources>

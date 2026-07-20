@@ -9,6 +9,10 @@ reference is tag commit `3b2ba7c0c1214f44da9d328f90bbdd025fac0413`.
 - A profile identifies one exact authority and TLS identity. A self-signed
   certificate may be explicitly pinned after review; a changed certificate is
   a new trust decision and is never accepted automatically.
+- Certificate subject/issuer/alternative-name text is untrusted display data.
+  It is Unicode-neutralized and bounded before presentation, the verified
+  identity retains a display slot, and any shortening is disclosed without
+  shortening the SHA-256 fingerprint used for the trust decision.
 - Passwords are mutable, short-lived values. Saved credentials are encrypted by
   Android Keystore and released only after biometric or device-credential
   authentication. Passwords, JWTs, API keys, clipboard contents, terminal
@@ -17,11 +21,11 @@ reference is tag commit `3b2ba7c0c1214f44da9d328f90bbdd025fac0413`.
 - NanoKVM authentication is the `nano-kvm-token` cookie. REST and WebSocket
   clients attach it as a cookie, never a bearer/query token. An HTTP 401 tears
   down the whole authenticated session.
-- Authenticated profiles are HTTPS-only. Platform cleartext permission exists
-  only for explicit pre-auth AP onboarding: the user supplies the endpoint and
-  both passwords, the isolated bootstrap client suppresses cookies, performs
-  one verify/connect sequence, clears its mutable secrets, and is never
-  promoted to an authenticated console session.
+- The NanoKVM origin, authenticated signaling, and application control traffic
+  require HTTPS. Android cleartext permission is disabled; initial access-point
+  Wi-Fi setup is completed outside the app before a profile is created. Explicit
+  WebRTC mode may contact validated appliance-supplied ICE peers as described
+  below.
 - Every privileged approval is bound to profile id, authority, TLS identity
   where applicable, and a monotonically increasing session generation. A
   reconnect invalidates approvals, catalogs, handles, and queued work.
@@ -34,6 +38,8 @@ cannot read the host clipboard.
 
 - Accept direct Android plain text only. Reject URI, intent, provider-backed,
   and rich content rather than dereferencing it.
+- Analyze normalized text without allocating an encoded copy and reject values
+  above 1,024 UTF-8 bytes before the app retains clipboard/share content.
 - Show destination, target keyboard layout, size, unsupported-character
   warnings, and a preview before typing. Sensitive previews are hidden by
   default and cleared when the app leaves the foreground.
@@ -45,9 +51,10 @@ cannot read the host clipboard.
 
 ## Virtual media and Wake-on-LAN
 
-- UI code receives opaque, snapshot-bound image handles, never arbitrary server
-  paths. Refresh immediately before mount/delete, prevent deletion of the live
-  mount, and invalidate all handles on session change.
+- UI code receives feature-typed, snapshot-bound image handles, never arbitrary
+  server paths or `Any` tokens. Refresh immediately before mount/delete,
+  prevent deletion of the live mount, and invalidate all handles on session
+  change. Stale, foreign, and lookalike handles are rejected by identity.
 - Mount/eject and virtual-device changes can reset the whole USB gadget. Cancel
   paste, release HID, explain host-I/O consequences, dispatch once, then read
   authoritative state. An empty mount request restores the physical storage
@@ -67,10 +74,9 @@ hostname/mDNS, SSH, DNS, and virtual USB operations are dispatched at most once.
 After an ambiguous disconnect the app reads current state or gives recovery
 guidance; it does not repeat the request.
 
-Wi-Fi setup is manual because NanoKVM 2.4.3 exposes no network scan route. The
-authenticated flow may configure a typed SSID or disconnect. The separate AP
-bootstrap flow never carries an existing session token and never stores the AP
-or target-network password.
+Wi-Fi administration is manual because NanoKVM 2.4.3 exposes no network scan
+route. An authenticated session may configure a typed SSID or disconnect.
+Initial access-point setup is deliberately outside the app.
 
 Password change updates both WebUI and appliance root credentials but does not
 revoke the current JWT. On acknowledged success the app discards its local
@@ -97,7 +103,9 @@ ambiguous response. Cancelling the HTTP request does not stop a running script.
 
 WebRTC negotiation state belongs to one connection generation. Offers and ICE
 candidates are never replayed. Any fallback creates a fresh session in the
-order WebRTC, direct H.264, then MJPEG.
+order WebRTC, direct H.264, then MJPEG. ICE may contact bounded, validated
+STUN/STUNS/TURN/TURNS URLs supplied by the trusted NanoKVM; this is the only
+non-origin network exception to the HTTPS application-control boundary.
 
 PicoClaw is optional from application 2.4.0 and is probed only after explicit
 feature entry: its status GET can start a probe loop and create configuration.

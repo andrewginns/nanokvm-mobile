@@ -15,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.runtime.CertificateDetails
+import org.nanokvm.mobile.runtime.CertificatePresentationReason
 import org.nanokvm.mobile.ui.screens.CertificateReviewScreen
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
 
@@ -32,7 +33,8 @@ class CertificateReviewUiInstrumentedTest {
             subjectAlternativeNames = listOf("nanokvm.example.internal", "192.0.2.250"),
             validFrom = "17 July 2026 09:00:00 UTC",
             validUntil = "17 July 2036 09:00:00 UTC",
-            reason = "Android cannot establish a system trust path for this private certificate.",
+            reason = CertificatePresentationReason.PrivateCertificateNotTrusted,
+            metadataTruncated = true,
         )
 
         composeRule.setContent {
@@ -47,7 +49,13 @@ class CertificateReviewUiInstrumentedTest {
             }
         }
 
-        composeRule.onNodeWithText(certificate.reason).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.certificate_reason_private_not_trusted),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.certificate_metadata_truncated_warning),
+        ).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(LONG_FINGERPRINT).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Copy certificate fingerprint").performClick()
         composeRule.onNode(
             SemanticsMatcher.expectValue(
@@ -71,7 +79,8 @@ class CertificateReviewUiInstrumentedTest {
             subjectAlternativeNames = listOf("nanokvm.example.internal"),
             validFrom = "17 July 2026 09:00:00 UTC",
             validUntil = "17 July 2036 09:00:00 UTC",
-            reason = "The presented certificate differs from the saved certificate.",
+            reason = CertificatePresentationReason.DiffersFromSavedCertificate,
+            metadataTruncated = false,
         )
 
         composeRule.setContent {

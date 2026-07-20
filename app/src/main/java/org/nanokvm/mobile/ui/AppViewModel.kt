@@ -6,6 +6,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -16,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.clipboard.ClipboardPayload
 import org.nanokvm.mobile.data.AppSettings
@@ -29,34 +32,32 @@ import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.CertificateDetails
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
+import org.nanokvm.mobile.runtime.ConnectionFailure
+import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleBackend
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.RemoteInputSink
 import org.nanokvm.mobile.runtime.VideoSurfaceSink
 import org.nanokvm.mobile.runtime.TrustPreflightOutcome
-import org.nanokvm.mobile.runtime.NanoKvmProtocolWifiAccessPointOnboardingSessionFactory
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
-import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeFeatureOwner
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeCoordinator
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeLocalFailure
+import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeRequest
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeResult
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeSessionEndReason
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeSessionTerminator
-import org.nanokvm.mobile.runtime.createPasswordChangeCoordinator
-import org.nanokvm.mobile.runtime.NanoKvmWifiAccessPointOnboardingGateway
-import org.nanokvm.mobile.runtime.NanoKvmWifiAccessPointOnboardingResult
-import org.nanokvm.mobile.runtime.NanoKvmWifiAccessPointOnboardingSessionFactory
 import org.nanokvm.mobile.platform.LocalNetworkAccess
 import org.nanokvm.mobile.security.SavedCredentialStore
 import org.nanokvm.mobile.security.SavedCredentials
 import org.nanokvm.mobile.security.CredentialPromptKind
+import org.nanokvm.mobile.security.CredentialPromptFailure
 import org.nanokvm.mobile.security.CredentialPromptRequest
 import org.nanokvm.mobile.security.CredentialPromptResult
 import org.nanokvm.mobile.security.StagedCredential
+import org.nanokvm.mobile.ui.screens.ConsoleSessionDraftOwner
 
 sealed interface AppScreen {
     data object Profiles : AppScreen
-    data object WifiAccessPointOnboarding : AppScreen
     data class EditProfile(val profile: HostProfile, val isNew: Boolean) : AppScreen
     data class Connecting(val profile: HostProfile) : AppScreen
     data class ReviewCertificate(
@@ -65,16 +66,6 @@ sealed interface AppScreen {
     ) : AppScreen
     data class Console(val profile: HostProfile) : AppScreen
 }
-
-enum class WifiAccessPointOnboardingNoticeKind { Information, Applied, Indeterminate, Rejected }
-
-data class WifiAccessPointOnboardingUiState(
-    val operationInProgress: Boolean = false,
-    val noticeKind: WifiAccessPointOnboardingNoticeKind =
-        WifiAccessPointOnboardingNoticeKind.Information,
-    /** App-authored text only; endpoints, SSIDs, and passwords never enter this state. */
-    val notice: String? = null,
-)
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Profiles,
@@ -92,15 +83,26 @@ data class AppUiState(
     val passwordEntryProfile: HostProfile? = null,
     val profileStorageIssue: ProfileStorageIssue? = null,
     val profileStorageBusy: Boolean = false,
+    val profileMutation: ProfileMutationUiState = ProfileMutationUiState.Idle,
     val localNetworkPermission: LocalNetworkPermissionUiState? = null,
     /** Memory-only ACTION_SEND text awaiting destination-bound review; never persisted. */
     val pendingSharedPaste: ClipboardPayload? = null,
-    val wifiAccessPointOnboarding: WifiAccessPointOnboardingUiState =
-        WifiAccessPointOnboardingUiState(),
     /** Changes on every genuine background transition to clear composable-only sensitive work. */
     val sensitiveWorkGeneration: Long = 0,
-    val errorMessage: String? = null,
+    /** Memory-only FIFO of notices awaiting explicit presentation acknowledgement. */
+    val pendingAppNotices: List<PendingAppNotice> = emptyList(),
 )
+
+data class PendingAppNotice(
+    val id: Long,
+    val content: AppNotice,
+)
+
+sealed interface ProfileMutationUiState {
+    data object Idle : ProfileMutationUiState
+    data class Saving(val profileId: String) : ProfileMutationUiState
+    data class Deleting(val profileId: String) : ProfileMutationUiState
+}
 
 sealed interface LocalNetworkPermissionUiState {
     data class Rationale(val profile: HostProfile) : LocalNetworkPermissionUiState
@@ -109,18 +111,23 @@ sealed interface LocalNetworkPermissionUiState {
         val profile: HostProfile,
         val canRequestAgain: Boolean,
     ) : LocalNetworkPermissionUiState
-    data object AccessPointRationale : LocalNetworkPermissionUiState
-    data object AccessPointRequesting : LocalNetworkPermissionUiState
-    data class AccessPointDenied(val canRequestAgain: Boolean) :
-        LocalNetworkPermissionUiState
 }
 
 sealed interface ProfileStorageIssue {
-    val userMessage: String
-
-    data class Corrupted(override val userMessage: String) : ProfileStorageIssue
-    data class Unavailable(override val userMessage: String) : ProfileStorageIssue
+    data object Corrupted : ProfileStorageIssue
+    data object Unavailable : ProfileStorageIssue
 }
+
+private fun CredentialPromptFailure.toAppNotice(): AppNotice = AppNotice.Credential(
+    when (this) {
+        CredentialPromptFailure.DeviceProtectionUnavailable ->
+            CredentialNotice.DeviceProtectionUnavailable
+        CredentialPromptFailure.AuthenticationStartFailed ->
+            CredentialNotice.AuthenticationStartFailed
+        CredentialPromptFailure.AuthenticationFailed ->
+            CredentialNotice.AuthenticationFailedUsePassword
+    },
+)
 
 class AppViewModel internal constructor(
     private val profilesRepository: ProfilesRepository,
@@ -130,9 +137,6 @@ class AppViewModel internal constructor(
     credentialResults: Flow<CredentialPromptResult>,
     private val savedStateHandle: SavedStateHandle,
     private val localNetworkAccess: LocalNetworkAccess,
-    private val wifiAccessPointOnboardingSessionFactory:
-        NanoKvmWifiAccessPointOnboardingSessionFactory =
-        NanoKvmProtocolWifiAccessPointOnboardingSessionFactory,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(
         AppUiState(screen = RestorableAppScreenState.restore(savedStateHandle)),
@@ -140,9 +144,11 @@ class AppViewModel internal constructor(
     val state: StateFlow<AppUiState> = mutableState.asStateFlow()
     val remoteInput: RemoteInputSink get() = backend
     val videoSurface: VideoSurfaceSink get() = backend
-    val consoleCommands: ConsoleCommandSink get() = backend
+    internal val consoleFeatures: ConsoleFeatureBundle get() = backend.features
+    internal val consoleSessionDraftOwner = ConsoleSessionDraftOwner()
 
     private val attempts = ConnectionAttemptSlot()
+    private val settingsWriteMutex = Mutex()
     private var connectJob: Job? = null
     private var profileCollectionJob: Job? = null
     private var nextCredentialRequestId = 0L
@@ -151,11 +157,24 @@ class AppViewModel internal constructor(
     private var passwordChangeJob: Job? = null
     private var activePasswordChangeCoordinator: NanoKvmPasswordChangeCoordinator? = null
     private var pendingTrustIntent: PendingTrustIntent? = null
+    private var pendingMjpegFrameDetectionEnabled: Boolean? = null
     private var foreground = true
-    private var wifiAccessPointOnboardingGeneration = 0L
-    private var activeWifiAccessPointOnboardingGeneration: Long? = null
-    private var wifiAccessPointOnboardingGateway: NanoKvmWifiAccessPointOnboardingGateway? = null
-    private var wifiAccessPointOnboardingJob: Job? = null
+    private val appNoticeIds = AtomicLong()
+
+    private fun updateWithNotice(
+        content: AppNotice,
+        transform: AppUiState.() -> AppUiState = { this },
+    ) {
+        val pending = PendingAppNotice(
+            id = appNoticeIds.incrementAndGet(),
+            content = content,
+        )
+        mutableState.update { current ->
+            current.transform().copy(
+                pendingAppNotices = current.pendingAppNotices + pending,
+            )
+        }
+    }
 
     init {
         startProfileCollection()
@@ -164,6 +183,14 @@ class AppViewModel internal constructor(
         }
         viewModelScope.launch {
             backend.session.collect { session ->
+                val previous = mutableState.value.backendSession
+                if (
+                    session.sessionGeneration != previous.sessionGeneration ||
+                    session.connection == ConnectionState.Disconnected ||
+                    session.connection == ConnectionState.Failed
+                ) {
+                    consoleSessionDraftOwner.clear()
+                }
                 mutableState.update { it.copy(backendSession = session) }
             }
         }
@@ -174,65 +201,65 @@ class AppViewModel internal constructor(
 
     fun setScrollSensitivity(sensitivity: Float) {
         val normalizedSensitivity = normalizeScrollSensitivity(sensitivity)
-        mutableState.update { it.copy(scrollSensitivity = normalizedSensitivity) }
         viewModelScope.launch {
             try {
-                appSettingsStore.setScrollSensitivity(normalizedSensitivity)
+                settingsWriteMutex.withLock {
+                    appSettingsStore.setScrollSensitivity(normalizedSensitivity)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(errorMessage = "Scroll sensitivity could not be saved.")
-                }
+                updateWithNotice(AppNotice.Simple(SimpleNotice.ScrollSensitivitySaveFailed))
             }
         }
     }
 
     fun setThemeMode(themeMode: ThemeMode) {
-        mutableState.update { it.copy(themeMode = themeMode) }
         viewModelScope.launch {
             try {
-                appSettingsStore.setThemeMode(themeMode)
+                settingsWriteMutex.withLock { appSettingsStore.setThemeMode(themeMode) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update { it.copy(errorMessage = "Theme preference could not be saved.") }
+                updateWithNotice(AppNotice.Simple(SimpleNotice.ThemePreferenceSaveFailed))
             }
         }
     }
 
     fun setUseDynamicColor(enabled: Boolean) {
-        mutableState.update { it.copy(useDynamicColor = enabled) }
         viewModelScope.launch {
             try {
-                appSettingsStore.setUseDynamicColor(enabled)
+                settingsWriteMutex.withLock { appSettingsStore.setUseDynamicColor(enabled) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(errorMessage = "Device colour preference could not be saved.")
-                }
+                updateWithNotice(AppNotice.Simple(SimpleNotice.DeviceColourPreferenceSaveFailed))
             }
         }
     }
 
     fun setMjpegFrameDetectionEnabled(enabled: Boolean) {
-        if (mutableState.value.mjpegFrameDetectionEnabled == enabled) return
-        mutableState.update { it.copy(mjpegFrameDetectionEnabled = enabled) }
-        // Preference collection is local-only; this call is the sole explicit appliance write.
-        backend.setMjpegFrameDetectionPreference(enabled)
-        backend.setMjpegFrameDetectionEnabled(enabled)
+        val currentIntent = pendingMjpegFrameDetectionEnabled
+            ?: mutableState.value.mjpegFrameDetectionEnabled
+        if (currentIntent == enabled) return
+        pendingMjpegFrameDetectionEnabled = enabled
         viewModelScope.launch {
             try {
-                appSettingsStore.setMjpegFrameDetectionEnabled(enabled)
+                settingsWriteMutex.withLock {
+                    appSettingsStore.setMjpegFrameDetectionEnabled(enabled)
+                    // Preference collection is local-only; this is the sole explicit appliance
+                    // write and only follows a successful local persistence operation.
+                    backend.setMjpegFrameDetectionEnabled(enabled)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(
-                        errorMessage =
-                            "MJPEG frame-detection preference could not be saved on this device.",
-                    )
+                updateWithNotice(
+                    AppNotice.Simple(SimpleNotice.MjpegFrameDetectionPreferenceSaveFailed),
+                )
+            } finally {
+                if (pendingMjpegFrameDetectionEnabled == enabled) {
+                    pendingMjpegFrameDetectionEnabled = null
                 }
             }
         }
@@ -273,21 +300,21 @@ class AppViewModel internal constructor(
                             )
                         }
                     }
-                    is ProfileCatalogState.Corrupted -> mutableState.update {
+                    ProfileCatalogState.Corrupted -> mutableState.update {
                         it.copy(
                             profiles = emptyList(),
                             profileCatalogResolved = true,
                             savedPasswordProfileIds = emptySet(),
-                            profileStorageIssue = ProfileStorageIssue.Corrupted(catalog.userMessage),
+                            profileStorageIssue = ProfileStorageIssue.Corrupted,
                             profileStorageBusy = false,
                         )
                     }
-                    is ProfileCatalogState.Unavailable -> mutableState.update {
+                    ProfileCatalogState.Unavailable -> mutableState.update {
                         it.copy(
                             profiles = emptyList(),
                             profileCatalogResolved = true,
                             savedPasswordProfileIds = emptySet(),
-                            profileStorageIssue = ProfileStorageIssue.Unavailable(catalog.userMessage),
+                            profileStorageIssue = ProfileStorageIssue.Unavailable,
                             profileStorageBusy = false,
                         )
                     }
@@ -297,7 +324,8 @@ class AppViewModel internal constructor(
     }
 
     private fun profileCatalogIsActionable(): Boolean = mutableState.value.run {
-        profileCatalogResolved && profileStorageIssue == null && !profileStorageBusy
+        profileCatalogResolved && profileStorageIssue == null && !profileStorageBusy &&
+            profileMutation == ProfileMutationUiState.Idle
     }
 
     fun addProfile() {
@@ -310,154 +338,20 @@ class AppViewModel internal constructor(
             isNew = true,
         )
         persistRestorableScreen(screen)
-        mutableState.update {
-            it.copy(
-                screen = screen,
-                errorMessage = null,
-            )
-        }
-    }
-
-    fun openWifiAccessPointOnboarding() {
-        if (!profileCatalogIsActionable()) return
-        invalidateWifiAccessPointOnboarding()
-        val generation = ++wifiAccessPointOnboardingGeneration
-        activeWifiAccessPointOnboardingGeneration = generation
-        wifiAccessPointOnboardingGateway = NanoKvmWifiAccessPointOnboardingGateway(
-            generation = generation,
-            currentGeneration = {
-                if (
-                    foreground &&
-                    mutableState.value.screen == AppScreen.WifiAccessPointOnboarding &&
-                    activeWifiAccessPointOnboardingGeneration == generation
-                ) {
-                    generation
-                } else {
-                    null
-                }
-            },
-            sessionFactory = wifiAccessPointOnboardingSessionFactory,
-        )
-        persistRestorableScreen(AppScreen.Profiles)
-        mutableState.update {
-            it.copy(
-                screen = AppScreen.WifiAccessPointOnboarding,
-                wifiAccessPointOnboarding = WifiAccessPointOnboardingUiState(),
-                localNetworkPermission = if (localNetworkAccess.isGranted()) {
-                    null
-                } else {
-                    LocalNetworkPermissionUiState.AccessPointRationale
-                },
-                errorMessage = null,
-            )
-        }
-    }
-
-    /** Ownership of both password arrays transfers here and every terminal path clears them. */
-    fun connectWifiAccessPoint(
-        endpoint: String,
-        apPassword: CharArray,
-        targetSsid: String,
-        targetPassword: CharArray,
-    ) {
-        val generation = activeWifiAccessPointOnboardingGeneration
-        val gateway = wifiAccessPointOnboardingGateway
-        if (
-            generation == null || gateway == null || !foreground ||
-            mutableState.value.screen != AppScreen.WifiAccessPointOnboarding ||
-            wifiAccessPointOnboardingJob != null
-        ) {
-            apPassword.fill('\u0000')
-            targetPassword.fill('\u0000')
-            return
-        }
-        if (!localNetworkAccess.isGranted()) {
-            apPassword.fill('\u0000')
-            targetPassword.fill('\u0000')
-            mutableState.update {
-                it.copy(
-                    localNetworkPermission =
-                        LocalNetworkPermissionUiState.AccessPointRationale,
-                    wifiAccessPointOnboarding = WifiAccessPointOnboardingUiState(
-                        noticeKind = WifiAccessPointOnboardingNoticeKind.Rejected,
-                        notice = "Allow local-network access before starting AP onboarding.",
-                    ),
-                )
-            }
-            return
-        }
-        lateinit var created: Job
-        created = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                val result = gateway.connect(endpoint, apPassword, targetSsid, targetPassword)
-                if (activeWifiAccessPointOnboardingGeneration != generation || !foreground) return@launch
-                mutableState.update { current ->
-                    if (current.screen != AppScreen.WifiAccessPointOnboarding) current else {
-                        current.copy(
-                            wifiAccessPointOnboarding = when (result) {
-                                NanoKvmWifiAccessPointOnboardingResult.Applied ->
-                                    WifiAccessPointOnboardingUiState(
-                                        noticeKind = WifiAccessPointOnboardingNoticeKind.Applied,
-                                        notice = "NanoKVM accepted the network request once. Join the target network and connect with a normal profile.",
-                                    )
-                                is NanoKvmWifiAccessPointOnboardingResult.Indeterminate ->
-                                    WifiAccessPointOnboardingUiState(
-                                        noticeKind = WifiAccessPointOnboardingNoticeKind.Indeterminate,
-                                        notice = "The final network state is unknown. The request was not replayed; check the target network before trying again.",
-                                    )
-                                is NanoKvmWifiAccessPointOnboardingResult.Rejected ->
-                                    WifiAccessPointOnboardingUiState(
-                                        noticeKind = WifiAccessPointOnboardingNoticeKind.Rejected,
-                                        notice = "AP onboarding was rejected or could not be established. Check the endpoint and manually entered credentials.",
-                                    )
-                            },
-                        )
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } finally {
-                apPassword.fill('\u0000')
-                targetPassword.fill('\u0000')
-                if (wifiAccessPointOnboardingJob === created) {
-                    wifiAccessPointOnboardingJob = null
-                    mutableState.update { current ->
-                        if (current.screen == AppScreen.WifiAccessPointOnboarding) {
-                            current.copy(
-                                wifiAccessPointOnboarding =
-                                    current.wifiAccessPointOnboarding.copy(
-                                        operationInProgress = false,
-                                    ),
-                            )
-                        } else {
-                            current
-                        }
-                    }
-                }
-            }
-        }
-        wifiAccessPointOnboardingJob = created
-        mutableState.update {
-            it.copy(
-                wifiAccessPointOnboarding = WifiAccessPointOnboardingUiState(
-                    operationInProgress = true,
-                ),
-            )
-        }
-        created.start()
+        mutableState.update { it.copy(screen = screen) }
     }
 
     fun editProfile(profile: HostProfile) {
         if (!profileCatalogIsActionable()) return
         val screen = AppScreen.EditProfile(profile, isNew = false)
         persistRestorableScreen(screen)
-        mutableState.update {
-            it.copy(screen = screen, errorMessage = null)
-        }
+        mutableState.update { it.copy(screen = screen) }
     }
 
     fun saveProfile(profile: HostProfile) {
         if (!profileCatalogIsActionable()) return
+        val mutation = ProfileMutationUiState.Saving(profile.id)
+        mutableState.update { it.copy(profileMutation = mutation) }
         viewModelScope.launch {
             try {
                 val existing = mutableState.value.profiles.firstOrNull { it.id == profile.id }
@@ -469,23 +363,28 @@ class AppViewModel internal constructor(
                     // Never hide credential deletion inside an ordinary profile save. Requiring the
                     // explicit remove action avoids an unresolvable cross-store partial transaction.
                     if (savedCredentialStore.hasCredential(profile.id)) {
-                        mutableState.update {
-                            it.copy(
-                                errorMessage =
-                                    "Remove the saved password before changing the address, HTTPS setting, port, or username.",
-                            )
-                        }
+                        updateWithNotice(
+                            AppNotice.Credential(
+                                CredentialNotice.RemoveBeforeEndpointChange,
+                            ),
+                        )
                         return@launch
                     }
                 }
                 profilesRepository.upsert(profile)
                 persistRestorableScreen(AppScreen.Profiles)
-                mutableState.update { it.copy(screen = AppScreen.Profiles, errorMessage = null) }
+                mutableState.update { it.copy(screen = AppScreen.Profiles) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
+                updateWithNotice(AppNotice.Simple(SimpleNotice.ProfileSaveFailed))
+            } finally {
                 mutableState.update {
-                    it.copy(errorMessage = "The connection was not saved; local storage remains recoverable.")
+                    if (it.profileMutation == mutation) {
+                        it.copy(profileMutation = ProfileMutationUiState.Idle)
+                    } else {
+                        it
+                    }
                 }
             }
         }
@@ -513,46 +412,55 @@ class AppViewModel internal constructor(
                 if (currentScreen is AppScreen.EditProfile && currentScreen.profile.id == profileId) {
                     val updatedScreen = currentScreen.copy(profile = updatedProfile)
                     persistRestorableScreen(updatedScreen)
-                    mutableState.update {
-                        it.copy(screen = updatedScreen, errorMessage = null)
-                    }
+                    mutableState.update { it.copy(screen = updatedScreen) }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(
-                        errorMessage =
-                            "The saved certificate decision was not changed; local storage remains recoverable.",
-                    )
-                }
+                updateWithNotice(
+                    AppNotice.Simple(SimpleNotice.CertificateDecisionUpdateFailed),
+                )
             }
         }
     }
 
     fun deleteProfile(profile: HostProfile) {
         if (!profileCatalogIsActionable()) return
+        val mutation = ProfileMutationUiState.Deleting(profile.id)
+        mutableState.update { it.copy(profileMutation = mutation) }
         viewModelScope.launch {
             try {
-                // Profile deletion is intentionally blocked if credential removal cannot be proven.
-                savedCredentialStore.delete(profile.id)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(errorMessage = "The connection was not deleted because local credential removal could not be verified.")
+                try {
+                    // Profile deletion is intentionally blocked if credential removal cannot be proven.
+                    savedCredentialStore.delete(profile.id)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    updateWithNotice(
+                        AppNotice.Credential(
+                            CredentialNotice.ProfileDeleteCredentialRemovalUnverified,
+                        ),
+                    )
+                    return@launch
                 }
-                return@launch
-            }
-            try {
-                profilesRepository.delete(profile.id)
-                persistRestorableScreen(AppScreen.Profiles)
-                mutableState.update { it.copy(screen = AppScreen.Profiles, errorMessage = null) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
+                try {
+                    profilesRepository.delete(profile.id)
+                    persistRestorableScreen(AppScreen.Profiles)
+                    mutableState.update { it.copy(screen = AppScreen.Profiles) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    updateWithNotice(
+                        AppNotice.Simple(SimpleNotice.ProfileDeleteAfterCredentialRemovalFailed),
+                    )
+                }
+            } finally {
                 mutableState.update {
-                    it.copy(errorMessage = "The protected password was removed, but the connection record could not be deleted.")
+                    if (it.profileMutation == mutation) {
+                        it.copy(profileMutation = ProfileMutationUiState.Idle)
+                    } else {
+                        it
+                    }
                 }
             }
         }
@@ -571,18 +479,14 @@ class AppViewModel internal constructor(
                         profileCatalogResolved = false,
                         profileStorageIssue = null,
                         profileStorageBusy = false,
-                        errorMessage = null,
                     )
                 }
                 startProfileCollection()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(
-                        profileStorageBusy = false,
-                        errorMessage = "Saved connections and credentials could not be reset completely. No recovery was claimed.",
-                    )
+                updateWithNotice(AppNotice.Simple(SimpleNotice.ProfileResetFailed)) {
+                    copy(profileStorageBusy = false)
                 }
             }
         }
@@ -596,7 +500,6 @@ class AppViewModel internal constructor(
                 profileCatalogResolved = false,
                 profileStorageIssue = null,
                 profileStorageBusy = true,
-                errorMessage = null,
             )
         }
         startProfileCollection()
@@ -606,16 +509,13 @@ class AppViewModel internal constructor(
         if (!profileCatalogIsActionable()) return
         if (mutableState.value.credentialPrompt != null || pendingCredentialAction != null) return
         if (!profile.useHttps) {
-            mutableState.update {
-                it.copy(errorMessage = "This connection must be upgraded to HTTPS before connecting.")
-            }
+            updateWithNotice(AppNotice.Core(ConnectionFailure.HttpsRequired))
             return
         }
         if (!localNetworkAccess.isGranted()) {
             mutableState.update {
                 it.copy(
                     localNetworkPermission = LocalNetworkPermissionUiState.Rationale(profile),
-                    errorMessage = null,
                 )
             }
             return
@@ -641,9 +541,6 @@ class AppViewModel internal constructor(
                         LocalNetworkPermissionUiState.Requesting(rationale.profile),
                 )
             }
-            LocalNetworkPermissionUiState.AccessPointRationale -> mutableState.update {
-                it.copy(localNetworkPermission = LocalNetworkPermissionUiState.AccessPointRequesting)
-            }
             else -> Unit
         }
     }
@@ -651,19 +548,13 @@ class AppViewModel internal constructor(
     fun onLocalNetworkPermissionResult(granted: Boolean, canRequestAgain: Boolean) {
         val request = mutableState.value.localNetworkPermission ?: return
         if (granted && localNetworkAccess.isGranted()) {
-            mutableState.update { it.copy(localNetworkPermission = null, errorMessage = null) }
-            if (request is LocalNetworkPermissionUiState.Rationale ||
-                request is LocalNetworkPermissionUiState.Requesting ||
-                request is LocalNetworkPermissionUiState.Denied
-            ) {
-                val profile = when (request) {
-                    is LocalNetworkPermissionUiState.Rationale -> request.profile
-                    is LocalNetworkPermissionUiState.Requesting -> request.profile
-                    is LocalNetworkPermissionUiState.Denied -> request.profile
-                    else -> error("unreachable")
-                }
-                prepareConnection(profile)
+            mutableState.update { it.copy(localNetworkPermission = null) }
+            val profile = when (request) {
+                is LocalNetworkPermissionUiState.Rationale -> request.profile
+                is LocalNetworkPermissionUiState.Requesting -> request.profile
+                is LocalNetworkPermissionUiState.Denied -> request.profile
             }
+            prepareConnection(profile)
             return
         }
         mutableState.update {
@@ -675,12 +566,7 @@ class AppViewModel internal constructor(
                         LocalNetworkPermissionUiState.Denied(request.profile, canRequestAgain)
                     is LocalNetworkPermissionUiState.Denied ->
                         request.copy(canRequestAgain = canRequestAgain)
-                    LocalNetworkPermissionUiState.AccessPointRationale,
-                    LocalNetworkPermissionUiState.AccessPointRequesting,
-                    is LocalNetworkPermissionUiState.AccessPointDenied ->
-                        LocalNetworkPermissionUiState.AccessPointDenied(canRequestAgain)
                 },
-                errorMessage = null,
             )
         }
     }
@@ -690,9 +576,6 @@ class AppViewModel internal constructor(
             is LocalNetworkPermissionUiState.Denied -> mutableState.update {
                 it.copy(localNetworkPermission = LocalNetworkPermissionUiState.Rationale(denied.profile))
             }
-            is LocalNetworkPermissionUiState.AccessPointDenied -> mutableState.update {
-                it.copy(localNetworkPermission = LocalNetworkPermissionUiState.AccessPointRationale)
-            }
             else -> Unit
         }
     }
@@ -701,14 +584,11 @@ class AppViewModel internal constructor(
         val currentState = mutableState.value
         val request = currentState.localNetworkPermission
         if (request != null && localNetworkAccess.isGranted()) {
-            mutableState.update { it.copy(localNetworkPermission = null, errorMessage = null) }
+            mutableState.update { it.copy(localNetworkPermission = null) }
             when (request) {
                 is LocalNetworkPermissionUiState.Rationale -> prepareConnection(request.profile)
                 is LocalNetworkPermissionUiState.Requesting -> prepareConnection(request.profile)
                 is LocalNetworkPermissionUiState.Denied -> prepareConnection(request.profile)
-                LocalNetworkPermissionUiState.AccessPointRationale,
-                LocalNetworkPermissionUiState.AccessPointRequesting,
-                is LocalNetworkPermissionUiState.AccessPointDenied -> Unit
             }
             return
         }
@@ -719,15 +599,6 @@ class AppViewModel internal constructor(
                         request.profile,
                         canRequestAgain,
                     ),
-                )
-            }
-            return
-        }
-        if (request == LocalNetworkPermissionUiState.AccessPointRequesting) {
-            mutableState.update {
-                it.copy(
-                    localNetworkPermission =
-                        LocalNetworkPermissionUiState.AccessPointDenied(canRequestAgain),
                 )
             }
             return
@@ -746,6 +617,7 @@ class AppViewModel internal constructor(
         clearActiveAttempt()
         clearPendingCredentialAction()
         pendingTrustIntent = null
+        consoleSessionDraftOwner.clear()
         persistRestorableScreen(AppScreen.Profiles)
         runCatching { backend.releaseAllInput() }
         mutableState.update {
@@ -757,7 +629,6 @@ class AppViewModel internal constructor(
                     interruptedProfile,
                     canRequestAgain,
                 ),
-                errorMessage = null,
             )
         }
         viewModelScope.launch {
@@ -785,7 +656,6 @@ class AppViewModel internal constructor(
                     screen = AppScreen.Profiles,
                     credentialPrompt = request,
                     passwordEntryProfile = null,
-                    errorMessage = null,
                 )
             }
         } else {
@@ -793,7 +663,6 @@ class AppViewModel internal constructor(
                 it.copy(
                     screen = AppScreen.Profiles,
                     passwordEntryProfile = profile,
-                    errorMessage = null,
                 )
             }
         }
@@ -808,7 +677,7 @@ class AppViewModel internal constructor(
             password.fill('\u0000')
             return
         }
-        mutableState.update { it.copy(passwordEntryProfile = null, errorMessage = null) }
+        mutableState.update { it.copy(passwordEntryProfile = null) }
         if (!savePassword) {
             connect(profile, password)
             return
@@ -830,11 +699,10 @@ class AppViewModel internal constructor(
                 throw cancelled
             } catch (_: Throwable) {
                 clearPendingCredentialAction(action)
-                mutableState.update {
-                    it.copy(
-                        passwordEntryProfile = profile,
-                        errorMessage = "Android could not create a protected credential key.",
-                    )
+                updateWithNotice(
+                    AppNotice.Credential(CredentialNotice.ProtectedKeyCreationFailed),
+                ) {
+                    copy(passwordEntryProfile = profile)
                 }
             }
         }
@@ -853,11 +721,8 @@ class AppViewModel internal constructor(
         if (!profile.useHttps) {
             password.fill('\u0000')
             stagedCredential?.clear()
-            mutableState.update {
-                it.copy(
-                    screen = AppScreen.Profiles,
-                    errorMessage = "This connection must be upgraded to HTTPS before connecting.",
-                )
+            updateWithNotice(AppNotice.Core(ConnectionFailure.HttpsRequired)) {
+                copy(screen = AppScreen.Profiles)
             }
             return
         }
@@ -870,7 +735,6 @@ class AppViewModel internal constructor(
                     screen = AppScreen.Profiles,
                     passwordEntryProfile = null,
                     localNetworkPermission = LocalNetworkPermissionUiState.Rationale(profile),
-                    errorMessage = null,
                 )
             }
             return
@@ -904,11 +768,10 @@ class AppViewModel internal constructor(
                     throw cancelled
                 } catch (_: Throwable) {
                     if (pendingTrustIntent === trustIntent) pendingTrustIntent = null
-                    mutableState.update {
-                        it.copy(
-                            screen = AppScreen.Profiles,
-                            errorMessage = "The certificate decision could not be saved.",
-                        )
+                    updateWithNotice(
+                        AppNotice.Simple(SimpleNotice.CertificateDecisionSaveFailed),
+                    ) {
+                        copy(screen = AppScreen.Profiles)
                     }
                 }
             }
@@ -932,13 +795,14 @@ class AppViewModel internal constructor(
     }
 
     fun cancelToProfiles() {
-        invalidateWifiAccessPointOnboarding()
+        if (mutableState.value.profileMutation != ProfileMutationUiState.Idle) return
         cancelPasswordChange()
         connectJob?.cancel()
         connectJob = null
         clearActiveAttempt()
         clearPendingCredentialAction()
         pendingTrustIntent = null
+        consoleSessionDraftOwner.clear()
         persistRestorableScreen(AppScreen.Profiles)
         runCatching { backend.releaseAllInput() }
         mutableState.update {
@@ -947,7 +811,6 @@ class AppViewModel internal constructor(
                 credentialPrompt = null,
                 passwordEntryProfile = null,
                 localNetworkPermission = null,
-                errorMessage = null,
             )
         }
     }
@@ -958,20 +821,18 @@ class AppViewModel internal constructor(
         connectJob = null
         clearActiveAttempt()
         pendingTrustIntent = null
+        consoleSessionDraftOwner.clear()
         persistRestorableScreen(AppScreen.Profiles)
         runCatching { backend.releaseAllInput() }
         viewModelScope.launch {
             try {
                 backend.disconnect()
-                mutableState.update { it.copy(screen = AppScreen.Profiles, errorMessage = null) }
+                mutableState.update { it.copy(screen = AppScreen.Profiles) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(
-                        screen = AppScreen.Profiles,
-                        errorMessage = "Could not disconnect cleanly. The session was closed locally.",
-                    )
+                updateWithNotice(AppNotice.Simple(SimpleNotice.DisconnectCleanupFailed)) {
+                    copy(screen = AppScreen.Profiles)
                 }
             }
         }
@@ -979,7 +840,6 @@ class AppViewModel internal constructor(
 
     fun setForeground(foreground: Boolean) {
         this.foreground = foreground
-        if (!foreground) invalidateWifiAccessPointOnboarding()
         if (!foreground) backend.releaseAllInput()
         val networkFlowActive = mutableState.value.screen.let { screen ->
             screen is AppScreen.Connecting ||
@@ -998,7 +858,7 @@ class AppViewModel internal constructor(
     /** Called only for a genuine background transition, never configuration recreation. */
     fun clearSensitiveWorkForBackground() {
         foreground = false
-        invalidateWifiAccessPointOnboarding()
+        consoleSessionDraftOwner.clear()
         connectJob?.cancel()
         connectJob = null
         clearActiveAttempt()
@@ -1010,8 +870,7 @@ class AppViewModel internal constructor(
         if (!promptInProgress) cancelPasswordChange()
         val interruptedScreen = mutableState.value.screen
         val mustReturnToProfiles = interruptedScreen is AppScreen.Connecting ||
-            interruptedScreen is AppScreen.ReviewCertificate ||
-            interruptedScreen == AppScreen.WifiAccessPointOnboarding
+            interruptedScreen is AppScreen.ReviewCertificate
         if (mustReturnToProfiles) persistRestorableScreen(AppScreen.Profiles)
         mutableState.update {
             it.copy(
@@ -1020,7 +879,6 @@ class AppViewModel internal constructor(
                 passwordEntryProfile = null,
                 pendingSharedPaste = null,
                 sensitiveWorkGeneration = it.sensitiveWorkGeneration + 1,
-                errorMessage = null,
             )
         }
     }
@@ -1029,16 +887,28 @@ class AppViewModel internal constructor(
         backend.releaseAllInput()
     }
 
-    fun clearError() {
-        mutableState.update { it.copy(errorMessage = null) }
+    fun acknowledgeNotice(expectedId: Long) {
+        mutableState.update { current ->
+            if (current.pendingAppNotices.firstOrNull()?.id == expectedId) {
+                current.copy(pendingAppNotices = current.pendingAppNotices.drop(1))
+            } else {
+                current
+            }
+        }
     }
 
     fun receiveSharedPlainText(payload: ClipboardPayload) {
         if (payload.text.isEmpty()) {
-            mutableState.update { it.copy(errorMessage = "Shared text is empty.") }
+            updateWithNotice(AppNotice.Share(ShareNotice.Empty))
             return
         }
-        mutableState.update { it.copy(pendingSharedPaste = payload) }
+        if (mutableState.value.screen is AppScreen.Console) {
+            mutableState.update { it.copy(pendingSharedPaste = payload) }
+        } else {
+            updateWithNotice(AppNotice.Share(ShareNotice.ChooseConnection)) {
+                copy(pendingSharedPaste = payload)
+            }
+        }
     }
 
     fun consumeSharedPlainText(payload: ClipboardPayload) {
@@ -1047,8 +917,8 @@ class AppViewModel internal constructor(
         }
     }
 
-    fun reportError(message: String) {
-        mutableState.update { it.copy(errorMessage = message) }
+    fun reportShareNotice(notice: ShareNotice) {
+        updateWithNotice(AppNotice.Share(notice))
     }
 
     fun savedCredentialChanged() {
@@ -1069,13 +939,15 @@ class AppViewModel internal constructor(
             try {
                 savedCredentialStore.delete(profileId)
                 val ids = savedCredentialIds(mutableState.value.profiles)
-                mutableState.update { it.copy(savedPasswordProfileIds = ids, errorMessage = null) }
+                mutableState.update { it.copy(savedPasswordProfileIds = ids) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Throwable) {
-                mutableState.update {
-                    it.copy(errorMessage = "Android could not verify that the protected password was removed.")
-                }
+                updateWithNotice(
+                    AppNotice.Credential(
+                        CredentialNotice.ProtectedPasswordRemovalUnverified,
+                    ),
+                )
             }
         }
     }
@@ -1091,16 +963,14 @@ class AppViewModel internal constructor(
         saveProtectedCredential: Boolean,
     ) {
         val profile = (mutableState.value.screen as? AppScreen.Console)?.profile
-        val owner = backend as? NanoKvmPasswordChangeFeatureOwner
+        val owner = backend.features.passwordChange
         if (
             profile == null || owner == null || !foreground ||
             passwordChangeJob != null || pendingPasswordChange != null ||
             pendingCredentialAction != null || mutableState.value.credentialPrompt != null
         ) {
             password.fill('\u0000')
-            mutableState.update {
-                it.copy(errorMessage = "Password change is not available for this session.")
-            }
+            updateWithNotice(AppNotice.Password(PasswordNotice.ChangeUnavailable))
             return
         }
         val authenticationRequest = if (saveProtectedCredential) {
@@ -1109,29 +979,24 @@ class AppViewModel internal constructor(
             null
         }
         val coordinator = owner.createPasswordChangeCoordinator(
-            destination = destination,
-            profile = profile,
-            savedCredentials = savedCredentialStore,
-            profilesRepository = profilesRepository,
-            sessionTerminator = NanoKvmPasswordChangeSessionTerminator(
-                ::terminatePasswordChangeSession,
+            NanoKvmPasswordChangeRequest(
+                destination = destination,
+                profile = profile,
+                savedCredentials = savedCredentialStore,
+                profilesRepository = profilesRepository,
+                sessionTerminator = NanoKvmPasswordChangeSessionTerminator(
+                    ::terminatePasswordChangeSession,
+                ),
             ),
         )
         if (coordinator == null) {
             password.fill('\u0000')
-            mutableState.update {
-                it.copy(
-                    errorMessage =
-                        "The authenticated destination changed. Review the password change again.",
-                )
-            }
+            updateWithNotice(AppNotice.Password(PasswordNotice.DestinationChanged))
             return
         }
 
         activePasswordChangeCoordinator = coordinator
-        mutableState.update {
-            it.copy(passwordChangeInProgress = true, errorMessage = null)
-        }
+        mutableState.update { it.copy(passwordChangeInProgress = true) }
         lateinit var created: Job
         created = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -1208,21 +1073,19 @@ class AppViewModel internal constructor(
         mutableState.update { it.copy(credentialPrompt = null) }
         if (!foreground) {
             clearPendingCredentialAction(action)
-            mutableState.update { it.copy(passwordEntryProfile = null, errorMessage = null) }
+            mutableState.update { it.copy(passwordEntryProfile = null) }
             return
         }
         when (result) {
             is CredentialPromptResult.Authenticated -> completeAuthenticatedCredential(action)
             is CredentialPromptResult.Cancelled -> {
                 clearPendingCredentialAction(action)
-                mutableState.update {
-                    it.copy(passwordEntryProfile = action.profile, errorMessage = null)
-                }
+                mutableState.update { it.copy(passwordEntryProfile = action.profile) }
             }
             is CredentialPromptResult.Failed -> {
                 clearPendingCredentialAction(action)
-                mutableState.update {
-                    it.copy(passwordEntryProfile = action.profile, errorMessage = result.message)
+                updateWithNotice(result.failure.toAppNotice()) {
+                    copy(passwordEntryProfile = action.profile)
                 }
             }
         }
@@ -1237,59 +1100,69 @@ class AppViewModel internal constructor(
         } catch (_: Throwable) {
             mutableState.value.savedPasswordProfileIds
         }
-        val message = when (result) {
+        val notice = when (result) {
             is NanoKvmPasswordChangeResult.Changed ->
                 if (result.localFailures.isEmpty()) {
-                    "NanoKVM credentials changed. Reconnect with the new credentials."
+                    PasswordNotice.Changed
                 } else {
-                    passwordChangeLocalFailureMessage(result.localFailures)
+                    passwordChangeLocalFailureNotice(result.localFailures)
                 }
             is NanoKvmPasswordChangeResult.ManualVerificationRequired ->
-                "The password-change outcome is unknown. The session ended and the saved password was invalidated; reconnect manually and verify which credentials are active."
+                PasswordNotice.ManualVerificationRequired
             is NanoKvmPasswordChangeResult.Rejected ->
-                "NanoKVM rejected the password change. The existing session and saved password were preserved."
+                PasswordNotice.Rejected
             NanoKvmPasswordChangeResult.AuthenticationExpired ->
-                "The NanoKVM session expired. Sign in again; the saved password was not changed."
+                PasswordNotice.SessionExpired
             NanoKvmPasswordChangeResult.InvalidRequest ->
-                "The username or password is not valid for NanoKVM. Nothing was sent."
+                PasswordNotice.InvalidRequest
             NanoKvmPasswordChangeResult.AuthenticationCancelled -> null
             NanoKvmPasswordChangeResult.AuthenticationFailed ->
-                "Android authentication failed. Nothing was sent to NanoKVM."
+                PasswordNotice.AndroidAuthenticationFailed
             NanoKvmPasswordChangeResult.LocalPreparationFailed ->
-                "Android could not prepare the protected replacement. Nothing was sent to NanoKVM."
+                PasswordNotice.LocalPreparationFailed
             NanoKvmPasswordChangeResult.StaleSession ->
-                "The authenticated destination changed. Review the password change again."
+                PasswordNotice.DestinationChanged
             NanoKvmPasswordChangeResult.Busy ->
-                "Another password change is already in progress."
+                PasswordNotice.Busy
             NanoKvmPasswordChangeResult.IgnoredAuthenticationResult -> null
             is NanoKvmPasswordChangeResult.AuthenticationRequired -> null
-        }
-        mutableState.update {
-            it.copy(
-                credentialPrompt = null,
-                passwordChangeInProgress = false,
-                savedPasswordProfileIds = ids,
-                errorMessage = message,
-            )
+        }?.let { AppNotice.Password(it) }
+        if (notice == null) {
+            mutableState.update {
+                it.copy(
+                    credentialPrompt = null,
+                    passwordChangeInProgress = false,
+                    savedPasswordProfileIds = ids,
+                )
+            }
+        } else {
+            updateWithNotice(notice) {
+                copy(
+                    credentialPrompt = null,
+                    passwordChangeInProgress = false,
+                    savedPasswordProfileIds = ids,
+                )
+            }
         }
     }
 
-    private fun passwordChangeLocalFailureMessage(
+    private fun passwordChangeLocalFailureNotice(
         failures: Set<NanoKvmPasswordChangeLocalFailure>,
-    ): String = when {
+    ): PasswordNotice = when {
         NanoKvmPasswordChangeLocalFailure.SESSION_END in failures ->
-            "Credentials changed, but Android could not verify a clean disconnect. Reconnect manually before doing anything else."
+            PasswordNotice.DisconnectUnverified
         NanoKvmPasswordChangeLocalFailure.PROFILE_UPDATE in failures ->
-            "Credentials changed and the session ended, but the saved profile could not be updated. Edit the username before reconnecting."
+            PasswordNotice.ProfileUpdateFailed
         NanoKvmPasswordChangeLocalFailure.CREDENTIAL_COMMIT in failures ||
             NanoKvmPasswordChangeLocalFailure.CREDENTIAL_DELETE in failures ->
-            "Credentials changed and the session ended, but Android could not safely retain the replacement password. Enter it manually when reconnecting."
-        else -> "Credentials changed and the session ended. Verify the local profile before reconnecting."
+            PasswordNotice.CredentialRetentionFailed
+        else -> PasswordNotice.LocalStateUnverified
     }
 
     private suspend fun terminatePasswordChangeSession(
         reason: NanoKvmPasswordChangeSessionEndReason,
     ) {
+        consoleSessionDraftOwner.clear()
         var disconnectFailure: Throwable? = null
         try {
             backend.disconnect()
@@ -1299,21 +1172,23 @@ class AppViewModel internal constructor(
             disconnectFailure = error
         } finally {
             persistRestorableScreen(AppScreen.Profiles)
-            mutableState.update {
-                it.copy(
+            val manualVerificationRequired =
+                reason == NanoKvmPasswordChangeSessionEndReason.OUTCOME_REQUIRES_MANUAL_VERIFICATION
+            val transform: AppUiState.() -> AppUiState = {
+                copy(
                     screen = AppScreen.Profiles,
                     credentialPrompt = null,
                     passwordEntryProfile = null,
                     pendingSharedPaste = null,
-                    errorMessage = if (
-                        reason ==
-                            NanoKvmPasswordChangeSessionEndReason.OUTCOME_REQUIRES_MANUAL_VERIFICATION
-                    ) {
-                        "Reconnect manually and verify which credentials are active."
-                    } else {
-                        it.errorMessage
-                    },
                 )
+            }
+            if (manualVerificationRequired) {
+                updateWithNotice(
+                    AppNotice.Password(PasswordNotice.ManualVerificationRequired),
+                    transform,
+                )
+            } else {
+                mutableState.update { it.transform() }
             }
         }
         disconnectFailure?.let { throw it }
@@ -1345,15 +1220,17 @@ class AppViewModel internal constructor(
                     } else {
                         mutableState.value.savedPasswordProfileIds
                     }
-                    mutableState.update {
-                        it.copy(
+                    val notice = AppNotice.Credential(
+                        if (deletionSucceeded) {
+                            CredentialNotice.SavedPasswordUnlockFailed
+                        } else {
+                            CredentialNotice.SavedPasswordUnlockAndRemovalFailed
+                        },
+                    )
+                    updateWithNotice(notice) {
+                        copy(
                             savedPasswordProfileIds = ids,
                             passwordEntryProfile = action.profile,
-                            errorMessage = if (deletionSucceeded) {
-                                "The saved password could not be unlocked. Enter it again."
-                            } else {
-                                "The saved password could not be unlocked or removed safely. Enter the password manually."
-                            },
                         )
                     }
                 }
@@ -1368,11 +1245,10 @@ class AppViewModel internal constructor(
                     throw cancelled
                 } catch (_: Throwable) {
                     clearPendingCredentialAction(action)
-                    mutableState.update {
-                        it.copy(
-                            passwordEntryProfile = action.profile,
-                            errorMessage = "The password could not be protected by Android Keystore.",
-                        )
+                    updateWithNotice(
+                        AppNotice.Credential(CredentialNotice.PasswordProtectionFailed),
+                    ) {
+                        copy(passwordEntryProfile = action.profile)
                     }
                 }
             }
@@ -1406,18 +1282,13 @@ class AppViewModel internal constructor(
                 block()
             } catch (cancelled: CancellationException) {
                 if (finishAttemptIfOwned(attempt, request)) {
-                    mutableState.update {
-                        it.copy(screen = AppScreen.Profiles, errorMessage = null)
-                    }
+                    mutableState.update { it.copy(screen = AppScreen.Profiles) }
                 }
                 throw cancelled
             } catch (_: Throwable) {
                 if (finishAttemptIfOwned(attempt, request)) {
-                    mutableState.update {
-                        it.copy(
-                            screen = AppScreen.Profiles,
-                            errorMessage = UNEXPECTED_CONNECTION_ERROR,
-                        )
+                    updateWithNotice(AppNotice.Core(ConnectionFailure.Unexpected)) {
+                        copy(screen = AppScreen.Profiles)
                     }
                 }
             } finally {
@@ -1437,7 +1308,6 @@ class AppViewModel internal constructor(
                     it.copy(
                         screen = AppScreen.Connecting(intent.profile),
                         passwordEntryProfile = null,
-                        errorMessage = null,
                     )
                 }
                 val outcome = backend.preflightTrust(intent.profile)
@@ -1450,13 +1320,12 @@ class AppViewModel internal constructor(
                     is TrustPreflightOutcome.CertificateReviewRequired -> mutableState.update {
                         it.copy(
                             screen = AppScreen.ReviewCertificate(intent.profile, outcome.certificate),
-                            errorMessage = null,
                         )
                     }
                     is TrustPreflightOutcome.Failed -> {
                         pendingTrustIntent = null
-                        mutableState.update {
-                            it.copy(screen = AppScreen.Profiles, errorMessage = outcome.userMessage)
+                        updateWithNotice(AppNotice.Core(outcome.failure)) {
+                            copy(screen = AppScreen.Profiles)
                         }
                     }
                 }
@@ -1465,11 +1334,10 @@ class AppViewModel internal constructor(
             } catch (_: Throwable) {
                 if (pendingTrustIntent === intent) {
                     pendingTrustIntent = null
-                    mutableState.update {
-                        it.copy(
-                            screen = AppScreen.Profiles,
-                            errorMessage = "The HTTPS certificate could not be checked.",
-                        )
+                    updateWithNotice(
+                        AppNotice.Core(ConnectionFailure.CertificateInspectionFailed),
+                    ) {
+                        copy(screen = AppScreen.Profiles)
                     }
                 }
             } finally {
@@ -1484,9 +1352,7 @@ class AppViewModel internal constructor(
         request: ConnectRequest,
     ) {
         if (!owns(attempt, request)) return
-        mutableState.update {
-            it.copy(screen = AppScreen.Connecting(request.profile), errorMessage = null)
-        }
+        mutableState.update { it.copy(screen = AppScreen.Connecting(request.profile)) }
         val outcome = backend.connect(request)
         // A transport is allowed to finish after cancellation. Such an outcome must never mutate
         // UI state or commit a staged credential belonging to a newer attempt/phase.
@@ -1512,36 +1378,41 @@ class AppViewModel internal constructor(
                     mutableState.value.savedPasswordProfileIds
                 }
                 if (!finishAttemptIfOwned(attempt, request)) return
-                mutableState.update {
-                    it.copy(
-                        screen = AppScreen.Console(request.profile),
-                        savedPasswordProfileIds = savedPasswordProfileIds,
-                        errorMessage = if (saveError == null) {
-                            null
-                        } else {
-                            "Connected, but Android could not save the protected password."
-                        },
-                    )
+                if (saveError == null) {
+                    mutableState.update {
+                        it.copy(
+                            screen = AppScreen.Console(request.profile),
+                            savedPasswordProfileIds = savedPasswordProfileIds,
+                        )
+                    }
+                } else {
+                    updateWithNotice(
+                        AppNotice.Credential(CredentialNotice.ConnectedPasswordSaveFailed),
+                    ) {
+                        copy(
+                            screen = AppScreen.Console(request.profile),
+                            savedPasswordProfileIds = savedPasswordProfileIds,
+                        )
+                    }
                 }
             }
             is ConnectOutcome.CertificateReviewRequired -> mutableState.update {
                 it.copy(
                     screen = AppScreen.ReviewCertificate(request.profile, outcome.certificate),
-                    errorMessage = null,
                 )
             }
             is ConnectOutcome.Failed -> {
                 // A failed replacement never overwrites the last working saved credential.
                 if (!finishAttemptIfOwned(attempt, request)) return
-                mutableState.update {
-                    it.copy(screen = AppScreen.Profiles, errorMessage = outcome.userMessage)
+                updateWithNotice(AppNotice.Core(outcome.failure)) {
+                    copy(screen = AppScreen.Profiles)
                 }
             }
         }
     }
 
     override fun onCleared() {
-        invalidateWifiAccessPointOnboarding()
+        consoleSessionDraftOwner.close()
         cancelPasswordChange()
         connectJob?.cancel()
         connectJob = null
@@ -1611,15 +1482,6 @@ class AppViewModel internal constructor(
         RestorableAppScreenState.persist(savedStateHandle, screen)
     }
 
-    private fun invalidateWifiAccessPointOnboarding() {
-        activeWifiAccessPointOnboardingGeneration = null
-        wifiAccessPointOnboardingGateway = null
-        wifiAccessPointOnboardingJob?.cancel(
-            CancellationException("Wi-Fi AP onboarding generation invalidated"),
-        )
-        wifiAccessPointOnboardingJob = null
-    }
-
     private fun cancelPasswordChange() {
         pendingPasswordChange = null
         activePasswordChangeCoordinator?.invalidate()
@@ -1629,11 +1491,6 @@ class AppViewModel internal constructor(
         mutableState.update {
             it.copy(credentialPrompt = null, passwordChangeInProgress = false)
         }
-    }
-
-    private companion object {
-        const val UNEXPECTED_CONNECTION_ERROR =
-            "The NanoKVM connection stopped unexpectedly. Please try again."
     }
 }
 
@@ -1666,7 +1523,6 @@ internal object RestorableAppScreenState {
                 savedStateHandle[STATE_SCREEN_KIND] = SCREEN_PROFILES
                 editStateKeys.forEach { key -> savedStateHandle.remove<Any?>(key) }
             }
-            AppScreen.WifiAccessPointOnboarding -> persist(savedStateHandle, AppScreen.Profiles)
             is AppScreen.EditProfile -> {
                 savedStateHandle[STATE_SCREEN_KIND] = SCREEN_EDIT_PROFILE
                 savedStateHandle[STATE_EDIT_IS_NEW] = screen.isNew

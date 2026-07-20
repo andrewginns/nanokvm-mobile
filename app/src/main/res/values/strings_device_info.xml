@@ -12,9 +12,55 @@
     <string name="console_device_network_interface_fallback">Interface %1$d</string>
     <string name="console_device_not_reported">Not reported</string>
     <string name="console_device_capabilities">Capabilities</string>
-    <string name="console_device_capability_summary">%1$d available · %2$d unavailable · %3$d needs a runtime check</string>
+    <string name="console_device_capability_summary">%1$s · %2$s · %3$s</string>
+    <plurals name="console_device_capability_available_count">
+        <item quantity="one">%1$d available</item>
+        <item quantity="other">%1$d available</item>
+    </plurals>
+    <plurals name="console_device_capability_unavailable_count">
+        <item quantity="one">%1$d unavailable</item>
+        <item quantity="other">%1$d unavailable</item>
+    </plurals>
+    <plurals name="console_device_capability_runtime_check_count">
+        <item quantity="one">%1$d needs a runtime check</item>
+        <item quantity="other">%1$d need a runtime check</item>
+    </plurals>
     <string name="console_device_capability_available">Available</string>
     <string name="console_device_capability_unavailable">Unavailable</string>
     <string name="console_device_capability_unknown">Needs runtime check</string>
     <string name="console_device_capabilities_not_probed">Capability information is not available for this session.</string>
+    <string name="console_device_capability_vm_information">VM information</string>
+    <string name="console_device_capability_hardware_information">Hardware information</string>
+    <string name="console_device_capability_gpio_status">GPIO status</string>
+    <string name="console_device_capability_gpio_control">GPIO control</string>
+    <string name="console_device_capability_stream_configuration">Stream configuration</string>
+    <string name="console_device_capability_direct_h264">Direct H.264</string>
+    <string name="console_device_capability_standard_hid_websocket">Standard HID WebSocket</string>
+    <string name="console_device_capability_server_batch_paste">Server batch paste</string>
+    <string name="console_device_capability_saved_hid_shortcuts">Saved HID shortcuts</string>
+    <string name="console_device_capability_hid_leader_key">HID leader key</string>
+    <string name="console_device_capability_mouse_back_forward">Mouse Back and Forward</string>
+    <string name="console_device_capability_memory_limit_configuration">Memory limit configuration</string>
+    <string name="console_device_capability_pcie_hdmi_reset">PCIe HDMI reset</string>
+    <string name="console_device_capability_pcie_hdmi_control">PCIe HDMI control</string>
+    <string name="console_device_capability_mouse_jiggler">Mouse jiggler</string>
+    <string name="console_device_capability_swap_configuration">Swap configuration</string>
+    <string name="console_device_capability_tls_enable">TLS enable</string>
+    <string name="console_device_capability_virtual_usb_device_configuration">Virtual USB device configuration</string>
+    <string name="console_device_capability_offline_update">Offline update</string>
+    <string name="console_device_capability_virtual_media_upload">Virtual media upload</string>
+    <string name="console_device_capability_virtual_media_mount">Virtual media mount</string>
+    <string name="console_device_capability_wake_on_lan">Wake-on-LAN</string>
+    <string name="console_device_capability_wifi_configuration">Wi-Fi configuration</string>
+    <string name="console_device_capability_tailscale_extension">Tailscale extension</string>
+    <string name="console_device_capability_oled_configuration">OLED configuration</string>
+    <string name="console_device_capability_terminal">Terminal</string>
+    <string name="console_device_capability_script_runner">Script runner</string>
+    <string name="console_device_capability_autostart_scripts">Autostart scripts</string>
+    <string name="console_device_capability_resolution_640_x_480">Resolution 640 x 480</string>
+    <string name="console_device_capability_picoclaw">PicoClaw</string>
+    <string name="console_device_capability_dns_configuration">DNS configuration</string>
+    <string name="console_device_capability_french_keyboard_mapping">French keyboard mapping</string>
+    <string name="console_device_capability_capture_status_reporting">Capture status reporting</string>
+    <string name="console_device_capability_lt6911d_capture">LT6911D capture</string>
 </resources>

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -150,7 +151,7 @@ fun ConsoleKeyboard(
                                 ),
                             )
                         },
-                        modifier = Modifier.height(48.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
                         colors = consoleFilterChipColors(),
                     )
                     KeyChip(stringResource(R.string.console_view_top)) {
@@ -215,7 +216,7 @@ fun ConsoleKeyboard(
                         selected = showFunctionKeys,
                         onClick = { showFunctionKeys = !showFunctionKeys },
                         label = { Text(stringResource(R.string.console_function_keys)) },
-                        modifier = Modifier.height(48.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
                         colors = consoleFilterChipColors(),
                     )
                     IconButton(
@@ -257,7 +258,7 @@ private fun KeyChip(label: String, onClick: () -> Unit) {
     AssistChip(
         onClick = onClick,
         label = { Text(label) },
-        modifier = Modifier.height(48.dp),
+        modifier = Modifier.heightIn(min = 48.dp),
         colors = AssistChipDefaults.assistChipColors(
             containerColor = consoleColors.controlSurfaceElevated,
             labelColor = consoleColors.onSurface,
@@ -285,7 +286,7 @@ private fun ModifierChip(label: String, mode: ModifierMode, onClick: () -> Unit)
                 },
             )
         },
-        modifier = Modifier.height(48.dp),
+        modifier = Modifier.heightIn(min = 48.dp),
         colors = consoleFilterChipColors(),
     )
 }

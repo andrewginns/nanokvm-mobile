@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.runtime.CertificateDetails
+import org.nanokvm.mobile.ui.displayText
 
 private val CertificateContentMaxWidth = 640.dp
 
@@ -133,7 +134,10 @@ fun CertificateReviewScreen(
                                 ),
                                 style = MaterialTheme.typography.titleMedium,
                             )
-                            Text(certificate.reason, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                certificate.reason.displayText(),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                     }
                 }
@@ -148,6 +152,19 @@ fun CertificateReviewScreen(
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (certificate.metadataTruncated) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.certificate_metadata_truncated_warning),
+                            modifier = Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier

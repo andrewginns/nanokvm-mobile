@@ -2,7 +2,12 @@ package org.nanokvm.mobile.data
 
 import android.content.Context
 import androidx.datastore.core.CorruptionException
+import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
@@ -17,12 +22,22 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private val Context.profileDataStore by preferencesDataStore(name = "nanokvm_profiles")
+private val profileStorageCorruptedKey = booleanPreferencesKey("profile_storage_corrupted")
+
+internal val profilePreferencesCorruptionHandler: ReplaceFileCorruptionHandler<Preferences> =
+    ReplaceFileCorruptionHandler {
+        mutablePreferencesOf(profileStorageCorruptedKey to true)
+    }
+
+private val Context.profileDataStore by preferencesDataStore(
+    name = "nanokvm_profiles",
+    corruptionHandler = profilePreferencesCorruptionHandler,
+)
 
 sealed interface ProfileCatalogState {
     data class Ready(val profiles: List<HostProfile>) : ProfileCatalogState
-    data class Corrupted(val userMessage: String) : ProfileCatalogState
-    data class Unavailable(val userMessage: String) : ProfileCatalogState
+    data object Corrupted : ProfileCatalogState
+    data object Unavailable : ProfileCatalogState
 }
 
 interface ProfilesRepository {
@@ -32,14 +47,22 @@ interface ProfilesRepository {
     suspend fun reset()
 }
 
-class ProfileRepository(
-    private val context: Context,
+class ProfileRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ProfilesRepository {
+    constructor(
+        context: Context,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ) : this(context.profileDataStore, ioDispatcher)
+
     private val profilesKey = stringPreferencesKey("profiles_v1")
 
-    override val profiles: Flow<ProfileCatalogState> = context.profileDataStore.data
+    override val profiles: Flow<ProfileCatalogState> = dataStore.data
         .map { preferences ->
+            if (preferences[profileStorageCorruptedKey] == true) {
+                return@map corruptedProfileCatalogState()
+            }
             val encoded = preferences[profilesKey]
             if (encoded == null) {
                 ProfileCatalogState.Ready(emptyList())
@@ -49,33 +72,24 @@ class ProfileRepository(
                         ProfileCatalogState.Ready(decoded)
                     },
                     onFailure = {
-                        ProfileCatalogState.Corrupted(
-                            "Saved connections are damaged. Reset them before making changes.",
-                        )
+                        corruptedProfileCatalogState()
                     },
                 )
             }
         }
         .catch { error ->
             when (error) {
-                is CorruptionException -> emit(
-                    ProfileCatalogState.Corrupted(
-                        "Saved connections are damaged. Reset them before making changes.",
-                    ),
-                )
-                is IOException -> emit(
-                    ProfileCatalogState.Unavailable(
-                        "Saved connections cannot be read right now. No data has been changed.",
-                    ),
-                )
+                is CorruptionException -> emit(corruptedProfileCatalogState())
+                is IOException -> emit(ProfileCatalogState.Unavailable)
                 else -> throw error
             }
         }
         .flowOn(ioDispatcher)
 
     override suspend fun upsert(profile: HostProfile) = withContext(ioDispatcher) {
-        context.profileDataStore.edit { preferences ->
-            val current = decodeForWrite(preferences[profilesKey]).toMutableList()
+        ProfileInputPolicy.requireValid(profile)
+        dataStore.edit { preferences ->
+            val current = decodeForWrite(preferences).toMutableList()
             val index = current.indexOfFirst { it.id == profile.id }
             if (index >= 0) current[index] = profile else current += profile
             preferences[profilesKey] = ProfileCodec.encode(current)
@@ -84,35 +98,36 @@ class ProfileRepository(
     }
 
     override suspend fun delete(profileId: String) = withContext(ioDispatcher) {
-        context.profileDataStore.edit { preferences ->
-            val remaining = decodeForWrite(preferences[profilesKey]).filterNot { it.id == profileId }
+        dataStore.edit { preferences ->
+            val remaining = decodeForWrite(preferences).filterNot { it.id == profileId }
             preferences[profilesKey] = ProfileCodec.encode(remaining)
         }
         Unit
     }
 
     override suspend fun reset() = withContext(ioDispatcher) {
-        context.profileDataStore.edit { preferences ->
+        dataStore.edit { preferences ->
+            preferences.remove(profileStorageCorruptedKey)
             preferences[profilesKey] = ProfileCodec.encode(emptyList())
         }
         Unit
     }
 
-    private fun decodeForWrite(encoded: String?): List<HostProfile> {
+    private fun decodeForWrite(preferences: Preferences): List<HostProfile> {
+        if (preferences[profileStorageCorruptedKey] == true) {
+            throw ProfileStorageCorruptedException()
+        }
+        val encoded = preferences[profilesKey]
         if (encoded == null) return emptyList()
         return ProfileCodec.decode(encoded).getOrElse { error ->
-            throw ProfileStorageCorruptedException(
-                "Profile storage must be reset before it can be changed.",
-                error,
-            )
+            throw ProfileStorageCorruptedException(error)
         }
     }
 }
 
 class ProfileStorageCorruptedException(
-    message: String,
     cause: Throwable? = null,
-) : Exception(message, cause)
+) : Exception("Profile storage is corrupt and requires reset", cause)
 
 internal object ProfileCodec {
     private val json = Json {
@@ -121,7 +136,12 @@ internal object ProfileCodec {
     }
 
     fun encode(profiles: List<HostProfile>): String = json.encodeToString(
-        profiles.map(ProfileRecord::fromDomain),
+        profiles.map { profile ->
+            // Untouched HTTP records from an older app version remain readable until the editor
+            // upgrades them. New and edited records are rejected by ProfileRepository.upsert.
+            ProfileInputPolicy.requireValid(ProfileInputPolicy.prospectiveHttps(profile))
+            ProfileRecord.fromDomain(profile)
+        },
     )
 
     fun decode(encoded: String): Result<List<HostProfile>> = runCatching {
@@ -140,10 +160,7 @@ private data class ProfileRecord(
     @SerialName("certificate") val trustedCertificateSha256: String? = null,
 ) {
     fun toDomain(): HostProfile {
-        require(id.isNotBlank()) { "Profile ID must not be blank" }
-        require(host.isNotBlank()) { "Profile host must not be blank" }
-        require(port in 1..65_535) { "Profile port is invalid" }
-        return HostProfile(
+        val profile = HostProfile(
             id = id,
             name = name,
             host = host,
@@ -152,6 +169,8 @@ private data class ProfileRecord(
             username = username,
             trustedCertificateSha256 = trustedCertificateSha256,
         )
+        ProfileInputPolicy.requireValid(ProfileInputPolicy.prospectiveHttps(profile))
+        return profile
     }
 
     companion object {
@@ -166,3 +185,5 @@ private data class ProfileRecord(
         )
     }
 }
+
+private fun corruptedProfileCatalogState() = ProfileCatalogState.Corrupted

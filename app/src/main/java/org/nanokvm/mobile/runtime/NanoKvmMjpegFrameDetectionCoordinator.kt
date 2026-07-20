@@ -17,7 +17,7 @@ internal class NanoKvmMjpegFrameDetectionCoordinator(
     private val scope: CoroutineScope,
     private val currentBinding: () -> NanoKvmSessionBinding?,
     private val onAuthenticationExpired: (NanoKvmSessionBinding) -> Unit,
-    private val onRejected: (String) -> Unit,
+    private val onRejected: (ConsoleMessage.ActionFeedback) -> Unit,
 ) {
     private val lock = Any()
     private val lifecycle = SessionBoundFeatureLifecycle<NanoKvmMjpegFrameDetectionGateway>()
@@ -70,7 +70,7 @@ internal class NanoKvmMjpegFrameDetectionCoordinator(
         preferenceEnabled = enabled
         val installed = installedGateway() ?: run {
             if (currentBinding() != null) {
-                onRejected("MJPEG frame detection is unavailable for this session.")
+                onRejected(ConsoleMessage.MjpegFrameDetectionUnavailable)
             }
             return
         }
@@ -162,10 +162,8 @@ internal class NanoKvmMjpegFrameDetectionCoordinator(
             MjpegFrameDetectionFailure.SERVER_REJECTED,
             MjpegFrameDetectionFailure.CONNECTION,
             MjpegFrameDetectionFailure.INVALID_RESPONSE,
-            MjpegFrameDetectionFailure.UNEXPECTED -> onRejected(
-                "NanoKVM did not acknowledge the MJPEG frame-detection request. " +
-                    "The request was not retried.",
-            )
+            MjpegFrameDetectionFailure.UNEXPECTED ->
+                onRejected(ConsoleMessage.MjpegFrameDetectionNotAcknowledged)
         }
     }
 

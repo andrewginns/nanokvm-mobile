@@ -12,9 +12,9 @@ keyboard, and controls that remain reachable in portrait and landscape.
 > It controls real keyboard, mouse, reset, and power hardware. Review the
 > target device before using guarded actions.
 
-## 0.3.0 development milestone
+## 0.3.2 development milestone
 
-The current source milestone is **0.3.0** (Android version code **7**). It is a
+The current source milestone is **0.3.2** (Android version code **9**). It is a
 development candidate, not an approved or signed public release. The feature
 list below describes implemented source; capability-gated features still need
 the device, appliance, and signed-candidate evidence recorded in the parity
@@ -43,7 +43,7 @@ ledger before they can be described as release-verified.
   generation-bound confirmations.
 - Native appliance administration for updates (including a transient offline
   package picker), reboot, HDMI/OLED/HID, SSH, hostname/mDNS/title, memory/swap,
-  DNS, manual Wi-Fi/AP onboarding, TLS enablement, and Tailscale.
+  DNS, authenticated manual Wi-Fi administration, TLS enablement, and Tailscale.
 - Foreground-only system/serial terminals, bounded custom-script management,
   HID shortcut recording, leader-key controls, and autostart script editing.
 - An explicit WebRTC-first transport preference with fresh direct-H.264 and
@@ -79,10 +79,12 @@ validity before showing certificate metadata. Application traffic never uses
 that inspection client. The app installs no global CA and has no reusable or
 global trust-all transport.
 
-Authenticated profiles are HTTPS-only. The sole cleartext exception is the
-explicit, pre-authentication access-point onboarding flow opened from the Wi-Fi
-action on the connection catalogue; it never carries an account cookie or saved
-credential and does not create an HTTP profile.
+The NanoKVM origin, authenticated signaling, and application control traffic
+require HTTPS. Initial access-point Wi-Fi setup must be completed through a
+trusted NanoKVM setup interface before creating an app profile. Self-signed
+appliances remain supported through explicit certificate review and per-profile
+pinning. Explicit WebRTC mode may additionally contact appliance-supplied
+STUN/STUNS/TURN/TURNS peers during ICE negotiation.
 
 ## Install and update
 
@@ -108,12 +110,28 @@ Production artifacts must be signed outside the repository with the approved,
 stable release identity and pass [the release checklist](docs/RELEASE_CHECKLIST.md).
 Never commit a signing key or its credentials.
 
+For an in-place update of a previously shared development build, use the
+fail-closed local builder and supply the preceding APK:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File .\scripts\build-development-update.ps1 `
+    -PreviousApk .\dist\NanoKVM-Mobile-0.3.1-update-compatible-debug.apk
+```
+
+The builder selects a keystore only from its explicit argument,
+`NANOKVM_DEVELOPMENT_KEYSTORE`, or the current Windows account's `.android`
+directory, and rejects any keystore path inside the repository. It then rejects
+a package mismatch, a different signer, a version code that does not increase,
+or an attempt to replace an existing versioned output with different bytes. The
+key remains outside the repository.
+
 ## Find your way around
 
 1. On the connection catalogue, use **Add a NanoKVM profile** to enter the
    hostname or IP address, HTTPS port, and username. The top actions also provide
-   **Set up NanoKVM Wi-Fi in access-point mode**, **Appearance**, and **About and
-   open-source licence**.
+   **Appearance** and **About and open-source licence**. Complete initial
+   access-point Wi-Fi setup through a trusted NanoKVM setup interface first.
 2. Choose **Connect**, review an untrusted private certificate if prompted, then
    enter the NanoKVM password. Password saving is a separate opt-in choice.
 3. On the console, the floating actions provide **Show keyboard**, **Type phone

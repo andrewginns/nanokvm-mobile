@@ -38,7 +38,7 @@ class AppContainer(context: Context) {
     }
 
     val backendFactory: ConsoleBackendFactory = ConsoleBackendFactory {
-        NanoKvmConsoleBackend(NanoKvmWebRtcRuntime.get(applicationContext))
+        NanoKvmConsoleBackend { NanoKvmWebRtcRuntime.get(applicationContext) }
     }
 }
 

@@ -36,9 +36,9 @@ import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.OpenWith
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
@@ -53,10 +53,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
@@ -116,11 +118,11 @@ fun RemoteViewport(
     videoSurface: VideoSurfaceSink,
     remoteWidth: Int,
     remoteHeight: Int,
-    inputGeneration: Long = 0,
     videoSurfaceGeneration: Long,
     pointerMode: PointerMode,
     fitRequest: Int,
     modifier: Modifier = Modifier,
+    inputGeneration: Long = 0,
     viewNavigationVisible: Boolean = false,
     keyboardVisible: Boolean = false,
     viewportCommand: ViewportCommand? = null,
@@ -132,6 +134,8 @@ fun RemoteViewport(
     val normalizedScrollSensitivity = normalizeScrollSensitivity(scrollSensitivity)
     var localSize by remember { mutableStateOf(IntSize.Zero) }
     val transformState = rememberSaveable(
+        remoteWidth,
+        remoteHeight,
         saver = viewportTransformStateSaver(remoteWidth, remoteHeight),
     ) {
         mutableStateOf(
@@ -143,23 +147,29 @@ fun RemoteViewport(
         )
     }
     LaunchedEffect(remoteWidth, remoteHeight) {
-        transformState.value = ViewportTransform.fit(
-            remoteWidth = remoteWidth,
-            remoteHeight = remoteHeight,
-            viewport = transformState.value.viewport,
-        )
         onZoomChanged(transformState.value.zoom)
     }
     val transform = transformState.value
     var lastDirectAnchor by remember(remoteWidth, remoteHeight) {
         mutableStateOf<RemotePoint?>(null)
     }
+    var accessibilityPointer by remember(remoteWidth, remoteHeight) {
+        mutableStateOf(RemotePoint(remoteWidth / 2f, remoteHeight / 2f))
+    }
     var lastDirectAnchorAtMillis by remember { mutableLongStateOf(0L) }
     var keyboardFramingActive by remember { mutableStateOf(false) }
+    var handledFitRequest by rememberSaveable(
+        inputGeneration,
+        remoteWidth,
+        remoteHeight,
+    ) { mutableIntStateOf(fitRequest) }
     LaunchedEffect(fitRequest) {
-        keyboardFramingActive = false
-        transformState.value = transformState.value.fit()
-        onZoomChanged(transformState.value.zoom)
+        if (fitRequest != handledFitRequest) {
+            handledFitRequest = fitRequest
+            keyboardFramingActive = false
+            transformState.value = transformState.value.fit()
+            onZoomChanged(transformState.value.zoom)
+        }
     }
     LaunchedEffect(keyboardVisible) {
         if (!keyboardVisible) {
@@ -178,6 +188,7 @@ fun RemoteViewport(
     fun absoluteAt(offset: Offset, buttons: Set<MouseButton> = emptySet()): Boolean {
         val point = transformState.value.screenToRemote(FloatPoint(offset.x, offset.y)) ?: return false
         lastDirectAnchor = point
+        accessibilityPointer = point
         lastDirectAnchorAtMillis = SystemClock.elapsedRealtime()
         if (keyboardVisible) keyboardFramingActive = false
         val hid = point.toHidAbsolute(remoteWidth, remoteHeight)
@@ -194,6 +205,31 @@ fun RemoteViewport(
     fun clickCurrentCursor(button: MouseButton) {
         input.mouseButton(button, true)
         input.mouseButton(button, false)
+    }
+
+    fun movePointerForAccessibility(deltaX: Int, deltaY: Int): Boolean {
+        if (pointerMode == PointerMode.Trackpad) {
+            input.moveRelative(deltaX, deltaY)
+            return true
+        }
+        accessibilityPointer = RemotePoint(
+            x = (accessibilityPointer.x + deltaX).coerceIn(0f, (remoteWidth - 1).coerceAtLeast(0).toFloat()),
+            y = (accessibilityPointer.y + deltaY).coerceIn(0f, (remoteHeight - 1).coerceAtLeast(0).toFloat()),
+        )
+        lastDirectAnchor = accessibilityPointer
+        lastDirectAnchorAtMillis = SystemClock.elapsedRealtime()
+        val hid = accessibilityPointer.toHidAbsolute(remoteWidth, remoteHeight)
+        input.moveAbsolute(hid.x, hid.y)
+        return true
+    }
+
+    fun clickPointerForAccessibility(button: MouseButton): Boolean {
+        if (pointerMode == PointerMode.Direct) {
+            val hid = accessibilityPointer.toHidAbsolute(remoteWidth, remoteHeight)
+            input.moveAbsolute(hid.x, hid.y)
+        }
+        clickCurrentCursor(button)
+        return true
     }
 
     fun panView(delta: FloatPoint) {
@@ -233,6 +269,14 @@ fun RemoteViewport(
     // Reset synchronously when the navigation pad is hidden or re-docked. An asynchronous
     // LaunchedEffect can race the first expand tap after re-docking and immediately collapse it.
     var viewControlsVisible by remember(viewNavigationVisible) { mutableStateOf(false) }
+
+    val remotePointerDescription = stringResource(R.string.console_remote_pointer)
+    val movePointerLeftLabel = stringResource(R.string.console_move_pointer_left)
+    val movePointerRightLabel = stringResource(R.string.console_move_pointer_right)
+    val movePointerUpLabel = stringResource(R.string.console_move_pointer_up)
+    val movePointerDownLabel = stringResource(R.string.console_move_pointer_down)
+    val clickPointerLabel = stringResource(R.string.console_click_pointer)
+    val rightClickPointerLabel = stringResource(R.string.console_right_click_pointer)
 
     val normalViewNavigationPosition = rememberSaveable { mutableFloatStateOf(1f) }
     val imeViewNavigationPosition = remember { mutableFloatStateOf(1f) }
@@ -314,6 +358,29 @@ fun RemoteViewport(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("remote-input-layer")
+                    .semantics {
+                        contentDescription = remotePointerDescription
+                        customActions = listOf(
+                            CustomAccessibilityAction(movePointerLeftLabel) {
+                                movePointerForAccessibility(-ACCESSIBILITY_POINTER_STEP, 0)
+                            },
+                            CustomAccessibilityAction(movePointerRightLabel) {
+                                movePointerForAccessibility(ACCESSIBILITY_POINTER_STEP, 0)
+                            },
+                            CustomAccessibilityAction(movePointerUpLabel) {
+                                movePointerForAccessibility(0, -ACCESSIBILITY_POINTER_STEP)
+                            },
+                            CustomAccessibilityAction(movePointerDownLabel) {
+                                movePointerForAccessibility(0, ACCESSIBILITY_POINTER_STEP)
+                            },
+                            CustomAccessibilityAction(clickPointerLabel) {
+                                clickPointerForAccessibility(MouseButton.Left)
+                            },
+                            CustomAccessibilityAction(rightClickPointerLabel) {
+                                clickPointerForAccessibility(MouseButton.Right)
+                            },
+                        )
+                    }
                     .pointerInput(
                         input,
                         inputGeneration,
@@ -451,8 +518,8 @@ fun RemoteViewport(
                     },
                     input = input,
                     scrollSensitivity = normalizedScrollSensitivity,
-                    onPan = ::panView,
-                    onZoom = ::zoomView,
+                    onPan = { delta -> panView(delta) },
+                    onZoom = { multiplier -> zoomView(multiplier) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("view-navigation-panel")
@@ -489,9 +556,9 @@ fun RemoteViewport(
                     .zIndex(3f),
             ) {
                 ViewNavigationControls(
-                    onPan = ::panView,
-                    onZoom = ::zoomView,
-                    onFit = ::fitView,
+                    onPan = { delta -> panView(delta) },
+                    onZoom = { multiplier -> zoomView(multiplier) },
+                    onFit = { fitView() },
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .onSizeChanged { viewNavigationControlsSize = it },
@@ -501,29 +568,52 @@ fun RemoteViewport(
     }
 }
 
+@Composable
+private fun <T> rememberReferentiallyUpdatedState(newValue: T): MutableState<T> =
+    remember { mutableStateOf(newValue, referentialEqualityPolicy()) }.also { state ->
+        state.value = newValue
+    }
+
 private fun viewportTransformStateSaver(
     remoteWidth: Int,
     remoteHeight: Int,
 ): Saver<MutableState<ViewportTransform>, FloatArray> = Saver(
     save = { state ->
-        floatArrayOf(state.value.zoom, state.value.pan.x, state.value.pan.y)
+        floatArrayOf(
+            state.value.zoom,
+            state.value.pan.x,
+            state.value.pan.y,
+            state.value.viewport.width,
+            state.value.viewport.height,
+        )
     },
     restore = { values ->
+        val savedViewport = FloatSize(
+            values.getOrElse(3) { 0f }.positiveFiniteOrZero(),
+            values.getOrElse(4) { 0f }.positiveFiniteOrZero(),
+        )
         mutableStateOf(
             ViewportTransform.fit(
                 remoteWidth = remoteWidth,
                 remoteHeight = remoteHeight,
-                viewport = FloatSize(0f, 0f),
+                viewport = savedViewport,
             ).copy(
-                zoom = values.getOrElse(0) { 1f },
+                zoom = values.getOrElse(0) { 1f }
+                    .takeIf(Float::isFinite)
+                    ?.coerceIn(ViewportTransform.MIN_ZOOM, ViewportTransform.MAX_ZOOM)
+                    ?: 1f,
                 pan = FloatPoint(
-                    values.getOrElse(1) { 0f },
-                    values.getOrElse(2) { 0f },
+                    values.getOrElse(1) { 0f }.finiteOrZero(),
+                    values.getOrElse(2) { 0f }.finiteOrZero(),
                 ),
-            ),
+            ).withViewport(savedViewport),
         )
     },
 )
+
+private fun Float.finiteOrZero(): Float = takeIf(Float::isFinite) ?: 0f
+
+private fun Float.positiveFiniteOrZero(): Float = takeIf { isFinite() && this > 0f } ?: 0f
 
 @Composable
 private fun ViewNavigationPad(
@@ -562,8 +652,11 @@ private fun ViewNavigationPad(
             R.string.console_show_view_controls
         },
     )
-    val currentOnPan by rememberUpdatedState(onPan)
-    val currentOnZoom by rememberUpdatedState(onZoom)
+    // Local function references can compare structurally equal even when they capture a replaced
+    // viewport state. Keep gesture callbacks current by identity so dimension changes cannot leave
+    // this long-lived pointer handler mutating a detached transform.
+    val currentOnPan by rememberReferentiallyUpdatedState(onPan)
+    val currentOnZoom by rememberReferentiallyUpdatedState(onZoom)
     val currentPositionFraction by rememberUpdatedState(positionFraction)
     val currentOnMoveBy by rememberUpdatedState(onMoveBy)
     val currentOnMoveTo by rememberUpdatedState(onMoveTo)
@@ -778,6 +871,7 @@ private fun RemoteScrollPad(
     }
 }
 
+@Suppress("DEPRECATION") // These arrows describe physical pan direction and must not mirror in RTL.
 @Composable
 private fun ViewNavigationControls(
     onPan: (FloatPoint) -> Unit,
@@ -798,7 +892,7 @@ private fun ViewNavigationControls(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 NavigationButton(
                     stringResource(R.string.console_pan_view_left),
-                    Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    Icons.Default.KeyboardArrowLeft,
                 ) {
                     onPan(FloatPoint(VIEW_PAN_STEP_PIXELS, 0f))
                 }
@@ -816,7 +910,7 @@ private fun ViewNavigationControls(
                 }
                 NavigationButton(
                     stringResource(R.string.console_pan_view_right),
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    Icons.Default.KeyboardArrowRight,
                 ) {
                     onPan(FloatPoint(-VIEW_PAN_STEP_PIXELS, 0f))
                 }
@@ -1037,4 +1131,5 @@ private const val VIEW_NAVIGATION_MAX_WIDTH_DP = 840
 private const val VIEW_PAN_STEP_PIXELS = 72f
 private const val VIEW_NAVIGATION_GAP_DP = 8
 private const val VIEW_NAVIGATION_ACCESSIBILITY_STEP = 0.25f
+private const val ACCESSIBILITY_POINTER_STEP = 24
 private const val INPUT_ANCHOR_MAX_AGE_MILLIS = 15_000L

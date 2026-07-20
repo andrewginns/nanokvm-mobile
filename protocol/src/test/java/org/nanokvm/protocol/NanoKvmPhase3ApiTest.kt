@@ -370,16 +370,24 @@ class NanoKvmPhase3ApiTest {
     }
 
     @Test
-    fun `all client construction paths disable automatic connection retries`() {
+    fun `all client construction paths disable retries and redirects`() {
         assertFalse(client.transport.retryOnConnectionFailure)
+        assertFalse(client.transport.followRedirects)
+        assertFalse(client.transport.followSslRedirects)
 
-        val supplied = OkHttpClient.Builder().retryOnConnectionFailure(true).build()
+        val supplied = OkHttpClient.Builder()
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
         val using = NanoKvmClient.using(
             endpoint = NanoKvmEndpoint.parse(server.url("/").toString()),
             httpClient = supplied,
         )
         try {
             assertFalse(using.transport.retryOnConnectionFailure)
+            assertFalse(using.transport.followRedirects)
+            assertFalse(using.transport.followSslRedirects)
         } finally {
             using.close()
             supplied.dispatcher.executorService.shutdown()

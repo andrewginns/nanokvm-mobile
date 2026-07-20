@@ -460,6 +460,12 @@ internal sealed interface NanoKvmPicoClawChatEvent {
 
 internal sealed interface NanoKvmPicoClawChatActionResult {
     data object Dispatched : NanoKvmPicoClawChatActionResult
+
+    /** The exact bounded user message that was dispatched and is safe to retain for display. */
+    data class MessageDispatched(
+        val message: PicoClawMessageUiState,
+    ) : NanoKvmPicoClawChatActionResult
+
     data class Rejected(val error: NanoKvmPicoClawError) : NanoKvmPicoClawChatActionResult
 }
 
@@ -606,8 +612,20 @@ internal class NanoKvmPicoClawChatOwner internal constructor(
             NanoKvmPicoClawError.Kind.SESSION_CHANGED,
         )
         val normalized = content.trim()
+        val displayContent = if (normalized.isEmpty()) {
+            null
+        } else {
+            try {
+                PicoClawMessageContent.ApplianceText(
+                    role = PicoClawMessageRole.User,
+                    value = normalized,
+                )
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
         if (
-            normalized.isEmpty() || normalized.utf8Size() > MAX_UI_CHAT_MESSAGE_BYTES ||
+            displayContent == null ||
             normalized.any { it.isISOControl() && it != '\n' && it != '\r' && it != '\t' }
         ) {
             return rejected(
@@ -628,14 +646,16 @@ internal class NanoKvmPicoClawChatOwner internal constructor(
             NanoKvmPicoClawError.Kind.NOT_CONNECTED,
         )
         val receipt = try {
-            chat.sendMessage(normalized, options)
+            chat.sendMessage(displayContent.value, options)
         } catch (error: Throwable) {
             return NanoKvmPicoClawChatActionResult.Rejected(
                 error.toPicoClawError(NanoKvmPicoClawOperation.CHAT_SEND),
             )
         }
         return if (receipt != null) {
-            NanoKvmPicoClawChatActionResult.Dispatched
+            NanoKvmPicoClawChatActionResult.MessageDispatched(
+                PicoClawMessageUiState(displayContent),
+            )
         } else {
             rejected(
                 NanoKvmPicoClawOperation.CHAT_SEND,
@@ -762,6 +782,9 @@ internal class NanoKvmPicoClawChatOwner internal constructor(
                     null
                 }
             }
+        } catch (error: CancellationException) {
+            mutableManualInput.value = NanoKvmPicoClawManualInputState.ReleaseUncertain
+            throw error
         } catch (_: Throwable) {
             mutableManualInput.value = NanoKvmPicoClawManualInputState.ReleaseUncertain
             null
@@ -1120,6 +1143,8 @@ internal class NanoKvmPicoClawFeatureGateway internal constructor(
                 )
             val presence = try {
                 port.historyPresence(catalog.portCatalog, item.portSession)
+            } catch (error: CancellationException) {
+                throw error
             } catch (_: Throwable) {
                 NanoKvmPicoClawHistoryPresence.UNKNOWN
             }
@@ -1442,7 +1467,6 @@ private const val MAX_UI_HISTORY_MESSAGES = 256
 private const val MAX_UI_HISTORY_MESSAGE_COUNT = 2_048
 private const val MAX_UI_HISTORY_MESSAGE_BYTES = 32 * 1_024
 private const val MAX_UI_HISTORY_SUMMARY_BYTES = 8 * 1_024
-private const val MAX_UI_CHAT_MESSAGE_BYTES = 32 * 1_024
 private const val MAX_UI_CHAT_EVENT_TEXT_BYTES = 32 * 1_024
 private const val MAX_UI_CHAT_IMAGE_BYTES = 768 * 1_024
 private const val MAX_UI_TOOL_ACTION_BYTES = 256

@@ -3,16 +3,17 @@
 This is the durable scorecard for applying
 `android-kotlin-modernization-audit-guide.md` to NanoKVM Mobile. It records the
 current implementation separately from evidence that must still be executed.
-The restrained Material 3/Material You and adaptive-console phases are complete;
-broader visual experimentation remains deferred. Functional accessibility,
-security, reliability, and release evidence do not.
+The restrained Material 3/Material You and adaptive-console implementations are
+in place; all-screen token, adaptive, accessibility, physical-device, and
+release evidence remains incomplete. Broader visual experimentation is deferred
+in favour of maintainability, security, reliability, and testable ownership.
 
 ## Checkpoint and scoring
 
 | Field | Value |
 | --- | --- |
 | Baseline audit | 2026-07-17, commit `7f3f6e7` (`Initial NanoKVM Mobile app`) |
-| Current checkpoint | 2026-07-19 public-source milestone; the containing public root commit is the source identity |
+| Current checkpoint | 2026-07-20 adversarial remediation working tree based on `782e3b0`; the 0.3.2/code-9 exact-source strict gate, regenerated profiles, API 37 app/video/process-restart tests, update-lineage proof, and cold-launch diagnostics passed against this working tree |
 | Application | GPL-3.0-or-later, direct-LAN Android client for a user-selected NanoKVM |
 | Platform | minSdk 26, compile/target SDK 37, JDK 21 build runtime, Java/Kotlin bytecode 17 |
 | Modules | `app`, `protocol`, `video`, and non-shipping `macrobenchmark` |
@@ -34,15 +35,15 @@ known at this checkpoint. P1 items below block public distribution.
 
 | Key | Evidence available in the repository | Limits at this checkpoint |
 | --- | --- | --- |
-| E1 — platform/build | [app build](../app/build.gradle.kts), [settings](../settings.gradle.kts), [version catalogue](../gradle/libs.versions.toml), [wrapper properties](../gradle/wrapper/gradle-wrapper.properties), [manifest](../app/src/main/AndroidManifest.xml), and [NSC](../app/src/main/res/xml/network_security_config.xml); the local JDK 21 strict gate passed at this checkpoint | Repeat and retain the local strict gate against the final source freeze, then retain signed-candidate evidence |
+| E1 — platform/build | [app build](../app/build.gradle.kts), [settings](../settings.gradle.kts), [version catalogue](../gradle/libs.versions.toml), [wrapper properties](../gradle/wrapper/gradle-wrapper.properties), [manifest](../app/src/main/AndroidManifest.xml), and [NSC](../app/src/main/res/xml/network_security_config.xml); the local JDK 21 strict gate passed at this checkpoint | Repeat and retain the gate against the eventual release-source freeze, then retain signed-candidate evidence |
 | E2 — supply chain | [verification metadata](../gradle/verification-metadata.xml), [dependency inventory](DEPENDENCIES.md), [SBOM task](../app/build.gradle.kts), and [build verification recipe](BUILD_VERIFICATION.md); the local strict gate verified the dependency graph and generated the canonical SBOM | Hosted automation is intentionally disabled during active development; signed artifact, vulnerability review, post-signing checksums/provenance, and isolated-environment comparison remain open |
-| E3 — architecture/state | [AppContainer](../app/src/main/java/org/nanokvm/mobile/AppContainer.kt), [AppViewModel](../app/src/main/java/org/nanokvm/mobile/ui/AppViewModel.kt), [ProfileRepository](../app/src/main/java/org/nanokvm/mobile/data/ProfileRepository.kt), [console ports](../app/src/main/java/org/nanokvm/mobile/runtime/ConsoleBackend.kt), and [backend](../app/src/main/java/org/nanokvm/mobile/runtime/NanoKvmConsoleBackend.kt) | Real DataStore/Keystore, process death, cancellation races, and deterministic shutdown need device/integration evidence |
+| E3 — architecture/state | [AppContainer](../app/src/main/java/org/nanokvm/mobile/AppContainer.kt), [AppViewModel](../app/src/main/java/org/nanokvm/mobile/ui/AppViewModel.kt), [ProfileRepository](../app/src/main/java/org/nanokvm/mobile/data/ProfileRepository.kt), [typed console feature contracts](../app/src/main/java/org/nanokvm/mobile/runtime/ConsoleBackend.kt), [session draft owner](../app/src/main/java/org/nanokvm/mobile/ui/screens/ConsoleSessionDraftOwner.kt), [automation state owner](../app/src/main/java/org/nanokvm/mobile/ui/screens/AutomationDialogController.kt), and [backend](../app/src/main/java/org/nanokvm/mobile/runtime/NanoKvmConsoleBackend.kt) | Focused contracts, semantic FIFO app notices, separate latest status/sequenced action feedback, explicit snapshot handles, and session-bound owners reduce coupling. JVM tests cover cancellation-ignoring input/video callbacks, late authentication, transient storage failure, and 64 repeated lifecycle cycles; an API 37 out-of-process restart restores only non-secret draft state. Real Keystore and physical Surface/HID evidence remain open |
 | E4 — trust/credentials | [CertificateInspector](../protocol/src/main/java/org/nanokvm/protocol/CertificateInspector.kt), [EndpointTrustPreflight](../protocol/src/main/java/org/nanokvm/protocol/EndpointTrustPreflight.kt), [SavedCredentialStore](../app/src/main/java/org/nanokvm/mobile/security/SavedCredentialStore.kt), and [request-ID coordinator](../app/src/main/java/org/nanokvm/mobile/security/CredentialAuthenticationCoordinator.kt) | Old/new pin comparison, connect-once, and explicit replacement are implemented; real Keystore/traffic/device recovery results remain open |
-| E5 — bounds/control/reconnect | [protocol sources](../protocol/src/main/java/org/nanokvm/protocol), [video sources](../video/src/main/java/org/nanokvm/video), [ReconnectPolicy](../app/src/main/java/org/nanokvm/mobile/runtime/ReconnectPolicy.kt), and [ControlCommandGate](../app/src/main/java/org/nanokvm/mobile/runtime/ControlCommandGate.kt) | OkHttp allocates complete WebSocket messages before application limits; long hostile/slow/real-appliance results remain open |
-| E6 — UI/adaptive/accessibility | [NanoKvmApp](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [Material implementation record](MATERIAL_YOU_IMPLEMENTATION.md), [UI sources](../app/src/main/java/org/nanokvm/mobile/ui), and [instrumentation tests](../app/src/androidTest/java/org/nanokvm/mobile); local API 37 diagnostics exercised light/dark, 200% text, RTL, IME-open portrait, portrait-to-landscape live video, and an expanded supporting pane | TalkBack, switch, API 35, long-string/breakpoint matrices, hardware input, physical ARM, and signed-candidate results remain open |
-| E7 — profiles/performance | [ReportDrawnWhen use](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [macrobenchmark module](../macrobenchmark), [generated profiles](../app/src/main/generated/baselineProfiles), and [build verification](BUILD_VERIFICATION.md); a source-matched API 37 run exercised cold-none plus cold/warm/hot-Baseline and retained 12 frame traces | Emulator timing is diagnostic; console CUJs, physical ARM, and stable trends remain open |
+| E5 — bounds/control/reconnect | [protocol sources](../protocol/src/main/java/org/nanokvm/protocol), [video sources](../video/src/main/java/org/nanokvm/video), [ReconnectPolicy](../app/src/main/java/org/nanokvm/mobile/runtime/ReconnectPolicy.kt), and [ControlCommandGate](../app/src/main/java/org/nanokvm/mobile/runtime/ControlCommandGate.kt); REST execution/read/decode is internally dispatched, cancellation cancels active calls and inspection sockets, retries/redirects and WebSocket compression are disabled, clipboard/share text and tokens are rejected before retained use at their bounds, unused input server messages are discarded, direct-H.264 oversize cancels immediately, and raw slow/fragmented plus compressed-header fixtures characterize the pinned OkHttp behavior | OkHttp still allocates a complete uncompressed WebSocket message before application limits; API 37/physical heap-PSS and long real-appliance results remain open |
+| E6 — UI/adaptive/accessibility | [NanoKvmApp](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [Material implementation record](MATERIAL_YOU_IMPLEMENTATION.md), [UI sources](../app/src/main/java/org/nanokvm/mobile/ui), and [instrumentation tests](../app/src/androidTest/java/org/nanokvm/mobile) provide source/test implementation for the supporting pane, exclusive overlays, lifecycle-aware FIFO notice presentation, polite status regions, resource-backed runtime/feature messages, lazy catalogs, gesture alternatives, and non-secret restoration; the current API 37 run passed 76 app tests plus the process-restart case | Source implementation is not all-screen or assistive-technology proof; TalkBack, switch, API 35/36, translated resources, long-string/breakpoint matrices, hardware input, physical ARM, and signed-candidate results remain open |
+| E7 — profiles/performance | [ReportDrawnWhen use](../app/src/main/java/org/nanokvm/mobile/ui/NanoKvmApp.kt), [macrobenchmark module](../macrobenchmark), [generated profiles](../app/src/main/generated/baselineProfiles), [lazy WebRTC provider](../app/src/main/java/org/nanokvm/mobile/runtime/WebRtcRuntimeProvider.kt), and [build verification](BUILD_VERIFICATION.md); provider tests prove Auto/H.264/MJPEG do not initialize the native WebRTC runtime, and current source-matched generation produced 18,528 Baseline plus 15,838 Startup rules with packaged profiles verified | Emulator timing is diagnostic; repeat console CUJs, physical ARM, and stable trends against a release source freeze |
 | E8 — public assurance | [privacy](../PRIVACY.md), [security design](SECURITY.md), [threat model](THREAT_MODEL.md), [distribution](DISTRIBUTION.md), and [release checklist](RELEASE_CHECKLIST.md) | MASTG/manual results and observed-traffic/privacy reconciliation are required, not yet claimed |
-| E9 — execution record | The public-source checkpoint passed 463 JVM tests across 73 suites; the API 37 device checkpoint passed 59 app instrumentation tests and one native WebRTC instrumentation test; profile packaging and the strict release-like build gate also passed | Raw results are local/ignored and unsigned; repeat them on the release source freeze and retain the candidate record before crediting a public release |
+| E9 — execution record | The current working tree passed 548 JVM tests across 83 suites, six zero-finding debug/release lint reports, the 378-task strict build/package/profile/SBOM gate, 76 app instrumentation tests plus one native WebRTC and one process-restart test on API 37, source profile generation, a code-8 to code-9 data-retaining update, and a fresh cold-launch crash review | Raw results are local/ignored and the installable APK uses only the development identity; repeat against the release source freeze and retain an approved signed candidate before crediting a public release. `WebSocketIngressMemoryInstrumentedTest` was not invoked and no Android heap/PSS result is claimed |
 | E10 — manual/release gates | [testing matrix](TESTING.md) and [release checklist](RELEASE_CHECKLIST.md) | API 35, physical ARM, signed candidate, 30-minute H.264/MJPEG, TalkBack/switch, and field evidence remain explicitly open |
 
 ## Platform and build
@@ -62,19 +63,19 @@ known at this checkpoint. P1 items below block public distribution.
 
 | ID | Score | Priority/status | Current evidence and remaining gate |
 | --- | ---:| --- | --- |
-| ARCH-01 | 2 | P1 evidenced | Application container, repository boundary, VM-scoped runtime, and narrow high-rate input/Surface ports replace direct UI ownership. [E3] |
-| ARCH-02 | 1 | P1 partial | DataStore and credential stores are authoritative; Ready/Unavailable/Corrupted states and partial deletion outcomes are explicit. Android repository I/O/corruption tests remain open. [E3] |
-| ARCH-03 | 1 | P1 partial | `AppUiState` is immutable and durable flows are VM-owned. Low-frequency console commands still use a direct narrow sink; document/verify this deliberate boundary. [E3] |
-| ARCH-04 | 2 | P1 evidenced | Compose uses `collectAsStateWithLifecycle()`. [E3] |
-| ARCH-05 | 1 | P1 partial | `SavedStateHandle` restores non-secret screen state and saveable UI owns viewport/pad context. Real process death, resize, and complete pointer/viewport continuity remain open. [E3, E6] |
+| ARCH-01 | 1 | P1 partial | Repository, VM, focused feature-controller, high-rate input, and Surface boundaries are explicit. Console feature actions still bypass `AppViewModel`, and the concrete runtime adapter remains broad. [E3] |
+| ARCH-02 | 1 | P1 partial | DataStore and credential stores are authoritative; Ready/Unavailable/Corrupted states and partial deletion outcomes are explicit. Corruption blocks writes until consequence-confirmed reset, a real Android corruption/reset test passes, and deterministic transient read/write failures preserve the last good state and recover through bounded retry. Real Keystore failure results remain open. [E3, E6] |
+| ARCH-03 | 1 | P1 partial | `AppUiState`, backend state, and automation state are immutable. Ownership is still divided among `AppViewModel`, the saveable console shell, and session-bound feature owners, so complete screen-level UDF is not claimed. [E3] |
+| ARCH-04 | 2 | P1 evidenced | `NanoKvmApp`, console state, and automation state use `collectAsStateWithLifecycle()`; replay-free operator output uses `repeatOnLifecycle(STARTED)`. [E3] |
+| ARCH-05 | 1 | P1 partial | `SavedStateHandle` restores non-secret screen state, one saveable `ConsoleOverlay` prevents mutually exclusive panels from coexisting, and Tailscale navigation is an acknowledged memory-only handoff. Generation-bound owners retain bounded drafts through recreation while excluding secrets; the API 37 process-restart test proves a non-secret profile draft survives actual process replacement without restoring a password-like field. The full API/physical resize and secret-state matrix remains open. [E3, E6] |
 | ARCH-06 | 2 | P1 evidenced | `AppViewModel` is factory-created from the application container; credential coordinator retains only typed non-secret request metadata and IDs, never a UI callback or secret. [E3, E4] |
-| ARCH-07 | 1 | P1 partial | repository, credential, trust, connection, and video work have I/O/worker dispatchers. StrictMode and slow/cancellation evidence are still required. [E3, E4] |
-| ARCH-08 | 1 | P1 partial | Scopes/executors are owned and backend exposes `closeAndAwait()`. Prove production teardown waits and old callbacks cannot publish; no untracked cleanup may remain. [E3] |
-| ARCH-09 | 1 | P1 partial | Attempt/generation ownership and many cancellation paths are tested. Rethrow coverage, cancellation-ignoring transports, reconnect/decoder races, and repeated lifecycle cycles remain open. [E3, E5] |
-| ARCH-10 | 1 | P2 partial | State and loss policies are mostly explicit, but input server-event flow consumption/loss and every coalescing boundary need an ownership decision. [E3, E5] |
+| ARCH-07 | 1 | P1 partial | Repository, credential, trust, connection, video, and complete REST execute/read/decode work dispatch below callers; debug builds enable StrictMode thread/VM diagnostics. Retained device traces and exhaustive slow-boundary proof remain open. [E3–E5] |
+| ARCH-08 | 1 | P1 partial | Scopes/executors are owned and the backend exposes `closeAndAwait()`. Synchronous rejection/HID release, cancellation-ignoring stale input/video callbacks, replacement-session fencing, and 64 background/reconnect/foreground/close cycles pass deterministic tests. Physical transport/decoder and long-running shutdown evidence remain open. [E3] |
+| ARCH-09 | 1 | P1 partial | REST and certificate-inspection cancellation close active work; settings retain the last success and retry with bounded backoff; feature controllers rethrow cancellation; and profile/authority/generation fencing covers reconnect, input, video, and late authentication publication. Deterministic adverse races pass, while real network suspension and device cancellation remain open. [E3, E5] |
+| ARCH-10 | 1 | P2 partial | Input server messages have no consumer and are bounded then discarded instead of entering an unused flow. Replay-free operator output uses a bounded incremental buffer with conflated, at-most-once-per-frame publication; motion/frame coalescing and ordered key/button policies remain explicit. Complete stress evidence across every producer remains open. [E3, E5] |
 | ARCH-11 | 2 | P2 evidenced | UI/session models are immutable, mutable flows are hidden with `asStateFlow()`, and updates are atomic. [E3] |
-| ARCH-12 | 2 | P2 evidenced | The three shipping modules and one test-only performance module each have a test, ownership, or delivery reason; no ceremonial layer is proposed. [E1, E3, E7] |
-| ARCH-13 | 1 | P1 partial | Broad `configChanges` is removed, explicit non-secret restoration exists, and recreation tests are defined. True process-death/Surface/HID evidence is open. [E1, E3, E6] |
+| ARCH-12 | 2 | P2 evidenced | The four modules retain clear delivery/ownership reasons. Unsafe token bridges and the 68-method default-no-op sink were replaced by flat typed feature contracts whose required production operations have no silent defaults; feature-specific exact-snapshot handles reject stale/foreign/lookalike values. No DI framework, generic controller hierarchy, per-action use cases, or feature-module ceremony was added. [E1, E3, E7] |
+| ARCH-13 | 1 | P1 partial | Broad `configChanges` is removed; `SavedStateHandle` and Compose/API 37 tests cover non-secret restoration while reset live trust/session work. The out-of-process API 37 case verifies a new PID and safe draft restoration after `am kill`. Physical Surface/HID restoration and the wider device matrix remain open. [E1, E3, E6] |
 | ARCH-14 | 2 | P2 evidenced | Profile management is local; console streaming/control is foreground-only and remote commands are neither persisted nor replayed. [E3, E5] |
 
 Target flow remains:
@@ -90,31 +91,31 @@ repositories + runtime StateFlow -> AppUiState -> lifecycle-aware Compose
 
 | ID | Score | Priority/status | Current evidence and remaining gate |
 | --- | ---:| --- | --- |
-| UI-01 | 2 | P3 evidenced | A complete restrained Material 3 system now covers fixed fallback and dynamic light/dark schemes, typography, shapes, semantic surface roles, and fixed neutral console tokens. [E6] |
+| UI-01 | 1 | P3 partial | Source-controlled fallback/dynamic colour, typography, shapes, semantic roles, and fixed console colours exist. Spacing, elevation, and motion are not a coherent token system and many raw values remain. [E6] |
 | UI-02 | 1 | P2 partial | Native dialogs, sheets, back handling, and IME behavior exist; signed-device lifecycle/window verification remains. [E6] |
 | UI-03 | 1 | P1 partial | Loading/terminal profile-catalog, transient unavailable, corruption, reconnect, connection, and video states exist. Retain storage/adverse UI results. [E3, E6] |
-| UI-04 | 1 | P1 partial | Typed backend/session progress and failures exist; save/storage/credential paths still need complete busy/duplicate and announcement tests. [E3, E5] |
-| UI-05 | 2 | P1 evidenced | Power/reset/GPIO/Ctrl-Alt-Delete have consequence confirmation; command-key claims, serialization, generation invalidation, and unit tests prevent duplicate/replay execution. [E5] |
-| UI-06 | 1 | P2 partial | Local API 37 diagnostics passed the profile catalogue at 200% text and RTL. Long strings, every top-level state, and narrow-window extremes remain open. [E6] |
-| UI-07 | 1 | P2 partial | Navigation is single-flow and non-secret screen state is restorable; selection/draft/viewport continuity needs process/resize evidence. [E3, E6] |
+| UI-04 | 1 | P1 partial | Profile save/delete synchronously claim one mutation slot, expose Saving/Deleting state, disable controls, and reject duplicate submission; settings remain repository-authoritative and failed writes are tested. Repeated-tap/progress/recovery and announcement evidence is incomplete across privileged features. [E3, E5] |
+| UI-05 | 2 | P1 evidenced | Power/reset/GPIO/Ctrl-Alt-Delete have consequence confirmation; UI confirmation is ephemeral and cleared on destination/connection/generation change, while runtime command-key claims, serialization, generation invalidation, and tests prevent duplicate/replay execution. [E5, E6] |
+| UI-06 | 1 | P2 partial | Local API 37 diagnostics passed the profile catalogue at 200% text and RTL. Static labels plus runtime, feature, certificate, and app notices render from Android resources through typed mappings. No translated resource set exists; translated/long strings, every top-level state, and narrow-window extremes remain open. [E6] |
+| UI-07 | 1 | P2 partial | Navigation is single-flow; selected non-secret screen state, bounded drafts, viewport geometry, and the profile draft are restorable through configuration and process replacement without restoring secrets. Wider resize/fold and device evidence remain open. [E3, E6] |
 | UI-08 | 2 | P3 evidenced | The application is cohesively Compose-based; no migration program is needed. [E6] |
 | ADAPT-01 | 2 | P2 evidenced | `currentWindowAdaptiveInfo()` and current constraints select compact bottom sheet, compact-landscape/medium side overlay, and expanded supporting-pane behavior. [E6] |
-| ADAPT-02 | 2 | P2 evidenced | Decision tests cover height and width boundaries, and API 37 instrumentation resizes through 500/900/700dp while asserting video-Surface identity. Physical foldable/posture evidence remains open. [E6] |
-| ADAPT-03 | N/A | — | List-detail is not justified for the current single active-console journey. Reassess if profile management gains simultaneous detail work. |
-| ADAPT-04 | 1 | P1 partial | Some viewport/pad/editor state is saveable; prove all non-secret context through rotation, resize, fold-like dimensions, and process death. [E6] |
+| ADAPT-02 | 1 | P1 partial | Decision tests cover selected height/width boundaries and an API 37 console test resizes while retaining Surface identity. Every screen, breakpoint edge, long-string/font-scale matrix, and fold/posture remains unproved. [E6] |
+| ADAPT-03 | 2 | P2 evidenced | `SupportingPaneScaffold` models the primary remote video plus persistent contextual controls from current-window adaptive information; decision and instrumentation tests cover selection and Surface identity. [E6] |
+| ADAPT-04 | 1 | P1 partial | API 37 restoration covers viewport dimensions/zoom/pan, non-replayed Fit, automation/editor state, stale-action invalidation, and an out-of-process non-secret profile draft; resolution replacement exercises pan/zoom callbacks against the new transform. Fold-like dimensions and the complete context matrix remain open. [E6] |
 | ADAPT-05 | 2 | P1 evidenced | No fixed orientation, aspect-ratio, or resizability restriction is present. [E1] |
 | ADAPT-06 | 1 | P2 partial | Streaming is foreground-only; repeated resize/multi-window lifecycle results remain open. [E6] |
 | ADAPT-07 | 1 | P1 partial | Touch, IME, mouse/trackpad, and keyboard paths exist. Hardware traversal, shortcuts, scroll, and focus evidence is open. [E6] |
 | ADAPT-08 | 2 | P2 evidenced | A permanent Material supporting-pane scaffold changes one/two-pane directives without moving the `RemoteViewport` composition slot; instrumentation asserts the same `TextureView` and unchanged attach/detach counts across the breakpoint. [E6] |
 | ADAPT-09 | 2 | P3 evidenced | Expanded width assigns a bounded supporting pane while retaining a usable video main pane and full-width safe-area input strip; compact modes remain intentionally transient. [E6] |
-| ADAPT-10 | 2 | P1 evidenced | Viewport-transform and Surface-generation tests plus a live API 37 portrait-to-landscape NanoKVM journey retain the stream across resize. Signed physical-device crop/posture evidence remains a release gate. [E3, E6] |
+| ADAPT-10 | 1 | P1 partial | Viewport-transform/Surface-generation tests and one earlier API 37 portrait-to-landscape appliance journey retain the stream across resize. Folded posture, physical-device crop, and full control evidence remain open. [E3, E6] |
 | A11Y-01 | 1 | P1 partial | Custom controls expose semantics/actions; complete role/state/value and manual TalkBack evidence is open. [E6] |
 | A11Y-02 | 1 | P2 partial | Semantics tests exist; review merged/unmerged trees for duplicates. [E6] |
-| A11Y-03 | 2 | P2 evidenced | Target-size semantics tests and automated WCAG contrast checks cover fallback and fixed console palettes; connection status pairs colour with glyph and text. Scanner/UI-check and focus review remain open. [E6] |
+| A11Y-03 | 1 | P1 partial | Target-size assertions and WCAG checks cover selected fixed palette pairs, including corrected pill foregrounds. Icon/focus/disabled/error/dynamic states and scanner/manual review remain open. [E6] |
 | A11Y-04 | 1 | P1 partial | The profile catalogue remains operable at 200% text in a local API 37 diagnostic; repeat every top-level console, trust, credential, and safety state before release. [E6] |
 | A11Y-05 | 0 | P1 open | No retained TalkBack, switch-style, or hardware-keyboard traversal result. [E10] |
-| A11Y-06 | 2 | P1 evidenced | Pan/zoom gestures have dedicated pad/buttons and a movable handle; semantic alternatives are testable. [E6] |
-| A11Y-07 | 1 | P1 partial | Errors are visible; async recovery announcement, repetition, and focus behavior need assistive-technology evidence. [E6] |
+| A11Y-06 | 2 | P1 evidenced | Instrumentation invokes semantic alternatives for pointer movement/clicks, four-direction scrolling, and moving the view pad; existing tests invoke dedicated pan/zoom/fit controls and assert resulting input/transform effects. [E6] |
+| A11Y-07 | 1 | P1 partial | Shared polite live regions announce async status in administration, phase-3, operator, automation, offline-update, and PicoClaw surfaces, with semantics tests. Repetition and focus behavior still need actual assistive-technology evidence. [E6] |
 | A11Y-08 | 1 | P2 partial | Semantics assertions exist; scanner and retained manual assistive-technology results remain open. [E6, E10] |
 
 ## Performance, reliability, and efficiency
@@ -122,15 +123,15 @@ repositories + runtime StateFlow -> AppUiState -> lifecycle-aware Compose
 | ID | Score | Priority/status | Current evidence and remaining gate |
 | --- | ---:| --- | --- |
 | PERF-01 | 1 | P1 partial | Launch, connect-to-first-frame, 30-second console, reconnect/foreground recovery, and fallback CUJs are named. Device/data state, budgets, and retained runs are open. [E7] |
-| PERF-02 | 1 | P1 partial | Macrobenchmark defines and locally executed cold no-compilation and cold/warm/hot Baseline-required methods; `ReportDrawnWhen` uses the terminal profile-catalog state. The API 37 emulator result is diagnostic, not a physical baseline. [E7] |
-| PERF-03 | 1 | P1 partial | `FrameTimingMetric` produced 12 source-matched API 37 traces. Physical P50/P90/P95/P99 evidence and thresholds are not retained. [E7, E9] |
+| PERF-02 | 1 | P1 partial | Macrobenchmark defines cold no-compilation and cold/warm/hot Baseline-required methods; `ReportDrawnWhen` uses the terminal profile-catalog state. Earlier API 37 diagnostics executed them, but the current working tree repeated profile generation/package verification rather than performance measurement; no physical baseline exists. [E7] |
+| PERF-03 | 1 | P1 partial | Earlier API 37 diagnostics produced 12 `FrameTimingMetric` traces. They are not a current physical trend; current-source P50/P90/P95/P99 evidence and thresholds are not retained. [E7, E9] |
 | PERF-04 | 1 | P1 partial | A minified profileable benchmark target exists. Representative/slower physical ARM evidence is open. [E1, E7] |
 | PERF-05 | 1 | P1 partial | Current versioned Baseline Profile generation and APK/AAB package verification passed. Physical benefit evidence remains open. [E7] |
 | PERF-06 | 1 | P2 partial | Current focused Startup Profile generation passed and is consumed by R8. Independent DEX-layout evidence remains open. [E7] |
-| PERF-07 | 1 | P1 partial | Known file/Keystore/network work is dispatched off Main; startup catalog and StrictMode/trace proof remain open. [E3, E7] |
-| PERF-08 | 1 | P2 partial | Stable list keys and rendering outside Compose are strengths; no recomposition measurement justifies score 2. [E6, E7] |
+| PERF-07 | 1 | P1 partial | Known file/Keystore/network and REST decode work dispatch off Main; debug StrictMode is enabled, WebRTC is lazy for non-WebRTC selections, and a fresh API 37 cold launch produced no StrictMode policy violation after credential-directory resolution moved behind the IO boundary. Retained physical traces remain open. [E3, E7, E9] |
+| PERF-08 | 1 | P2 partial | Virtual-media/WOL, HID/autostart, and script catalogs use one stable-keyed lazy list per surface with 512/1,024-item bounded-composition tests; operator output publishes once per frame and parent console state no longer observes viewport zoom. No recomposition measurement justifies score 2. [E6, E7] |
 | PERF-09 | 2 | P2 evidenced | No unjustified stability annotations or speculative performance wrappers are present. [E6] |
-| PERF-10 | 1 | P1 partial | Parser/decoder queues are bounded, but WebSocket first allocation, heap/PSS/leaks, low-memory, and long-session behavior remain open. [E5] |
+| PERF-10 | 1 | P1 partial | Parser/decoder queues, retained operator output/editor text, accepted clipboard/share text, profile fields/pins, certificate display metadata, and session tokens are bounded; hot text validation avoids encoded copies. WebSocket compression is refused, slow fragmentation is characterized, and rejection terminates transport. The Android heap/PSS fixture was deliberately not invoked at this checkpoint; the first complete uncompressed allocation, physical memory/leaks, low-memory, and long-session behavior remain open. [E5] |
 | PERF-11 | N/A | — | No durable/background job is required. Reassess if background work is introduced; verify traffic stops today. |
 | PERF-12 | 1 | P1 partial | Heartbeat ownership and no wake lock are evident. Network volume, metered policy, background stop, and physical power evidence are open. [E5] |
 | PERF-13 | 0 | P2 open/conditional | No field exposure or Vitals exists. Review aggregate channel Vitals only after distribution; do not mark passing before data exists. [E10] |
@@ -151,7 +152,7 @@ numbers if device/run variance shows they are inappropriate.
 | SEC-03 | 1 | P1 partial | Private/no-backup storage, explicit deletion outcomes, secure display, and no telemetry are strong. Backup, logcat, capture, secret-lifetime, and device evidence is open. [E3, E4, E8] |
 | SEC-04 | 1 | P2 partial | AES-GCM, AAD, Keystore auth, atomic storage, and fail-closed recovery exist. Real invalidation/expiry/hardware/deletion tests are open. [E4] |
 | SEC-05 | 2 | P2 evidenced | Deprecated AndroidX Security Crypto APIs are not used. [E2, E4] |
-| SEC-06 | 2 | P1 evidenced | Release manifest/NSC deny cleartext; TLS/pin tests and pre-secret trust preflight exist. Signed-device traffic capture remains a release gate but the repository control is repeatable. [E1, E4] |
+| SEC-06 | 2 | P1 evidenced | Manifest and NSC deny cleartext; legacy HTTP profiles and AP onboarding/AP-only APIs are removed; clients disable retries and redirects; 3xx/login/upload tests prevent credential/body replay; self-signed HTTPS still uses pre-secret inspection and explicit leaf pinning. Signed traffic capture remains a release gate. [E1, E4, E5] |
 | SEC-07 | 1 | P2 partial | Exact leaf pinning fails closed; mismatch review compares old/new identities and makes connect-once versus stored replacement explicit. Expiry-warning and retained device recovery rehearsal remain open. [E4, E8] |
 | SEC-08 | 1 | P2 partial | System biometric/device credential protects opt-in passwords with a documented ten-second window. Real device lifecycle/expiry/invalidation evidence is open. [E4] |
 | SEC-09 | 2 | P1 evidenced | One Activity is app-exported for the launcher and a strict `ACTION_SEND` `text/plain` share target; no other app component is exported in source. Retain signed merged-manifest evidence per release. [E1, E8] |
@@ -173,14 +174,14 @@ accurately: OkHttp's complete WebSocket allocation occurs before the app check.
 
 | ID | Score | Priority/status | Current evidence and remaining gate |
 | --- | ---:| --- | --- |
-| TEST-01 | 1 | P1 partial | A current 463/463 JVM run across 73 suites covers protocol, transforms, attempts, reconnect, credential staging, parity gateways, catalog/layout/contrast logic, control gates, and the WebRTC logging policy. Device-backed state/adverse matrices remain open. [E3–E6, E9] |
-| TEST-02 | 1 | P1 partial | MockWebServer/parser tests exist. Real DataStore, Keystore, backend fallback/reconnect/no-replay, and pre-allocation transport tests remain. [E3–E5] |
+| TEST-01 | 1 | P1 partial | The current working tree passes 548/548 JVM tests across 83 suites, covering protocol, transforms, bounds, attempts, retries/cancellation, credentials, semantic notices, feature owners, state restoration, layout/contrast, control gates, teardown, and lazy WebRTC. The wider device-backed matrix remains open. [E3–E6, E9] |
+| TEST-02 | 1 | P1 partial | MockWebServer/parser tests, transient DataStore failure/recovery tests, cancellation-ignoring input/video callbacks, repeated lifecycle cycles, and a real Android DataStore corruption/reset test pass. Real Keystore, hostile-ingress Android memory, and real-network suspension evidence remain open. [E3–E6] |
 | TEST-03 | 1 | P1 partial | Debug UI journeys exist. Signed/minified trust/login/first-frame/failure/reconnect/credential journeys are open. [E6, E10] |
 | TEST-04 | 0 | P3 deferred | Broad visual snapshots are deferred; retain only high-value structural compact/expanded, theme, 200% text, and RTL cases later. [E6] |
 | TEST-05 | 1 | P1 partial | Semantics tests exist; analysis tools plus manual TalkBack, keyboard, and switch-style traversal are open. [E6, E10] |
-| TEST-06 | 1 | P1 partial | Recreation and lifecycle tests are defined; true process death, resize, offline/slow endpoint, storage failure, auth cancellation, and repeated background cycles remain. [E3, E6] |
-| TEST-07 | 1 | P1 partial | Source-matched API 37 profile generation and four-mode Macrobenchmark execution passed. Controlled physical results and trends do not exist. [E7, E9] |
-| TEST-08 | 1 | P1 partial | A local API 37 run passed 59/59 app instrumentation tests plus the video module's 1/1 native WebRTC crash-regression test. Current-commit local API 26/35/36 results and representative physical ARM remain explicit open gates. [E6, E10] |
+| TEST-06 | 1 | P1 partial | API 37 recreation plus real process replacement cover non-secret draft restoration, while deterministic tests cover transient storage failure, auth cancellation/late results, cancellation-ignoring callbacks, stale sessions, and 64 repeated background/reconnect/foreground/close cycles. Physical lifecycle, real slow/offline endpoints, Surface/HID restoration, and real Keystore behavior remain open. [E3, E6] |
+| TEST-07 | 1 | P1 partial | Current-source API 37 profile generation and package verification passed. Four-mode Macrobenchmark methods have earlier emulator diagnostics but were not rerun as measurements for this working tree; controlled physical results and trends do not exist. [E7, E9] |
+| TEST-08 | 1 | P1 partial | The current local API 37 run passed 76/76 app instrumentation tests, the video module's 1/1 native WebRTC crash regression, and the macrobenchmark module's 1/1 out-of-process restart test; the crash buffer remained empty after the final update cold launch. Current-commit API 26/35/36 and representative physical ARM remain explicit open gates. [E6, E9, E10] |
 | TEST-09 | 1 | P1 partial | Risk-based tests and MASTG mapping exist; signed-release execution/dispositions are open. [E8, E10] |
 | TEST-10 | 0 | P1 open | No approved signed production candidate or signed/minified device smoke evidence exists. [E10] |
 
@@ -189,15 +190,15 @@ accurately: OkHttp's complete WebSocket allocation occurs before the app check.
 | Risk | IDs | Current status | Closure evidence |
 | --- | --- | --- | --- |
 | Current source and generated artifacts can diverge from passing outputs | PLAT-04, TEST-01, TEST-07 | Locally closed at checkpoint; release-source repetition/retention open | Clean JDK 21 strict gate and applicable device runs retained against the exact release source; no stale result cited |
-| Storage failure or cancellation can contradict deletion/save intent | ARCH-02, UI-03, SEC-03, TEST-02 | P1 mitigated in source, verification open | Transient retry vs corrupt confirmed reset, reset consequence, identity-edit block, partial deletion, DataStore I/O/corruption, and cancellation tests all pass |
-| Pending password/auth action may outlive foreground or accept a stale host result | ARCH-06, ARCH-09, SEC-03/04 | P1 mitigated in source, verification open | Background cancels non-prompt work; a stopped prompt result clears without connecting; rotation, process-death, stale request/host, and real Keystore tests pass |
-| Duplicate/stale destructive controls can affect hardware | UI-05, SEC-13 | P1 mitigated in source, verification open | Claim/serialize/generation-invalidate/no-retry tests pass at backend level and on a disposable appliance |
-| Hostile endpoint can force a full WebSocket allocation before parser rejection | PERF-10, SEC-03, TEST-02 | P1 open residual availability risk | Pre-allocation transport cap or an explicitly accepted release risk with boundary/heap/slow/oversize evidence and documented device behavior |
+| Storage failure or cancellation can contradict deletion/save intent | ARCH-02, UI-03, SEC-03, TEST-02 | P1 source-mitigated; Android corruption/reset and deterministic transient-I/O recovery pass; real storage/Keystore verification open | Corruption sentinel/write block, consequence-confirmed reset, identity-edit block, partial deletion, cancellation, and transient failure/recovery tests pass; retain real Keystore/device evidence |
+| Pending password/auth action may outlive foreground or accept a stale host result | ARCH-06, ARCH-09, SEC-03/04 | P1 mitigated in source; process replacement and late-result tests pass; wider device verification open | Background cancels non-prompt work; stopped/stale/old-host results clear without connecting; rotation and process replacement exclude secret restoration; real Keystore expiry/invalidation remains open |
+| Duplicate/stale destructive controls can affect hardware | UI-05, SEC-13 | P1 mitigated in source; local generation-invalidation tests pass; appliance verification open | Ephemeral UI confirmation plus runtime claim/serialize/generation-invalidate/no-retry tests pass; repeat destructive cases only on a disposable appliance |
+| Hostile endpoint can force a full uncompressed WebSocket allocation before parser rejection | PERF-10, SEC-03, TEST-02 | P1 partially mitigated: compression amplification is refused, slow/fragment behavior is characterized, and rejected transport terminates; first uncompressed allocation remains open | API 37 and representative physical heap/PSS evidence, then a pre-allocation transport cap or explicit risk acceptance with an approved availability budget |
 | Production distribution lacks signed, source-matched, traceable evidence | PLAT-04/05, SEC-15–17, TEST-10 | P1 open | Approved signed candidate; source/SBOM/licence/checksum/signing/provenance bundle; signed smoke; mapping custody; two-build comparison |
 | Supported real devices and appliance journeys are not represented | PLAT-01/02, ADAPT-10, TEST-03/06/08 | P1 open | Current API 26/35/36/37, representative ARM, and 30-minute H.264 plus 30-minute MJPEG evidence retained |
 | Primary journeys may be inaccessible with assistive technology | A11Y-01/04/05/07, TEST-05 | P1 open | TalkBack, switch, hardware keyboard, scanner, 200% text, RTL, focus/announcement results pass on signed candidate |
 | Performance/profile changes lack physical trends | PERF-01–06/10/12/14, TEST-07 | P1 open | Fully drawn, named CUJs, physical ARM startup/frame/memory/network/power evidence, three stable runs, and active thresholds |
-| Backend teardown/cancellation race can leak old-session ownership | ARCH-08/09, TEST-02/06 | P1 open | `closeAndAwait` production path plus cancellation-ignoring transport/decoder/reconnect and repeated lifecycle tests pass |
+| Backend teardown/cancellation race can leak old-session ownership | ARCH-08/09, TEST-02/06 | P1 source-mitigated; deterministic cancellation-ignoring/repeated-cycle tests pass; physical integration evidence open | Synchronous command rejection, HID/input release, terminal publication fencing, late input/video/auth guards, replacement sessions, and repeated lifecycle cycles pass; retain real transport/decoder/device evidence |
 
 ## Sequenced remaining backlog
 
@@ -205,10 +206,39 @@ Estimates are focused engineering/QA time, excluding access or review latency.
 “Rollback” means the safe route if the item fails; it does not authorize
 publishing with a failed P1 gate.
 
+### Completed remediation tranche and next evidence
+
+The 0.3.2/code-9 working tree completed the prepared source tranche without
+introducing a framework or generic abstraction layer. It adds adverse lifecycle,
+late-callback, transient-storage, and authentication tests; an API 37 real
+process-restart journey; semantic resource-backed runtime notices; bounded
+certificate display metadata; retained action feedback; and durable FIFO app
+notices. The exact source then passed the strict JVM/lint/APK/AAB/profile/SBOM
+gate and a code-8 to code-9 emulator update retained app-private data.
+
+The hostile WebSocket JVM fixture proves slow fragmented accumulation, rejects
+compression at the handshake/frame header, and verifies input/H.264 termination.
+At the user's direction, its Android heap/PSS instrumentation counterpart was
+not run at this checkpoint. The first uncompressed allocation therefore remains
+an explicit availability risk requiring representative physical measurement and
+either a narrow pre-allocation cap or documented acceptance against an approved
+budget.
+
+The next work is evidence-driven: API 26/35/36, representative physical ARM,
+real Keystore, assistive technology, signed/minified critical journeys, and
+real-appliance negotiation/endurance. Keep message mappings exhaustive and add
+translations/long-string coverage as those presentation paths evolve. Do not
+reopen the architecture without a reproduced defect.
+
+Explicit non-goals remain Hilt, per-action use cases, extra feature modules,
+Room/offline command queues, broad screenshot matrices, Play Integrity, and
+background-service infrastructure: the current app has no evidence that those
+would improve this direct-LAN KVM.
+
 | Order | Work item / owner | Estimate | Dependency | Rollback route | Success metric |
 | ---:| --- | ---:| --- | --- | --- |
 | 1 | Freeze current source and run strict verification — build owner | Local checkpoint complete; repeat at release source freeze | All active source changes complete; JDK 21/SDK 37 | Revert the failing change set; retain last known source baseline; do not publish | Exact release commit has green local strict JVM/lint/release/AAB/benchmark/profile/SBOM outputs and retained logs |
-| 2 | Adverse storage, secret lifecycle, and teardown integration — app/security owner | 2–3 days | Order 1; Android test device | Revert affected feature changes or disable distribution; never downgrade deletion/trust guarantees | DataStore unavailable/corrupt/reset, foreground secret wipe, real process death, stale auth, cancellation race, and `closeAndAwait` tests pass |
+| 2 | Adverse storage, secret lifecycle, and teardown integration — app/security owner | Focused source/JVM/API 37 restart checkpoint complete; physical/Keystore evidence remains | Order 1; Android test device | Revert affected feature changes or disable distribution; never downgrade deletion/trust guarantees | Deterministic transient DataStore, stale auth, cancellation-ignoring callbacks, repeated lifecycle, and `closeAndAwait` tests pass; retain real Keystore and physical lifecycle results |
 | 3 | Produce signed production candidate and evidence bundle — release/security owner | 1–2 days | Order 1; approved signing environment/key custody | Withdraw candidate and rotate/revoke signing material if compromised; never publish debug-signed benchmark | Signature verified; final SHA-256/source tag recorded; source/licence/SBOM/mapping custody/checksums/provenance assembled; signed critical journeys pass |
 | 4 | Complete Android/API matrix — QA owner | 1–2 days | Order 3 candidate; API 26/35/36/37 devices | Hold release and revert platform-specific regression | Current-commit results for API 26, 35, 36, 37 plus navigation, resize, IME, rotation, process/lifecycle journeys |
 | 5 | Real appliance endurance and adverse network — protocol/video owner | 1–2 days | Order 3; trusted NanoKVM and isolated/disposable target for destructive tests | Hold release; force the stable transport only for diagnosis, not as an untested publication workaround | ≥30 min H.264 and ≥30 min MJPEG with frame progress, input, reconnect/background, no stuck HID, bounded observed memory; fallback/trust/auth cases pass |
@@ -222,23 +252,25 @@ publishing with a failed P1 gate.
 ## 30/60/90 evidence trend
 
 The score trend credits repository evidence and keeps manual gates at 0/1 until
-run. The current 105/168 remains provisional because local unsigned/emulator
+run. The current 102/170 remains provisional because local unsigned/emulator
 evidence does not close signed, physical-device, accessibility, appliance, or
-field gates; it is not a release-readiness percentage. The denominator grew by
-two because ADAPT-08 became applicable when the supporting-pane transition was
-implemented.
+field gates; it is not a release-readiness percentage. Score reductions below
+are audit-truth corrections, not product regressions. The denominator grew by
+six from Day 0: supporting-pane work made both ADAPT-03 and ADAPT-08 applicable
+(four points), and protected credential authentication made SEC-08 applicable
+(two points).
 
 | Area | Day 0 baseline (2026-07-17) | Current checkpoint (toward Day 30) |
 | --- | ---:| ---:|
 | Platform/build | 5/16 | 11/16 |
-| Architecture/concurrency | 15/28 | 20/28 |
-| UI behavior | 10/16 | 11/16 |
-| Adaptive behavior | 9/16 | 15/18 |
-| Accessibility | 8/16 | 9/16 |
+| Architecture/concurrency | 15/28 | 19/28 |
+| UI behavior | 10/16 | 10/16 |
+| Adaptive behavior | 9/16 | 15/20 |
+| Accessibility | 8/16 | 8/16 |
 | Performance/reliability | 6/26 | 12/26 |
 | Security/privacy | 12/26 | 19/28 |
 | Testing/release | 6/20 | 8/20 |
-| **Total** | **71/164 (43%)** | **105/168 (63%) provisional** |
+| **Total** | **71/164 (43%)** | **102/170 (60%) provisional** |
 
 | Horizon | Verified progress already available | Required evidence/outcome before exit |
 | --- | --- | --- |

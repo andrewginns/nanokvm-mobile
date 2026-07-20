@@ -1,6 +1,7 @@
 package org.nanokvm.mobile.runtime
 
 import java.io.Closeable
+import java.util.IdentityHashMap
 import org.nanokvm.protocol.MAX_AUTOSTART_CONTENT_BYTES
 import org.nanokvm.protocol.NanoKvmApi
 import org.nanokvm.protocol.NanoKvmAutostartCatalog
@@ -66,21 +67,30 @@ internal data class NanoKvmAutomationPortHidKey(
 )
 
 internal class NanoKvmAutomationPortHidShortcut internal constructor(
+    internal val stableId: String,
     keys: List<NanoKvmAutomationPortHidKey>,
     val runnable: Boolean,
-    internal val opaqueToken: Any,
 ) {
     val keys: List<NanoKvmAutomationPortHidKey> = keys.toList()
 
+    init {
+        require(stableId.isNotBlank()) { "HID shortcut stable ID must not be blank" }
+    }
+
     override fun toString(): String =
-        "NanoKvmAutomationPortHidShortcut(keys=${keys.size}, token=<redacted>)"
+        "NanoKvmAutomationPortHidShortcut(keys=${keys.size}, stableId=<redacted>)"
 }
 
 internal class NanoKvmAutomationPortHidCatalog internal constructor(
     shortcuts: List<NanoKvmAutomationPortHidShortcut>,
-    internal val opaqueToken: Any,
 ) {
     val shortcuts: List<NanoKvmAutomationPortHidShortcut> = shortcuts.toList()
+
+    init {
+        require(shortcuts.distinctBy { it.stableId }.size == shortcuts.size) {
+            "HID shortcut catalog must not contain duplicate stable IDs"
+        }
+    }
 
     internal fun requireExactMember(shortcut: NanoKvmAutomationPortHidShortcut) {
         require(shortcuts.any { it === shortcut }) {
@@ -89,7 +99,7 @@ internal class NanoKvmAutomationPortHidCatalog internal constructor(
     }
 
     override fun toString(): String =
-        "NanoKvmAutomationPortHidCatalog(shortcuts=${shortcuts.size}, token=<redacted>)"
+        "NanoKvmAutomationPortHidCatalog(shortcuts=${shortcuts.size})"
 }
 
 internal sealed interface NanoKvmAutomationPortHidRunResult {
@@ -107,15 +117,13 @@ internal data class NanoKvmAutomationPortLeaderKey(
 
 internal class NanoKvmAutomationPortAutostartScript internal constructor(
     val displayName: String,
-    internal val opaqueToken: Any,
 ) {
     override fun toString(): String =
-        "NanoKvmAutomationPortAutostartScript(displayName=<redacted>, token=<redacted>)"
+        "NanoKvmAutomationPortAutostartScript(displayName=<redacted>)"
 }
 
 internal class NanoKvmAutomationPortAutostartCatalog internal constructor(
     scripts: List<NanoKvmAutomationPortAutostartScript>,
-    internal val opaqueToken: Any,
 ) {
     val scripts: List<NanoKvmAutomationPortAutostartScript> = scripts.toList()
 
@@ -126,7 +134,7 @@ internal class NanoKvmAutomationPortAutostartCatalog internal constructor(
     }
 
     override fun toString(): String =
-        "NanoKvmAutomationPortAutostartCatalog(scripts=${scripts.size}, token=<redacted>)"
+        "NanoKvmAutomationPortAutostartCatalog(scripts=${scripts.size})"
 }
 
 /** Mutable, closeable result buffer. Incidental diagnostics never include its content. */
@@ -212,26 +220,42 @@ internal class NanoKvmProtocolAutomationPort(
     private val releaseInput: () -> Boolean,
     private val currentInput: () -> NanoKvmInputSocket?,
 ) : NanoKvmAutomationPort {
+    private var latestHidCatalog: ProtocolHidCatalogBinding? = null
+    private var latestAutostartCatalog: ProtocolAutostartCatalogBinding? = null
+
     override suspend fun listHidShortcuts(): NanoKvmAutomationPortHidCatalog {
-        val catalog = api.savedHidShortcuts()
-        return NanoKvmAutomationPortHidCatalog(
-            shortcuts = catalog.shortcuts.map { shortcut ->
-                NanoKvmAutomationPortHidShortcut(
-                    keys = shortcut.keys.map { key ->
-                        NanoKvmAutomationPortHidKey(key.code, key.label, key.knownCode != null)
-                    },
-                    runnable = shortcut.isRunnable,
-                    opaqueToken = ProtocolHidShortcutToken(shortcut),
-                )
-            },
-            opaqueToken = ProtocolHidCatalogToken(catalog),
+        latestHidCatalog = null
+        val protocolCatalog = api.savedHidShortcuts()
+        val members = protocolCatalog.shortcuts.map { shortcut ->
+            NanoKvmAutomationPortHidShortcut(
+                stableId = shortcut.id,
+                keys = shortcut.keys.map { key ->
+                    NanoKvmAutomationPortHidKey(key.code, key.label, key.knownCode != null)
+                },
+                runnable = shortcut.isRunnable,
+            ) to shortcut
+        }
+        val portCatalog = NanoKvmAutomationPortHidCatalog(
+            shortcuts = members.map { it.first },
         )
+        val protocolMembers =
+            IdentityHashMap<NanoKvmAutomationPortHidShortcut, NanoKvmSavedHidShortcut>()
+        members.forEach { (portShortcut, protocolShortcut) ->
+            protocolMembers[portShortcut] = protocolShortcut
+        }
+        latestHidCatalog = ProtocolHidCatalogBinding(
+            portCatalog = portCatalog,
+            protocolCatalog = protocolCatalog,
+            members = protocolMembers,
+        )
+        return portCatalog
     }
 
     override suspend fun saveHidShortcut(wireCodes: List<String>) {
-        api.addSavedHidShortcut(
-            NanoKvmHidShortcutDraft.record(wireCodes.map(NanoKvmHidKeyCode::known)),
-        )
+        val draft = NanoKvmHidShortcutDraft.record(wireCodes.map(NanoKvmHidKeyCode::known))
+        // The server returns no created ID. Consume the old snapshot before the sole dispatch.
+        latestHidCatalog = null
+        api.addSavedHidShortcut(draft)
     }
 
     override fun releaseAllInput(): Boolean = releaseInput()
@@ -240,9 +264,10 @@ internal class NanoKvmProtocolAutomationPort(
         catalog: NanoKvmAutomationPortHidCatalog,
         shortcut: NanoKvmAutomationPortHidShortcut,
     ): NanoKvmAutomationPortHidRunResult {
-        catalog.requireExactMember(shortcut)
+        val binding = requireLatestHidCatalog(catalog)
+        val protocolShortcut = binding.requireProtocolShortcut(shortcut)
         return when (
-            val result = currentInput()?.sendSavedHidShortcut(shortcut.protocolShortcut())
+            val result = currentInput()?.sendSavedHidShortcut(protocolShortcut)
                 ?: NanoKvmHidShortcutRunResult.ConnectionLost(reportsSent = 0)
         ) {
             is NanoKvmHidShortcutRunResult.Completed ->
@@ -257,8 +282,10 @@ internal class NanoKvmProtocolAutomationPort(
         catalog: NanoKvmAutomationPortHidCatalog,
         shortcut: NanoKvmAutomationPortHidShortcut,
     ) {
-        catalog.requireExactMember(shortcut)
-        api.deleteSavedHidShortcut(catalog.protocolCatalog(), shortcut.protocolShortcut())
+        val binding = requireLatestHidCatalog(catalog)
+        val protocolShortcut = binding.requireProtocolShortcut(shortcut)
+        latestHidCatalog = null
+        api.deleteSavedHidShortcut(binding.protocolCatalog, protocolShortcut)
     }
 
     override suspend fun leaderKey(): NanoKvmAutomationPortLeaderKey {
@@ -277,24 +304,36 @@ internal class NanoKvmProtocolAutomationPort(
     override suspend fun disableLeaderKey() = api.disableLeaderKey()
 
     override suspend fun listAutostartScripts(): NanoKvmAutomationPortAutostartCatalog {
-        val catalog = api.autostartScripts()
-        return NanoKvmAutomationPortAutostartCatalog(
-            scripts = catalog.scripts.map { script ->
-                NanoKvmAutomationPortAutostartScript(
-                    displayName = script.name,
-                    opaqueToken = ProtocolAutostartScriptToken(script),
-                )
-            },
-            opaqueToken = ProtocolAutostartCatalogToken(catalog),
+        latestAutostartCatalog = null
+        val protocolCatalog = api.autostartScripts()
+        val members = protocolCatalog.scripts.map { script ->
+            NanoKvmAutomationPortAutostartScript(displayName = script.name) to script
+        }
+        val portCatalog = NanoKvmAutomationPortAutostartCatalog(
+            scripts = members.map { it.first },
         )
+        val protocolMembers =
+            IdentityHashMap<NanoKvmAutomationPortAutostartScript, NanoKvmAutostartScript>()
+        members.forEach { (portScript, protocolScript) ->
+            protocolMembers[portScript] = protocolScript
+        }
+        latestAutostartCatalog = ProtocolAutostartCatalogBinding(
+            portCatalog = portCatalog,
+            protocolCatalog = protocolCatalog,
+            members = protocolMembers,
+        )
+        return portCatalog
     }
 
     override suspend fun readAutostartContent(
         catalog: NanoKvmAutomationPortAutostartCatalog,
         script: NanoKvmAutomationPortAutostartScript,
     ): NanoKvmAutomationPortAutostartContent {
-        catalog.requireExactMember(script)
-        val content = api.autostartContent(catalog.protocolCatalog(), script.protocolScript())
+        val binding = requireLatestAutostartCatalog(catalog)
+        val content = api.autostartContent(
+            binding.protocolCatalog,
+            binding.requireProtocolScript(script),
+        )
         return content.useToPortContent()
     }
 
@@ -303,9 +342,15 @@ internal class NanoKvmProtocolAutomationPort(
         fileName: String,
         content: NanoKvmAutomationPortAutostartWrite,
     ): NanoKvmAutomationPortAutostartReceipt {
+        val binding = requireLatestAutostartCatalog(catalog)
+        latestAutostartCatalog = null
         val protocolContent = content.consumeProtocolContent()
         try {
-            val receipt = api.createAutostartScript(catalog.protocolCatalog(), fileName, protocolContent)
+            val receipt = api.createAutostartScript(
+                binding.protocolCatalog,
+                fileName,
+                protocolContent,
+            )
             return receipt.toPortReceipt()
         } finally {
             protocolContent.close()
@@ -318,12 +363,14 @@ internal class NanoKvmProtocolAutomationPort(
         script: NanoKvmAutomationPortAutostartScript,
         content: NanoKvmAutomationPortAutostartWrite,
     ): NanoKvmAutomationPortAutostartReceipt {
-        catalog.requireExactMember(script)
+        val binding = requireLatestAutostartCatalog(catalog)
+        val protocolScript = binding.requireProtocolScript(script)
+        latestAutostartCatalog = null
         val protocolContent = content.consumeProtocolContent()
         try {
             val receipt = api.updateAutostartScript(
-                catalog.protocolCatalog(),
-                script.protocolScript(),
+                binding.protocolCatalog,
+                protocolScript,
                 protocolContent,
             )
             return receipt.toPortReceipt()
@@ -337,30 +384,55 @@ internal class NanoKvmProtocolAutomationPort(
         catalog: NanoKvmAutomationPortAutostartCatalog,
         script: NanoKvmAutomationPortAutostartScript,
     ) {
-        catalog.requireExactMember(script)
-        api.deleteAutostartScript(catalog.protocolCatalog(), script.protocolScript())
+        val binding = requireLatestAutostartCatalog(catalog)
+        val protocolScript = binding.requireProtocolScript(script)
+        latestAutostartCatalog = null
+        api.deleteAutostartScript(binding.protocolCatalog, protocolScript)
     }
 
-    private fun NanoKvmAutomationPortHidCatalog.protocolCatalog(): NanoKvmSavedHidShortcutCatalog =
-        (opaqueToken as? ProtocolHidCatalogToken)?.catalog
-            ?: throw IllegalArgumentException("Foreign HID shortcut catalog")
+    private fun requireLatestHidCatalog(
+        catalog: NanoKvmAutomationPortHidCatalog,
+    ): ProtocolHidCatalogBinding = latestHidCatalog
+        ?.takeIf { it.portCatalog === catalog }
+        ?: throw IllegalArgumentException("Foreign or stale HID shortcut catalog")
 
-    private fun NanoKvmAutomationPortHidShortcut.protocolShortcut(): NanoKvmSavedHidShortcut =
-        (opaqueToken as? ProtocolHidShortcutToken)?.shortcut
-            ?: throw IllegalArgumentException("Foreign HID shortcut handle")
+    private fun requireLatestAutostartCatalog(
+        catalog: NanoKvmAutomationPortAutostartCatalog,
+    ): ProtocolAutostartCatalogBinding = latestAutostartCatalog
+        ?.takeIf { it.portCatalog === catalog }
+        ?: throw IllegalArgumentException("Foreign or stale autostart catalog")
 
-    private fun NanoKvmAutomationPortAutostartCatalog.protocolCatalog(): NanoKvmAutostartCatalog =
-        (opaqueToken as? ProtocolAutostartCatalogToken)?.catalog
-            ?: throw IllegalArgumentException("Foreign autostart catalog")
+    private class ProtocolHidCatalogBinding(
+        val portCatalog: NanoKvmAutomationPortHidCatalog,
+        val protocolCatalog: NanoKvmSavedHidShortcutCatalog,
+        private val members: Map<NanoKvmAutomationPortHidShortcut, NanoKvmSavedHidShortcut>,
+    ) {
+        fun requireProtocolShortcut(
+            shortcut: NanoKvmAutomationPortHidShortcut,
+        ): NanoKvmSavedHidShortcut {
+            portCatalog.requireExactMember(shortcut)
+            return members[shortcut]
+                ?: throw IllegalArgumentException("Foreign HID shortcut handle")
+        }
 
-    private fun NanoKvmAutomationPortAutostartScript.protocolScript(): NanoKvmAutostartScript =
-        (opaqueToken as? ProtocolAutostartScriptToken)?.script
-            ?: throw IllegalArgumentException("Foreign autostart handle")
+        override fun toString(): String = "ProtocolHidCatalogBinding(<redacted>)"
+    }
 
-    private class ProtocolHidCatalogToken(val catalog: NanoKvmSavedHidShortcutCatalog)
-    private class ProtocolHidShortcutToken(val shortcut: NanoKvmSavedHidShortcut)
-    private class ProtocolAutostartCatalogToken(val catalog: NanoKvmAutostartCatalog)
-    private class ProtocolAutostartScriptToken(val script: NanoKvmAutostartScript)
+    private class ProtocolAutostartCatalogBinding(
+        val portCatalog: NanoKvmAutomationPortAutostartCatalog,
+        val protocolCatalog: NanoKvmAutostartCatalog,
+        private val members: Map<NanoKvmAutomationPortAutostartScript, NanoKvmAutostartScript>,
+    ) {
+        fun requireProtocolScript(
+            script: NanoKvmAutomationPortAutostartScript,
+        ): NanoKvmAutostartScript {
+            portCatalog.requireExactMember(script)
+            return members[script]
+                ?: throw IllegalArgumentException("Foreign autostart handle")
+        }
+
+        override fun toString(): String = "ProtocolAutostartCatalogBinding(<redacted>)"
+    }
 }
 
 private fun NanoKvmAutostartContent.useToPortContent(): NanoKvmAutomationPortAutostartContent =

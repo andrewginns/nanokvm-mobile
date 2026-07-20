@@ -45,7 +45,15 @@ class SavedCredentialStore(
     context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : SavedCredentials {
-    private val credentialsDirectory = File(context.noBackupFilesDir, CREDENTIALS_DIRECTORY)
+    private val applicationContext = context.applicationContext
+
+    /**
+     * Resolving [Context.getNoBackupFilesDir] can create the directory. Defer that filesystem
+     * work until a credential operation has already moved to [ioDispatcher].
+     */
+    private val credentialsDirectory by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        File(applicationContext.noBackupFilesDir, CREDENTIALS_DIRECTORY)
+    }
 
     override suspend fun hasCredential(profileId: String): Boolean = withContext(ioDispatcher) {
         val alias = keyAlias(profileId)

@@ -1,14 +1,10 @@
 package org.nanokvm.mobile.runtime
 
 import android.view.Surface
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
+import java.net.URI
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.nanokvm.mobile.data.HostProfile
-import org.nanokvm.mobile.data.ProfilesRepository
-import org.nanokvm.mobile.security.SavedCredentials
 import org.nanokvm.protocol.NanoKvmServerCapabilities
 
 /**
@@ -35,299 +31,235 @@ interface VideoSurfaceSink {
     fun detachVideoSurface(surface: Surface)
 }
 
-interface ConsoleCommandSink {
-    /** Replay-free, memory-only operator streams. Existing test/no-op sinks receive empty streams. */
-    val operatorState: StateFlow<OperatorUiState>
-        get() = EmptyOperatorFlows.state
-    val operatorOutput: SharedFlow<OperatorEphemeralOutput>
-        get() = EmptyOperatorFlows.output
-    /** Opt-in PicoClaw state. Construction and dialog discovery do not probe the appliance. */
-    val picoClawState: StateFlow<PicoClawUiState>
-        get() = EmptyPicoClawFlows.state
-    /** Replay-free external navigation; authorization URLs never enter durable UI state. */
-    val externalNavigation: SharedFlow<ExternalHttpsNavigationRequest>
-        get() = EmptyExternalNavigation.flow
-
+/** Low-rate controls that are intrinsic to every connected console. */
+interface ConsoleCoreControls {
     fun reconnect()
     fun updateVideo(settings: VideoSettings)
     /** Explicit, replay-free write for the app-local MJPEG frame-detection preference. */
-    fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
+    fun setMjpegFrameDetectionEnabled(enabled: Boolean)
     fun resetHid()
     fun power(action: PowerAction)
     /** Types destination-bound, explicitly approved phone text through HID. */
     fun pasteText(request: ApprovedPasteRequest)
     /** Cancels an in-progress paced clipboard operation after its current atomic key pair. */
     fun cancelPaste()
+}
 
+/** Commands owned by the virtual-media and Wake-on-LAN surface. */
+interface Phase3Controls {
     /** Opens/closes low-frequency Phase 3 polling; implementations must stop it in background. */
-    fun setPhase3SurfaceVisible(visible: Boolean) = Unit
-    fun refreshPhase3() = Unit
+    fun setPhase3SurfaceVisible(visible: Boolean)
+    fun refreshPhase3()
     fun mountPhase3Image(
         destination: ApprovedPhase3Destination,
         imageId: Long,
         mode: Phase3ImageMountMode,
-    ) = Unit
-    fun restorePhase3PhysicalMedia(destination: ApprovedPhase3Destination) = Unit
-    fun deletePhase3Image(destination: ApprovedPhase3Destination, imageId: Long) = Unit
+    )
+    fun restorePhase3PhysicalMedia(destination: ApprovedPhase3Destination)
+    fun deletePhase3Image(destination: ApprovedPhase3Destination, imageId: Long)
     fun setPhase3HidMode(
         destination: ApprovedPhase3Destination,
         selection: Phase3HidModeSelection,
-    ) = Unit
-    fun setPhase3NetworkEnabled(destination: ApprovedPhase3Destination, enabled: Boolean) = Unit
-    fun setPhase3DiskEnabled(destination: ApprovedPhase3Destination, enabled: Boolean) = Unit
-    fun startPhase3ImageTransfer(destination: ApprovedPhase3Destination, sourceUrl: String) = Unit
-    fun sendPhase3WakeOnLan(destination: ApprovedPhase3Destination, macAddress: String) = Unit
+    )
+    fun setPhase3NetworkEnabled(destination: ApprovedPhase3Destination, enabled: Boolean)
+    fun setPhase3DiskEnabled(destination: ApprovedPhase3Destination, enabled: Boolean)
+    fun startPhase3ImageTransfer(destination: ApprovedPhase3Destination, sourceUrl: String)
+    fun sendPhase3WakeOnLan(destination: ApprovedPhase3Destination, macAddress: String)
     fun renamePhase3WakeOnLanTarget(
         destination: ApprovedPhase3Destination,
         targetId: Long,
         name: String,
-    ) = Unit
+    )
     fun deletePhase3WakeOnLanTarget(
         destination: ApprovedPhase3Destination,
         targetId: Long,
-    ) = Unit
+    )
+}
 
+/** Commands owned by the authenticated appliance-administration surface. */
+interface AdministrationControls {
     /** Opens/closes privileged administration loading; hidden/background surfaces perform no I/O. */
-    fun setAdministrationSurfaceVisible(visible: Boolean) = Unit
-    fun refreshAdministration() = Unit
+    fun setAdministrationSurfaceVisible(visible: Boolean)
+    fun refreshAdministration()
     fun setAdministrationPreviewUpdates(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = Unit
-    fun startAdministrationOnlineUpdate(destination: ApprovedAdministrationDestination) = Unit
-    fun rebootAdministrationAppliance(destination: ApprovedAdministrationDestination) = Unit
+    )
+    fun startAdministrationOnlineUpdate(destination: ApprovedAdministrationDestination)
+    fun rebootAdministrationAppliance(destination: ApprovedAdministrationDestination)
     fun setAdministrationOledSleep(
         destination: ApprovedAdministrationDestination,
         preset: AdministrationOledPreset,
-    ) = Unit
+    )
     fun setAdministrationSshEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = Unit
+    )
     fun setAdministrationHostname(
         destination: ApprovedAdministrationDestination,
         hostname: String,
-    ) = Unit
+    )
     fun setAdministrationMdnsEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = Unit
+    )
     fun setAdministrationWebTitle(
         destination: ApprovedAdministrationDestination,
         title: String,
-    ) = Unit
-    fun resetAdministrationWebTitle(destination: ApprovedAdministrationDestination) = Unit
+    )
+    fun resetAdministrationWebTitle(destination: ApprovedAdministrationDestination)
     fun setAdministrationManualDns(
         destination: ApprovedAdministrationDestination,
         servers: List<String>,
-    ) = Unit
-    fun setAdministrationDhcpDns(destination: ApprovedAdministrationDestination) = Unit
+    )
+    fun setAdministrationDhcpDns(destination: ApprovedAdministrationDestination)
     /** Ownership of [password] transfers to the sink, which clears every terminal path. */
     fun connectAdministrationWifi(
         destination: ApprovedAdministrationDestination,
         ssid: String,
         password: CharArray,
-    ) {
-        password.fill('\u0000')
-    }
-    fun disconnectAdministrationWifi(destination: ApprovedAdministrationDestination) = Unit
+    )
+    fun disconnectAdministrationWifi(destination: ApprovedAdministrationDestination)
     fun executeAdministrationTailscale(
         destination: ApprovedAdministrationDestination,
         command: AdministrationTailscaleCommand,
-    ) = Unit
+    )
+    /** Acknowledges only the exact generation-bound request that Android opened successfully. */
+    fun acknowledgeAdministrationNavigationOpened(
+        destination: ApprovedAdministrationDestination,
+        requestId: Long,
+    )
     fun setAdministrationHdmiEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = Unit
-    fun resetAdministrationHdmi(destination: ApprovedAdministrationDestination) = Unit
+    )
+    fun resetAdministrationHdmi(destination: ApprovedAdministrationDestination)
     fun setAdministrationMouseJiggler(
         destination: ApprovedAdministrationDestination,
         selection: AdministrationMouseJigglerSelection,
-    ) = Unit
+    )
     fun setAdministrationMemoryLimitEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = Unit
+    )
     fun setAdministrationSwapSize(
         destination: ApprovedAdministrationDestination,
         preset: AdministrationSwapPreset,
-    ) = Unit
+    )
     /** Enables appliance TLS once. Deliberately no disable operation is exposed. */
-    fun enableAdministrationTls(destination: ApprovedAdministrationDestination) = Unit
+    fun enableAdministrationTls(destination: ApprovedAdministrationDestination)
+}
 
-    fun setOperatorSurfaceVisible(visible: Boolean) = Unit
-    fun refreshOperatorScripts() = Unit
-    fun enterOperatorTerminal(destination: ApprovedOperatorDestination) = Unit
-    fun closeOperatorTerminal(destination: ApprovedOperatorDestination) = Unit
+/** State and commands owned by the operator terminal, serial, and script tools. */
+interface OperatorControls {
+    val operatorState: StateFlow<OperatorUiState>
+    /** Replay-free, memory-only terminal and serial output. */
+    val operatorOutput: SharedFlow<OperatorEphemeralOutput>
+    fun setOperatorSurfaceVisible(visible: Boolean)
+    fun refreshOperatorScripts()
+    fun enterOperatorTerminal(destination: ApprovedOperatorDestination)
+    fun closeOperatorTerminal(destination: ApprovedOperatorDestination)
     fun sendOperatorTerminalInput(
         destination: ApprovedOperatorDestination,
         text: String,
-    ) = Unit
+    )
     fun resizeOperatorTerminal(
         destination: ApprovedOperatorDestination,
         rows: Int,
         columns: Int,
-    ) = Unit
+    )
     fun startOperatorSerial(
         destination: ApprovedOperatorDestination,
         configuration: OperatorSerialConfiguration,
-    ) = Unit
-    fun exitOperatorSerial(destination: ApprovedOperatorDestination) = Unit
+    )
+    fun exitOperatorSerial(destination: ApprovedOperatorDestination)
     fun uploadOperatorScript(
         destination: ApprovedOperatorDestination,
         request: OperatorScriptUploadRequest,
-    ) = Unit
+    )
     fun runOperatorScript(
         destination: ApprovedOperatorDestination,
         scriptId: Long,
         mode: OperatorScriptRunMode,
-    ) = Unit
+    )
     fun deleteOperatorScript(
         destination: ApprovedOperatorDestination,
         scriptId: Long,
-    ) = Unit
+    )
+}
 
+/** State and commands owned by the opt-in PicoClaw surface. */
+interface PicoClawControls {
+    /** Construction and dialog discovery do not probe the appliance. */
+    val picoClawState: StateFlow<PicoClawUiState>
     /** The surface may be discovered without entering/probing PicoClaw. */
-    fun setPicoClawSurfaceVisible(visible: Boolean) = Unit
+    fun setPicoClawSurfaceVisible(visible: Boolean)
     /** Called only after the broad filesystem/exec/cron/MCP/HID warning is confirmed. */
-    fun enterPicoClaw(destination: ApprovedPicoClawDestination) = Unit
-    fun refreshPicoClaw(destination: ApprovedPicoClawDestination) = Unit
-    fun installPicoClawRuntime(destination: ApprovedPicoClawDestination) = Unit
-    fun startPicoClawRuntime(destination: ApprovedPicoClawDestination) = Unit
-    fun stopPicoClawRuntime(destination: ApprovedPicoClawDestination) = Unit
-    fun uninstallPicoClawRuntime(destination: ApprovedPicoClawDestination) = Unit
+    fun enterPicoClaw(destination: ApprovedPicoClawDestination)
+    fun refreshPicoClaw(destination: ApprovedPicoClawDestination)
+    fun installPicoClawRuntime(destination: ApprovedPicoClawDestination)
+    fun startPicoClawRuntime(destination: ApprovedPicoClawDestination)
+    fun stopPicoClawRuntime(destination: ApprovedPicoClawDestination)
+    fun uninstallPicoClawRuntime(destination: ApprovedPicoClawDestination)
     fun setPicoClawProfile(
         destination: ApprovedPicoClawDestination,
         profile: PicoClawProfile,
-    ) = Unit
+    )
     fun configurePicoClawModel(
         destination: ApprovedPicoClawDestination,
         request: PicoClawModelConfigurationRequest,
-    ) = Unit
-    fun refreshPicoClawHistories(destination: ApprovedPicoClawDestination) = Unit
-    fun loadPicoClawHistory(destination: ApprovedPicoClawDestination, historyId: Long) = Unit
-    fun deletePicoClawHistory(destination: ApprovedPicoClawDestination, historyId: Long) = Unit
-    fun openPicoClawChat(destination: ApprovedPicoClawDestination) = Unit
-    fun sendPicoClawChatMessage(destination: ApprovedPicoClawDestination, content: String) = Unit
-    fun cancelPicoClawChat(destination: ApprovedPicoClawDestination) = Unit
-    fun closeAndReleasePicoClaw(destination: ApprovedPicoClawDestination) = Unit
+    )
+    fun refreshPicoClawHistories(destination: ApprovedPicoClawDestination)
+    fun loadPicoClawHistory(destination: ApprovedPicoClawDestination, historyId: Long)
+    fun deletePicoClawHistory(destination: ApprovedPicoClawDestination, historyId: Long)
+    fun openPicoClawChat(destination: ApprovedPicoClawDestination)
+    fun sendPicoClawChatMessage(destination: ApprovedPicoClawDestination, content: String)
+    fun cancelPicoClawChat(destination: ApprovedPicoClawDestination)
+    fun closeAndReleasePicoClaw(destination: ApprovedPicoClawDestination)
 }
 
-/**
- * App-internal bridge for the feature-contained automation editor. Keeping the rich, opaque
- * gateway out of the public command interface prevents handles and root-equivalent script content
- * from becoming durable UI state or a generally reusable API.
- */
+/** App-internal owner for the feature-contained automation editor. */
 internal interface NanoKvmAutomationFeatureOwner {
     fun setAutomationSurfaceVisible(visible: Boolean)
-    /** Opaque at the public backend boundary; only the app-internal helper may recover the type. */
-    fun currentAutomationGatewayToken(): Any?
+    fun currentAutomationGateway(): NanoKvmAutomationGateway?
 }
 
-internal fun NanoKvmAutomationFeatureOwner.currentAutomationGateway():
-    NanoKvmAutomationGateway? = currentAutomationGatewayToken() as? NanoKvmAutomationGateway
-
 /**
- * App-internal bridge for the generation-bound, one-shot offline updater. The public backend
- * exposes only an opaque token so document openers and update approvals cannot become a reusable
- * command API or durable console state.
+ * App-internal owner for the generation-bound, one-shot offline updater. The gateway remains
+ * outside the public command interface and must never become durable console state.
  */
 internal interface NanoKvmOfflineUpdateFeatureOwner {
     fun setOfflineUpdateSurfaceVisible(visible: Boolean)
-    fun currentOfflineUpdateGatewayToken(): Any?
+    fun currentOfflineUpdateGateway(): NanoKvmOfflineUpdateGateway?
 }
-
-internal fun NanoKvmOfflineUpdateFeatureOwner.currentOfflineUpdateGateway():
-    NanoKvmOfflineUpdateGateway? =
-    currentOfflineUpdateGatewayToken() as? NanoKvmOfflineUpdateGateway
 
 /**
  * App-internal factory for one exact, generation-bound password-change coordinator. Keeping this
- * out of [ConsoleCommandSink] prevents privileged credential mutation from becoming a replayable
+ * out of [ConsoleCoreControls] prevents privileged credential mutation from becoming a replayable
  * fire-and-forget UI command.
  */
 internal interface NanoKvmPasswordChangeFeatureOwner {
-    fun createPasswordChangeCoordinatorToken(requestToken: Any): Any?
+    fun createPasswordChangeCoordinator(
+        request: NanoKvmPasswordChangeRequest,
+    ): NanoKvmPasswordChangeCoordinator?
 }
 
-internal fun NanoKvmPasswordChangeFeatureOwner.createPasswordChangeCoordinator(
-    destination: ApprovedAdministrationDestination,
-    profile: HostProfile,
-    savedCredentials: SavedCredentials,
-    profilesRepository: ProfilesRepository,
-    sessionTerminator: NanoKvmPasswordChangeSessionTerminator,
-): NanoKvmPasswordChangeCoordinator? = createPasswordChangeCoordinatorToken(
-    NanoKvmPasswordChangeFactoryRequest(
-        destination,
-        profile,
-        savedCredentials,
-        profilesRepository,
-        sessionTerminator,
-    ),
-) as? NanoKvmPasswordChangeCoordinator
-
-private class NanoKvmPasswordChangeFactoryRequest(
-    val destination: ApprovedAdministrationDestination,
-    val profile: HostProfile,
-    val savedCredentials: SavedCredentials,
-    val profilesRepository: ProfilesRepository,
-    val sessionTerminator: NanoKvmPasswordChangeSessionTerminator,
-) {
-    override fun toString(): String =
-        "NanoKvmPasswordChangeFactoryRequest(destination=<redacted>, profile=<redacted>)"
-}
-
-internal fun Any.passwordChangeFactoryRequestOrNull(): PasswordChangeFactoryValues? =
-    (this as? NanoKvmPasswordChangeFactoryRequest)?.let {
-        PasswordChangeFactoryValues(
-            it.destination,
-            it.profile,
-            it.savedCredentials,
-            it.profilesRepository,
-            it.sessionTerminator,
-        )
-    }
-
-internal class PasswordChangeFactoryValues(
-    val destination: ApprovedAdministrationDestination,
-    val profile: HostProfile,
-    val savedCredentials: SavedCredentials,
-    val profilesRepository: ProfilesRepository,
-    val sessionTerminator: NanoKvmPasswordChangeSessionTerminator,
-) {
-    override fun toString(): String =
-        "PasswordChangeFactoryValues(destination=<redacted>, profile=<redacted>)"
-}
-
-private object EmptyOperatorFlows {
-    val state = MutableStateFlow(OperatorUiState())
-    val output = MutableSharedFlow<OperatorEphemeralOutput>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-}
-
-private object EmptyPicoClawFlows {
-    val state = MutableStateFlow(PicoClawUiState())
-}
-
-private object EmptyExternalNavigation {
-    val flow = MutableSharedFlow<ExternalHttpsNavigationRequest>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-}
-
-/** Short-lived HTTPS handoff whose sensitive URL is deliberately absent from properties/strings. */
-class ExternalHttpsNavigationRequest internal constructor(
-    private val value: String,
-) {
-    fun open(opener: (String) -> Unit) = opener(value)
-
-    override fun toString(): String = "ExternalHttpsNavigationRequest(url=<redacted>)"
-}
+/**
+ * Concrete, typed feature inventory for one console backend.
+ *
+ * Optional entries represent genuinely unavailable features (and keep focused tests from having
+ * to fabricate unrelated behavior). Production commands never fall through to default no-ops.
+ */
+class ConsoleFeatureBundle internal constructor(
+    val core: ConsoleCoreControls,
+    val phase3: Phase3Controls? = null,
+    val administration: AdministrationControls? = null,
+    val operator: OperatorControls? = null,
+    val picoClaw: PicoClawControls? = null,
+    internal val automation: NanoKvmAutomationFeatureOwner? = null,
+    internal val offlineUpdate: NanoKvmOfflineUpdateFeatureOwner? = null,
+    internal val passwordChange: NanoKvmPasswordChangeFeatureOwner? = null,
+)
 
 data class ApprovedPicoClawDestination(
     val profileId: String,
@@ -367,11 +299,8 @@ enum class PicoClawManualInputUiState { Released, Acquiring, Held, HeldByOther, 
 enum class PicoClawNoticeKind { Information, Applied, Reconciled, Indeterminate, Rejected }
 enum class PicoClawMessageRole { User, Assistant, Observation, Tool }
 
-data class PicoClawNoticeUiState(
-    val kind: PicoClawNoticeKind,
-    /** App-authored, bounded guidance only. */
-    val message: String,
-)
+private const val MAX_PICOCLAW_MESSAGE_TEXT_BYTES = 32 * 1_024
+private const val MAX_PICOCLAW_TOOL_ACTION_BYTES = 256
 
 class PicoClawHistoryUiState(
     val id: Long,
@@ -383,10 +312,47 @@ class PicoClawHistoryUiState(
         "PicoClawHistoryUiState(id=$id, messageCount=$messageCount, content=<redacted>)"
 }
 
-class PicoClawMessageUiState(
-    val role: PicoClawMessageRole,
-    val content: String,
-) {
+/**
+ * Closed chat-display content that keeps appliance text opaque while representing app copy
+ * semantically. Text variants enforce the ingress limits at this state boundary and redact their
+ * payloads from diagnostics.
+ */
+sealed interface PicoClawMessageContent {
+    val role: PicoClawMessageRole
+
+    class ApplianceText(
+        override val role: PicoClawMessageRole,
+        val value: String,
+    ) : PicoClawMessageContent {
+        val utf8ByteCount: Int = requireNotNull(
+            value.utf8SizeAtMost(MAX_PICOCLAW_MESSAGE_TEXT_BYTES),
+        ) { "PicoClaw message text exceeds the app display limit" }
+
+        override fun toString(): String =
+            "PicoClawMessageContent.ApplianceText(role=$role, " +
+                "utf8ByteCount=$utf8ByteCount, value=<redacted>)"
+    }
+
+    data object ScreenObservationCaptured : PicoClawMessageContent {
+        override val role: PicoClawMessageRole = PicoClawMessageRole.Observation
+    }
+
+    class ToolAction(val action: String) : PicoClawMessageContent {
+        override val role: PicoClawMessageRole = PicoClawMessageRole.Tool
+        val utf8ByteCount: Int = requireNotNull(
+            action.utf8SizeAtMost(MAX_PICOCLAW_TOOL_ACTION_BYTES),
+        ) { "PicoClaw tool action exceeds the app display limit" }
+
+        override fun toString(): String =
+            "PicoClawMessageContent.ToolAction(utf8ByteCount=$utf8ByteCount, " +
+                "action=<redacted>)"
+    }
+}
+
+class PicoClawMessageUiState(val content: PicoClawMessageContent) {
+    val role: PicoClawMessageRole
+        get() = content.role
+
     override fun toString(): String =
         "PicoClawMessageUiState(role=$role, content=<redacted>)"
 }
@@ -411,7 +377,7 @@ data class PicoClawUiState(
     val chatPhase: PicoClawChatUiPhase = PicoClawChatUiPhase.Inactive,
     val manualInput: PicoClawManualInputUiState = PicoClawManualInputUiState.Released,
     val chatMessages: List<PicoClawMessageUiState> = emptyList(),
-    val notice: PicoClawNoticeUiState? = null,
+    val notice: PicoClawNotice? = null,
 ) {
     val manualInputBlockedOrUncertain: Boolean
         get() = manualInput != PicoClawManualInputUiState.Released
@@ -468,12 +434,6 @@ enum class OperatorTerminalUiPhase { Inactive, Connecting, Connected, Closing, F
 
 enum class OperatorNoticeKind { Information, Applied, Reconciled, Indeterminate, Rejected }
 
-data class OperatorNoticeUiState(
-    val kind: OperatorNoticeKind,
-    /** Bounded app-authored guidance only. */
-    val message: String,
-)
-
 data class OperatorScriptUiState(
     val id: Long,
     val displayName: String,
@@ -487,7 +447,7 @@ data class OperatorUiState(
     val serialActive: Boolean = false,
     val scriptsLoaded: Boolean = false,
     val scripts: List<OperatorScriptUiState> = emptyList(),
-    val notice: OperatorNoticeUiState? = null,
+    val notice: OperatorNotice? = null,
 )
 
 enum class OperatorOutputKind { Terminal, Script }
@@ -498,12 +458,8 @@ class OperatorEphemeralOutput internal constructor(
     content: String,
 ) {
     private val retainedContent = content
-    val utf8ByteCount: Int = content.encodeToByteArray().size
-
-    init {
-        require(utf8ByteCount <= MAX_OPERATOR_OUTPUT_BYTES) {
-            "Operator output exceeds the app display limit"
-        }
+    val utf8ByteCount: Int = requireNotNull(content.utf8SizeAtMost(MAX_OPERATOR_OUTPUT_BYTES)) {
+        "Operator output exceeds the app display limit"
     }
 
     fun copyText(): String = retainedContent.toCharArray().concatToString()
@@ -544,35 +500,142 @@ class OperatorScriptUploadRequest(
     fun clear() = content.fill(0)
 }
 
-internal fun appendBoundedOperatorOutput(
-    current: String,
-    incoming: String,
-    maximumUtf8Bytes: Int = MAX_OPERATOR_OUTPUT_BYTES,
-): String {
-    require(maximumUtf8Bytes > 0) { "Output limit must be positive" }
-    val combined = current + incoming
-    val bytes = combined.encodeToByteArray()
-    if (bytes.size <= maximumUtf8Bytes) return combined
-    var start = combined.length
-    var retainedBytes = 0
-    while (start > 0) {
-        var candidate = start - 1
-        if (
-            candidate > 0 &&
-            combined[candidate].isLowSurrogate() &&
-            combined[candidate - 1].isHighSurrogate()
-        ) {
-            candidate--
-        }
-        val codePointBytes = combined.substring(candidate, start).encodeToByteArray().size
-        if (retainedBytes + codePointBytes > maximumUtf8Bytes) break
-        retainedBytes += codePointBytes
-        start = candidate
+/**
+ * Incremental, bounded storage for terminal and script output.
+ *
+ * Output arrives in many small events. Keeping pre-counted UTF-8 chunks avoids re-encoding the
+ * entire retained history and allocating one temporary substring per code point whenever the
+ * limit is reached. This owner is intentionally not thread-safe; the operator UI owns and mutates
+ * it from its lifecycle-aware Main collector.
+ */
+internal class BoundedOperatorOutputBuffer(
+    private val maximumUtf8Bytes: Int = MAX_OPERATOR_OUTPUT_BYTES,
+) {
+    private data class Chunk(
+        val text: StringBuilder = StringBuilder(),
+        var startCharIndex: Int = 0,
+        var utf8Bytes: Int = 0,
+    )
+
+    private val chunks = java.util.ArrayDeque<Chunk>()
+    private val targetChunkBytes = minOf(
+        OPERATOR_OUTPUT_CHUNK_BYTES,
+        maximumUtf8Bytes.coerceAtLeast(MAX_UTF8_SCALAR_BYTES),
+    )
+    private var retainedCharacters = 0
+    private var retainedBytes = 0
+
+    init {
+        require(maximumUtf8Bytes > 0) { "Output limit must be positive" }
     }
-    return combined.substring(start)
+
+    internal val retainedUtf8Bytes: Int
+        get() = retainedBytes
+
+    internal val retainedChunkCount: Int
+        get() = chunks.size
+
+    fun append(incoming: String) {
+        if (incoming.isEmpty()) return
+        var index = appendSurrogatePairAcrossEventBoundary(incoming)
+        while (index < incoming.length) {
+            val scalar = incoming.utf8ScalarInfoAt(index)
+            val charCount = scalar ushr UTF8_SCALAR_CHAR_COUNT_SHIFT
+            val byteCount = scalar and UTF8_SCALAR_BYTE_COUNT_MASK
+            var tail = chunks.peekLast()
+            if (
+                tail == null ||
+                tail.startCharIndex != 0 ||
+                tail.utf8Bytes + byteCount > targetChunkBytes
+            ) {
+                tail = Chunk()
+                chunks.addLast(tail)
+            }
+            tail.text.append(incoming, index, index + charCount)
+            tail.utf8Bytes += byteCount
+            retainedCharacters += charCount
+            retainedBytes += byteCount
+            index += charCount
+        }
+        trimToLimit()
+    }
+
+    fun snapshot(): String = buildString(retainedCharacters) {
+        chunks.forEach { chunk ->
+            append(chunk.text, chunk.startCharIndex, chunk.text.length)
+        }
+    }
+
+    fun clear() {
+        chunks.clear()
+        retainedCharacters = 0
+        retainedBytes = 0
+    }
+
+    private fun appendSurrogatePairAcrossEventBoundary(incoming: String): Int {
+        if (!incoming.first().isLowSurrogate()) return 0
+        val tail = chunks.peekLast() ?: return 0
+        if (tail.startCharIndex >= tail.text.length || !tail.text.last().isHighSurrogate()) return 0
+
+        tail.text.append(incoming.first())
+        val addedBytes = MAX_UTF8_SCALAR_BYTES - INVALID_UTF16_CODE_UNIT_UTF8_BYTES
+        tail.utf8Bytes += addedBytes
+        retainedCharacters++
+        retainedBytes += addedBytes
+        trimToLimit()
+        return 1
+    }
+
+    private fun trimToLimit() {
+        while (retainedBytes > maximumUtf8Bytes) {
+            val first = chunks.peekFirst() ?: return
+            val excess = retainedBytes - maximumUtf8Bytes
+            if (first.utf8Bytes <= excess) {
+                retainedBytes -= first.utf8Bytes
+                retainedCharacters -= first.text.length - first.startCharIndex
+                chunks.removeFirst()
+                continue
+            }
+
+            val previousStart = first.startCharIndex
+            var index = previousStart
+            var removedBytes = 0
+            while (removedBytes < excess && index < first.text.length) {
+                val scalar = first.text.utf8ScalarInfoAt(index)
+                removedBytes += scalar and UTF8_SCALAR_BYTE_COUNT_MASK
+                index += scalar ushr UTF8_SCALAR_CHAR_COUNT_SHIFT
+            }
+            first.startCharIndex = index
+            first.utf8Bytes -= removedBytes
+            retainedBytes -= removedBytes
+            retainedCharacters -= index - previousStart
+            if (first.startCharIndex == first.text.length) chunks.removeFirst()
+        }
+    }
+}
+
+/** Packs UTF-16 char count in the high byte and UTF-8 byte count in the low byte. */
+private fun CharSequence.utf8ScalarInfoAt(index: Int): Int {
+    val first = this[index]
+    if (first.isHighSurrogate() && index + 1 < length && this[index + 1].isLowSurrogate()) {
+        return (2 shl UTF8_SCALAR_CHAR_COUNT_SHIFT) or MAX_UTF8_SCALAR_BYTES
+    }
+    val byteCount = when {
+        first.code <= 0x7f -> 1
+        first.code <= 0x7ff -> 2
+        first.isHighSurrogate() || first.isLowSurrogate() ->
+            INVALID_UTF16_CODE_UNIT_UTF8_BYTES
+        else -> 3
+    }
+    return (1 shl UTF8_SCALAR_CHAR_COUNT_SHIFT) or byteCount
 }
 
 const val MAX_OPERATOR_OUTPUT_BYTES: Int = 256 * 1024
+private const val OPERATOR_OUTPUT_CHUNK_BYTES: Int = 4 * 1024
+private const val MAX_UTF8_SCALAR_BYTES: Int = 4
+private const val UTF8_SCALAR_CHAR_COUNT_SHIFT: Int = 8
+private const val UTF8_SCALAR_BYTE_COUNT_MASK: Int = 0xff
+private val INVALID_UTF16_CODE_UNIT_UTF8_BYTES: Int = "\uD800".encodeToByteArray().size
 
 /** Exact authenticated destination shown in the final administration confirmation. */
 data class ApprovedAdministrationDestination(
@@ -719,11 +782,46 @@ data class AdministrationSwapUiState(
 
 enum class AdministrationNoticeKind { Information, Applied, Reconciled, Indeterminate, Rejected }
 
-data class AdministrationNoticeUiState(
-    val kind: AdministrationNoticeKind,
-    /** Bounded app-authored guidance only; never a server response body or Throwable message. */
-    val message: String,
-)
+/**
+ * Memory-only handoff for one official HTTPS administration page.
+ *
+ * The URL and destination identity deliberately have no public accessors and are redacted from
+ * diagnostics. [requestId] lets the UI acknowledge only the request it actually opened, while the
+ * destination and session generation prevent an acknowledgement crossing authenticated sessions.
+ */
+class PendingAdministrationHttpsNavigationRequest internal constructor(
+    val requestId: Long,
+    private val profileId: String,
+    private val authority: String,
+    val sessionGeneration: Long,
+    private val value: String,
+) {
+    init {
+        require(requestId > 0L) { "Navigation request ID must be positive" }
+        require(profileId.isNotBlank()) { "Profile ID must not be blank" }
+        require(authority.isNotBlank()) { "Destination authority must not be blank" }
+        require(sessionGeneration >= 0L) { "Session generation must not be negative" }
+        val parsed = runCatching { URI(value) }.getOrNull()
+        require(parsed?.scheme.equals("https", ignoreCase = true) && !parsed?.host.isNullOrBlank()) {
+            "External administration navigation must use HTTPS"
+        }
+    }
+
+    fun open(opener: (String) -> Unit) = opener(value)
+
+    internal fun matches(
+        destination: ApprovedAdministrationDestination,
+        expectedRequestId: Long,
+    ): Boolean =
+        requestId == expectedRequestId &&
+            profileId == destination.profileId &&
+            authority == destination.authority &&
+            sessionGeneration == destination.sessionGeneration
+
+    override fun toString(): String =
+        "PendingAdministrationHttpsNavigationRequest(requestId=$requestId, " +
+            "destination=<redacted>, sessionGeneration=$sessionGeneration, url=<redacted>)"
+}
 
 data class AdministrationUiState(
     val available: Boolean = false,
@@ -744,8 +842,23 @@ data class AdministrationUiState(
     val mouseJiggler: AdministrationMouseJigglerUiState? = null,
     val memoryLimit: AdministrationMemoryLimitUiState? = null,
     val swap: AdministrationSwapUiState? = null,
-    val notice: AdministrationNoticeUiState? = null,
+    val notice: AdministrationNotice? = null,
+    val pendingHttpsNavigation: PendingAdministrationHttpsNavigationRequest? = null,
 )
+
+internal fun AdministrationUiState.acknowledgeOpenedHttpsNavigation(
+    destination: ApprovedAdministrationDestination,
+    requestId: Long,
+): AdministrationUiState {
+    val pending = pendingHttpsNavigation
+    if (pending == null || !pending.matches(destination, requestId)) return this
+    return copy(
+        notice = AdministrationNotice.Guidance(
+            AdministrationNotice.GuidanceReason.TailscaleAuthorizationPageOpened,
+        ),
+        pendingHttpsNavigation = null,
+    )
+}
 
 /** Exact destination the user saw before approving a low-frequency Phase 3 mutation. */
 data class ApprovedPhase3Destination(
@@ -816,12 +929,12 @@ data class Phase3FeatureUiState(
     val virtualMedia: Phase3VirtualMediaUiState = Phase3VirtualMediaUiState(),
     val wakeOnLanLoaded: Boolean = false,
     val wakeOnLanTargets: List<Phase3WakeOnLanTargetUiState> = emptyList(),
-    /** Read/action guidance belonging only to the virtual-media surface. */
-    val virtualMediaNotice: String? = null,
-    /** Read/action guidance belonging only to the Wake-on-LAN surface. */
-    val wakeOnLanNotice: String? = null,
-    /** Safe, bounded guidance only; never a server body, path, URL, or Throwable message. */
-    val notice: String? = null,
+    /** Semantic read/action guidance belonging only to the virtual-media surface. */
+    val virtualMediaNotice: Phase3Notice? = null,
+    /** Semantic read/action guidance belonging only to the Wake-on-LAN surface. */
+    val wakeOnLanNotice: Phase3Notice? = null,
+    /** Presentation-independent guidance shared by the Phase 3 surfaces. */
+    val notice: Phase3Notice? = null,
 )
 
 /**
@@ -862,19 +975,19 @@ interface ConsoleBackend :
     AutoCloseable,
     RemoteInputSink,
     VideoSurfaceSink,
-    ConsoleCommandSink {
+    ConsoleCoreControls {
     val session: StateFlow<BackendSession>
+    val features: ConsoleFeatureBundle
 
     /** Performs a TLS-only trust gate before the caller unlocks or collects a password. */
-    suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome =
-        TrustPreflightOutcome.Failed("Certificate preflight is unavailable.", retryable = false)
+    suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome
 
     suspend fun connect(request: ConnectRequest): ConnectOutcome
     suspend fun disconnect()
     fun setForeground(isForeground: Boolean)
 
     /** Updates app-local intent only; settings collection must not perform appliance I/O. */
-    fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
+    fun setMjpegFrameDetectionPreference(enabled: Boolean)
 
     /** Releases transports and worker threads owned by the backend. */
     override fun close() {
@@ -901,7 +1014,10 @@ data class ConnectRequest(
 sealed interface ConnectOutcome {
     data object Connected : ConnectOutcome
     data class CertificateReviewRequired(val certificate: CertificateDetails) : ConnectOutcome
-    data class Failed(val userMessage: String, val retryable: Boolean = true) : ConnectOutcome
+    data class Failed(
+        val failure: ConnectionFailure,
+        val retryable: Boolean = true,
+    ) : ConnectOutcome
 }
 
 enum class CertificateTrustSource { System, SavedLeafPin }
@@ -913,7 +1029,10 @@ sealed interface TrustPreflightOutcome {
     ) : TrustPreflightOutcome
 
     data class CertificateReviewRequired(val certificate: CertificateDetails) : TrustPreflightOutcome
-    data class Failed(val userMessage: String, val retryable: Boolean) : TrustPreflightOutcome
+    data class Failed(
+        val failure: ConnectionFailure,
+        val retryable: Boolean,
+    ) : TrustPreflightOutcome
 }
 
 data class CertificateDetails(
@@ -923,7 +1042,9 @@ data class CertificateDetails(
     val subjectAlternativeNames: List<String>,
     val validFrom: String,
     val validUntil: String,
-    val reason: String = "This certificate is not trusted by Android.",
+    val reason: CertificatePresentationReason = CertificatePresentationReason.NotTrustedByAndroid,
+    /** True when certificate identity metadata was shortened or neutralized for safe display. */
+    val metadataTruncated: Boolean = true,
 )
 
 data class BackendSession(
@@ -932,7 +1053,7 @@ data class BackendSession(
     val sessionGeneration: Long = 0,
     val remoteWidth: Int = 1920,
     val remoteHeight: Int = 1080,
-    val streamLabel: String = "H.264 direct",
+    val streamLabel: VideoStreamDescriptor = VideoStreamDescriptor.DirectH264,
     val videoSettings: VideoSettings = VideoSettings(),
     /** Recreates the TextureView/BufferQueue when producer APIs or codecs must be switched. */
     val videoSurfaceGeneration: Long = 0,
@@ -946,13 +1067,29 @@ data class BackendSession(
     val phase3: Phase3FeatureUiState = Phase3FeatureUiState(),
     val administration: AdministrationUiState = AdministrationUiState(),
     val pasteProgress: RemotePasteProgress? = null,
-    val message: String? = null,
+    /** Latest connection/video state; high-frequency transitions are intentionally latest-wins. */
+    val status: ConsoleMessage.Status? = null,
+    /** Latest user-action feedback, isolated from unrelated video/status callbacks. */
+    val lastActionFeedback: SequencedConsoleActionFeedback? = null,
     val reconnectAttempt: Int? = null,
     val reconnectMaximumAttempts: Int? = null,
     val nextReconnectDelayMillis: Long? = null,
     /** Monotonically changes whenever all HID state is released, so UI latches can resynchronize. */
     val inputReleaseGeneration: Long = 0,
 )
+
+internal fun BackendSession.withActionFeedback(
+    content: ConsoleMessage.ActionFeedback,
+): BackendSession {
+    val previousRevision = lastActionFeedback?.revision ?: 0L
+    val revision = if (previousRevision == Long.MAX_VALUE) 1L else previousRevision + 1L
+    return copy(
+        lastActionFeedback = SequencedConsoleActionFeedback(
+            revision = revision,
+            content = content,
+        ),
+    )
+}
 
 internal fun BackendSession.recordDroppedFrames(count: Int): BackendSession {
     if (count <= 0) return this

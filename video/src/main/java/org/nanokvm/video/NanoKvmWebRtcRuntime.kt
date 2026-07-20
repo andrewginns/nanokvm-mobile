@@ -28,7 +28,10 @@ import livekit.org.webrtc.VideoTrack
 
 /** Process-scoped native WebRTC runtime. Construction never makes the console fail to open. */
 class NanoKvmWebRtcRuntime private constructor(context: Context) {
-    private val resources: Result<NativeResources> = createResources(context.applicationContext)
+    private val applicationContext = context.applicationContext
+    private val resources: Result<NativeResources> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        createResources(applicationContext)
+    }
 
     internal val peerFactory = NanoKvmWebRtcPeerFactory { iceServers, target, listener ->
         val native = resources.getOrElse {

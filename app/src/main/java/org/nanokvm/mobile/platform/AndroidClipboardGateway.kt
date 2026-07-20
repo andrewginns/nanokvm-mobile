@@ -9,6 +9,7 @@ import android.text.Spanned
 import androidx.core.content.getSystemService
 import org.nanokvm.mobile.clipboard.ClipboardEmptyReason
 import org.nanokvm.mobile.clipboard.ClipboardGateway
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalysis
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
@@ -62,12 +63,17 @@ class AndroidClipboardGateway internal constructor(
             return ClipboardReadResult.Empty(ClipboardEmptyReason.EmptyText)
         }
 
-        return ClipboardReadResult.Available(
-            ClipboardPayloadAnalyzer.analyzeDirectPlainText(
+        return when (
+            val analysis = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
                 text = directText,
                 isSensitive = description.hasSensitiveMarker(),
-            ),
-        )
+            )
+        ) {
+            is ClipboardPayloadAnalysis.Accepted -> ClipboardReadResult.Available(analysis.payload)
+            ClipboardPayloadAnalysis.TooLarge -> ClipboardReadResult.Rejected(
+                ClipboardRejectionReason.TooLarge,
+            )
+        }
     }
 
     private fun ClipDescription.mimeTypes(): List<String> =

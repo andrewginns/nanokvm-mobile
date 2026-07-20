@@ -31,14 +31,30 @@ class ClipboardPayloadAnalyzerTest {
     }
 
     @Test
-    fun `reports the server paste byte bound using utf8 size`() {
-        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText("£".repeat(513))
+    fun `accepts exact utf8 boundary and rejects before retaining one byte over`() {
+        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress("£".repeat(512))
+        val rejected = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress("£".repeat(512) + "a")
 
-        assertEquals(513, payload.characterCount)
-        assertEquals(1_026, payload.utf8ByteCount)
-        assertEquals(2, payload.bytesOverServerPasteLimit)
-        assertFalse(payload.fitsServerPasteLimit)
-        assertTrue(ClipboardTextWarning.ExceedsServerPasteLimit in payload.warnings)
+        assertTrue(accepted is ClipboardPayloadAnalysis.Accepted)
+        assertEquals(1_024, (accepted as ClipboardPayloadAnalysis.Accepted).payload.utf8ByteCount)
+        assertEquals(ClipboardPayloadAnalysis.TooLarge, rejected)
+        assertThrows(IllegalArgumentException::class.java) {
+            ClipboardPayloadAnalyzer.analyzeDirectPlainText("£".repeat(513))
+        }
+    }
+
+    @Test
+    fun `line-ending normalization is included in the allocation-free ingress bound`() {
+        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+            "a\r\n".repeat(512),
+        )
+        val rejected = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+            "a\r\n".repeat(512) + "a",
+        )
+
+        assertTrue(accepted is ClipboardPayloadAnalysis.Accepted)
+        assertEquals(1_024, (accepted as ClipboardPayloadAnalysis.Accepted).payload.utf8ByteCount)
+        assertEquals(ClipboardPayloadAnalysis.TooLarge, rejected)
     }
 
     @Test

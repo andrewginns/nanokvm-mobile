@@ -14,7 +14,9 @@ import org.nanokvm.mobile.security.CredentialAuthenticationCoordinator
 import org.nanokvm.mobile.security.DeviceCredentialAuthenticator
 import org.nanokvm.mobile.ui.AppViewModel
 import org.nanokvm.mobile.ui.NanoKvmApp
+import org.nanokvm.mobile.ui.ShareNotice
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalysis
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.platform.AndroidClipboardGateway
 
@@ -100,32 +102,41 @@ class MainActivity : FragmentActivity() {
         if (intent.action != Intent.ACTION_SEND) return
         try {
             if (!intent.type.equals(MIME_TEXT_PLAIN, ignoreCase = true)) {
-                viewModel.reportError(getString(R.string.share_plain_text_only))
+                viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
                 return
             }
 
             val clipboardResult = intent.clipData?.let { clip ->
                 AndroidClipboardGateway { clip }.readDirectPlainText()
             }
-            val payload = when (clipboardResult) {
-                is ClipboardReadResult.Available -> clipboardResult.payload
+            val payloadAnalysis = when (clipboardResult) {
+                is ClipboardReadResult.Available -> ClipboardPayloadAnalysis.Accepted(
+                    clipboardResult.payload,
+                )
                 null -> {
                     val directText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
                     if (directText == null || directText is Spanned || directText.isEmpty()) {
-                        viewModel.reportError(getString(R.string.share_plain_text_only))
+                        viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
                         return
                     }
-                    ClipboardPayloadAnalyzer.analyzeDirectPlainText(
+                    ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
                         text = directText,
                         isSensitive = intent.hasSensitiveTextMarker(),
                     )
                 }
                 else -> {
-                    viewModel.reportError(getString(R.string.share_plain_text_only))
+                    viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
                     return
                 }
             }
-            viewModel.receiveSharedPlainText(payload)
+            when (payloadAnalysis) {
+                is ClipboardPayloadAnalysis.Accepted -> {
+                    viewModel.receiveSharedPlainText(payloadAnalysis.payload)
+                }
+                ClipboardPayloadAnalysis.TooLarge -> {
+                    viewModel.reportShareNotice(ShareNotice.TooLarge)
+                }
+            }
         } finally {
             discardSharedTextIntent(intent)
         }

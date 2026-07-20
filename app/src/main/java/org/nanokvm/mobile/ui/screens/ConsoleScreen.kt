@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitScreen
@@ -71,14 +72,15 @@ import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,24 +88,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_MEDIUM_LOWER_BOUND
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.clipboard.ClipboardPayload
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
+import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
 import org.nanokvm.mobile.clipboard.ClipboardTextWarning
 import org.nanokvm.mobile.clipboard.PasteConfirmationRequest
 import org.nanokvm.mobile.clipboard.PasteTargetBinding
@@ -119,17 +122,13 @@ import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.ApprovedPhase3Destination
 import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
 import org.nanokvm.mobile.runtime.ConnectionState
-import org.nanokvm.mobile.runtime.ConsoleCommandSink
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
-import org.nanokvm.mobile.runtime.NanoKvmAutomationFeatureOwner
-import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateFeatureOwner
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateGateway
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdatePhase
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateSource
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateUiState
-import org.nanokvm.mobile.runtime.currentAutomationGateway
-import org.nanokvm.mobile.runtime.currentOfflineUpdateGateway
 import org.nanokvm.mobile.platform.NanoKvmOfflineUpdateDocumentSelectionResult
 import org.nanokvm.mobile.platform.NanoKvmOfflineUpdateDocumentSource
 import org.nanokvm.mobile.runtime.RemoteInputSink
@@ -138,6 +137,7 @@ import org.nanokvm.mobile.runtime.VideoSurfaceSink
 import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoTransportPreference
+import org.nanokvm.mobile.ui.displayText
 import org.nanokvm.mobile.ui.components.ConsoleKeyboard
 import org.nanokvm.mobile.ui.components.ImmersiveModeEffect
 import org.nanokvm.mobile.ui.components.PointerMode
@@ -148,23 +148,90 @@ import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
 import org.nanokvm.protocol.NanoKvmCapability
 import org.nanokvm.protocol.NanoKvmCapabilitySupport
 
+private sealed interface ConsoleOverlay {
+    data object None : ConsoleOverlay
+    data object VideoSettings : ConsoleOverlay
+    data object ScrollSettings : ConsoleOverlay
+    data object PowerMenu : ConsoleOverlay
+    data object MoreMenu : ConsoleOverlay
+    data object DeviceInfo : ConsoleOverlay
+    data object VirtualMedia : ConsoleOverlay
+    data object WakeOnLan : ConsoleOverlay
+    data object Administration : ConsoleOverlay
+    data object OfflineUpdate : ConsoleOverlay
+    data object Automation : ConsoleOverlay
+    data object OperatorTools : ConsoleOverlay
+    data object PicoClaw : ConsoleOverlay
+}
+
+private val consoleOverlaySaver = Saver<ConsoleOverlay, Int>(
+    save = { overlay -> overlay.saveableCode },
+    restore = { code -> code.toConsoleOverlay() },
+)
+
+private val ConsoleOverlay.saveableCode: Int
+    get() = when (this) {
+        ConsoleOverlay.None -> 0
+        ConsoleOverlay.VideoSettings -> 1
+        ConsoleOverlay.ScrollSettings -> 2
+        ConsoleOverlay.PowerMenu -> 3
+        ConsoleOverlay.MoreMenu -> 4
+        ConsoleOverlay.DeviceInfo -> 5
+        ConsoleOverlay.VirtualMedia -> 6
+        ConsoleOverlay.WakeOnLan -> 7
+        ConsoleOverlay.Administration -> 8
+        ConsoleOverlay.OfflineUpdate -> 9
+        ConsoleOverlay.Automation -> 10
+        ConsoleOverlay.OperatorTools -> 11
+        ConsoleOverlay.PicoClaw -> 12
+    }
+
+private fun Int.toConsoleOverlay(): ConsoleOverlay = when (this) {
+    1 -> ConsoleOverlay.VideoSettings
+    2 -> ConsoleOverlay.ScrollSettings
+    3 -> ConsoleOverlay.PowerMenu
+    4 -> ConsoleOverlay.MoreMenu
+    5 -> ConsoleOverlay.DeviceInfo
+    6 -> ConsoleOverlay.VirtualMedia
+    7 -> ConsoleOverlay.WakeOnLan
+    8 -> ConsoleOverlay.Administration
+    9 -> ConsoleOverlay.OfflineUpdate
+    10 -> ConsoleOverlay.Automation
+    11 -> ConsoleOverlay.OperatorTools
+    12 -> ConsoleOverlay.PicoClaw
+    else -> ConsoleOverlay.None
+}
+
+private fun ConsoleOverlay.dismissSessionBoundOverlay(): ConsoleOverlay = when (this) {
+    ConsoleOverlay.VirtualMedia,
+    ConsoleOverlay.WakeOnLan,
+    ConsoleOverlay.DeviceInfo,
+    ConsoleOverlay.Administration,
+    ConsoleOverlay.OperatorTools,
+    ConsoleOverlay.PicoClaw,
+    ConsoleOverlay.Automation,
+    -> ConsoleOverlay.None
+    else -> this
+}
+
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-fun ConsoleScreen(
+internal fun ConsoleScreen(
     profile: HostProfile,
     session: BackendSession,
     input: RemoteInputSink,
     videoSurface: VideoSurfaceSink,
-    commands: ConsoleCommandSink,
+    features: ConsoleFeatureBundle,
     onDisconnect: () -> Unit,
-    clipboardGateway: ClipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+    sessionDraftOwner: ConsoleSessionDraftOwner,
+    clipboardGateway: ClipboardGateway,
     pendingSharedPaste: ClipboardPayload? = null,
-    onSharedPasteConsumed: (ClipboardPayload) -> Unit = {},
+    onSharedPasteConsumed: (ClipboardPayload) -> Unit,
     sensitiveWorkGeneration: Long = 0,
     scrollSensitivity: Float = DEFAULT_SCROLL_SENSITIVITY,
-    onScrollSensitivityChange: (Float) -> Unit = {},
+    onScrollSensitivityChange: (Float) -> Unit,
     mjpegFrameDetectionEnabled: Boolean = false,
-    onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit = {},
+    onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit,
     passwordChangeInProgress: Boolean = false,
     canProtectPassword: Boolean = false,
     onPasswordChange: (
@@ -172,32 +239,34 @@ fun ConsoleScreen(
         username: String,
         password: CharArray,
         saveProtectedCredential: Boolean,
-    ) -> Unit = { _, _, password, _ -> password.fill('\u0000') },
+    ) -> Unit,
 ) {
+    val drafts = sessionDraftOwner
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
-    val operatorState by commands.operatorState.collectAsState()
-    val picoClawState by commands.picoClawState.collectAsState()
-    val automationOwner = commands as? NanoKvmAutomationFeatureOwner
-    val offlineUpdateOwner = commands as? NanoKvmOfflineUpdateFeatureOwner
+    val coreControls = features.core
+    val phase3Controls = features.phase3
+    val administrationControls = features.administration
+    val operatorControls = features.operator
+    val picoClawControls = features.picoClaw
+    val operatorState = operatorControls?.operatorState?.collectAsStateWithLifecycle()
+    val picoClawState = picoClawControls?.picoClawState?.collectAsStateWithLifecycle()
+    val automationOwner = features.automation
+    val offlineUpdateOwner = features.offlineUpdate
     var pointerMode by rememberSaveable { mutableStateOf(PointerMode.Direct) }
     var keyboardVisible by rememberSaveable { mutableStateOf(false) }
     var keyboardLayout by rememberSaveable { mutableStateOf(KeyboardLayout.Us) }
     var viewNavigationVisible by rememberSaveable { mutableStateOf(true) }
     var controlsExpanded by rememberSaveable { mutableStateOf(false) }
-    var fitRequest by remember { mutableIntStateOf(0) }
-    var zoom by remember { mutableFloatStateOf(1f) }
+    var fitRequest by rememberSaveable(
+        profile.id,
+        profile.authority,
+        session.sessionGeneration,
+    ) { mutableIntStateOf(0) }
     var viewportCommandSequence by remember { mutableIntStateOf(0) }
     var viewportCommand by remember { mutableStateOf<ViewportCommand?>(null) }
-    var showVideoSettings by rememberSaveable { mutableStateOf(false) }
-    var showScrollSettings by rememberSaveable { mutableStateOf(false) }
-    var showPowerMenu by rememberSaveable { mutableStateOf(false) }
-    var showMoreMenu by rememberSaveable { mutableStateOf(false) }
-    var showDeviceInfo by rememberSaveable { mutableStateOf(false) }
-    var showVirtualMedia by rememberSaveable { mutableStateOf(false) }
-    var showWakeOnLan by rememberSaveable { mutableStateOf(false) }
-    var showAdministration by rememberSaveable { mutableStateOf(false) }
-    var showOfflineUpdate by remember { mutableStateOf(false) }
-    var showAutomation by rememberSaveable { mutableStateOf(false) }
+    var overlay by rememberSaveable(stateSaver = consoleOverlaySaver) {
+        mutableStateOf<ConsoleOverlay>(ConsoleOverlay.None)
+    }
     val offlineDocumentHandoff = remember { OfflineUpdateDocumentHandoff() }
     var offlineDocumentSequence by remember { mutableLongStateOf(0L) }
     var offlineDocumentPending by remember { mutableStateOf(false) }
@@ -216,7 +285,7 @@ fun ConsoleScreen(
         if (uri == null || target != currentOfflinePickerTarget) {
             offlineDocumentHandoff.clear()
             offlineDocumentPending = false
-            showOfflineUpdate = false
+            if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
             return@rememberLauncherForActivityResult
         }
         val selection = NanoKvmOfflineUpdateDocumentSource.select(
@@ -227,9 +296,12 @@ fun ConsoleScreen(
         offlineDocumentPending = true
         offlineResultSensitiveGeneration = currentSensitiveWorkGeneration
         offlineDocumentSequence++
-        showAdministration = false
         offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(true)
-        showOfflineUpdate = offlineUpdateOwner != null
+        overlay = if (offlineUpdateOwner != null) {
+            ConsoleOverlay.OfflineUpdate
+        } else {
+            ConsoleOverlay.None
+        }
         if (offlineUpdateOwner == null) {
             offlineDocumentHandoff.clear()
             offlineDocumentPending = false
@@ -239,7 +311,7 @@ fun ConsoleScreen(
         offlinePickerTarget = null
         offlineDocumentHandoff.clear()
         offlineDocumentPending = false
-        showOfflineUpdate = false
+        if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
         offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(false)
         Unit
     }
@@ -253,25 +325,22 @@ fun ConsoleScreen(
         }
         Unit
     }
-    val uriHandler = LocalUriHandler.current
-
-    LaunchedEffect(commands, uriHandler) {
-        commands.externalNavigation.collect { request ->
-            request.open(uriHandler::openUri)
-        }
-    }
-    var showOperatorTools by rememberSaveable { mutableStateOf(false) }
-    var showPicoClaw by rememberSaveable { mutableStateOf(false) }
     var immersiveMode by rememberSaveable { mutableStateOf(false) }
     var pendingPhase3Action by remember { mutableStateOf<PendingPhase3Action?>(null) }
     var pasteRequest by remember { mutableStateOf<PendingClipboardPaste?>(null) }
     var pasteError by remember { mutableStateOf<String?>(null) }
     var revealSensitivePaste by remember { mutableStateOf(false) }
-    var observedSensitiveWorkGeneration by remember { mutableStateOf(sensitiveWorkGeneration) }
-    var pendingPowerCode by rememberSaveable { mutableIntStateOf(NO_PENDING_POWER) }
+    var observedSensitiveWorkGeneration by remember {
+        mutableLongStateOf(sensitiveWorkGeneration)
+    }
+    // A destructive confirmation is deliberately ephemeral. It must not be restored into a new
+    // Activity instance or survive a connection-generation transition where its destination could
+    // otherwise silently change underneath the dialog.
+    var pendingPowerAction by remember { mutableStateOf<PowerAction?>(null) }
     val pasteUnavailableMessage = stringResource(R.string.console_clipboard_unavailable)
     val pasteEmptyMessage = stringResource(R.string.console_clipboard_empty)
     val pasteRejectedMessage = stringResource(R.string.console_clipboard_rejected)
+    val pasteTooLargeMessage = stringResource(R.string.console_clipboard_too_long)
     val pasteDisconnectedMessage = stringResource(R.string.console_clipboard_connect_first)
     val pasteSessionChangedMessage = stringResource(R.string.console_clipboard_session_changed)
     val currentPasteTarget = PasteTargetBinding(
@@ -305,21 +374,34 @@ fun ConsoleScreen(
         authority = profile.authority,
         sessionGeneration = session.sessionGeneration,
     )
-    val phase3SurfaceVisible = showVirtualMedia || showWakeOnLan
-    DisposableEffect(phase3SurfaceVisible, commands) {
-        if (phase3SurfaceVisible) commands.setPhase3SurfaceVisible(true)
+    val currentDraftSession = ConsoleDraftSession(
+        profileId = profile.id,
+        authority = profile.authority,
+        sessionGeneration = session.sessionGeneration,
+    )
+    val phase3SurfaceVisible = overlay == ConsoleOverlay.VirtualMedia ||
+        overlay == ConsoleOverlay.WakeOnLan
+    val administrationSurfaceVisible = overlay == ConsoleOverlay.Administration
+    val offlineUpdateSurfaceVisible = overlay == ConsoleOverlay.OfflineUpdate
+    val operatorSurfaceVisible = overlay == ConsoleOverlay.OperatorTools
+    val automationSurfaceVisible = overlay == ConsoleOverlay.Automation
+    val picoClawSurfaceVisible = overlay == ConsoleOverlay.PicoClaw
+    DisposableEffect(phase3SurfaceVisible, phase3Controls) {
+        if (phase3SurfaceVisible) phase3Controls?.setPhase3SurfaceVisible(true)
         onDispose {
-            if (phase3SurfaceVisible) commands.setPhase3SurfaceVisible(false)
+            if (phase3SurfaceVisible) phase3Controls?.setPhase3SurfaceVisible(false)
         }
     }
-    DisposableEffect(showAdministration, commands) {
-        if (showAdministration) commands.setAdministrationSurfaceVisible(true)
+    DisposableEffect(administrationSurfaceVisible, administrationControls) {
+        if (administrationSurfaceVisible) {
+            administrationControls?.setAdministrationSurfaceVisible(true)
+        }
         onDispose {
-            commands.setAdministrationSurfaceVisible(false)
+            administrationControls?.setAdministrationSurfaceVisible(false)
         }
     }
-    DisposableEffect(showOfflineUpdate, offlineUpdateOwner) {
-        if (showOfflineUpdate) offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(true)
+    DisposableEffect(offlineUpdateSurfaceVisible, offlineUpdateOwner) {
+        if (offlineUpdateSurfaceVisible) offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(true)
         onDispose {
             offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(false)
         }
@@ -327,56 +409,58 @@ fun ConsoleScreen(
     DisposableEffect(offlineDocumentHandoff) {
         onDispose { offlineDocumentHandoff.close() }
     }
-    DisposableEffect(showOperatorTools, commands) {
-        if (showOperatorTools) commands.setOperatorSurfaceVisible(true)
+    DisposableEffect(operatorSurfaceVisible, operatorControls) {
+        if (operatorSurfaceVisible) operatorControls?.setOperatorSurfaceVisible(true)
         onDispose {
-            commands.setOperatorSurfaceVisible(false)
+            operatorControls?.setOperatorSurfaceVisible(false)
         }
     }
-    DisposableEffect(showAutomation, automationOwner) {
-        if (showAutomation) automationOwner?.setAutomationSurfaceVisible(true)
+    LaunchedEffect(automationSurfaceVisible, automationOwner) {
+        // The ViewModel retains AutomationDialogController across configuration recreation. A
+        // DisposableEffect teardown would transiently background the gateway, invalidate the
+        // retained catalogs/approvals, and then reattach a controller that appears usable but can
+        // only reject commands. True background transitions are handled by AppViewModel and
+        // MainActivity; here the lease follows an actual surface-visibility change only.
+        automationOwner?.setAutomationSurfaceVisible(automationSurfaceVisible)
+    }
+    DisposableEffect(picoClawSurfaceVisible, picoClawControls) {
+        if (picoClawSurfaceVisible) picoClawControls?.setPicoClawSurfaceVisible(true)
         onDispose {
-            automationOwner?.setAutomationSurfaceVisible(false)
+            picoClawControls?.setPicoClawSurfaceVisible(false)
         }
     }
-    DisposableEffect(showPicoClaw, commands) {
-        if (showPicoClaw) commands.setPicoClawSurfaceVisible(true)
-        onDispose {
-            commands.setPicoClawSurfaceVisible(false)
-        }
-    }
-    LaunchedEffect(session.connection, session.sessionGeneration) {
+    LaunchedEffect(
+        profile.id,
+        profile.authority,
+        session.connection,
+        session.sessionGeneration,
+    ) {
         pendingPhase3Action = null
+        pendingPowerAction = null
         if (session.connection != ConnectionState.Connected) {
-            showVirtualMedia = false
-            showWakeOnLan = false
-            showDeviceInfo = false
-            showAdministration = false
             if (
                 session.connection == ConnectionState.Failed ||
                 (!offlineDocumentPending && offlinePickerTarget == null)
             ) {
                 closeOfflineUpdate()
             }
-            showOperatorTools = false
-            showPicoClaw = false
-            showAutomation = false
+            overlay = overlay.dismissSessionBoundOverlay()
         }
     }
-    val offlineUpdateGateway = if (showOfflineUpdate) {
+    val offlineUpdateGateway = if (offlineUpdateSurfaceVisible) {
         offlineUpdateOwner?.currentOfflineUpdateGateway()
     } else {
         null
     }
     LaunchedEffect(
-        showOfflineUpdate,
+        offlineUpdateSurfaceVisible,
         session.connection,
         session.sessionGeneration,
         offlineDocumentSequence,
         offlineUpdateGateway,
     ) {
         if (
-            showOfflineUpdate && offlineDocumentPending &&
+            offlineUpdateSurfaceVisible && offlineDocumentPending &&
             session.connection == ConnectionState.Connected && offlineUpdateGateway != null
         ) {
             if (offlineDocumentHandoff.deliverTo(offlineUpdateGateway)) {
@@ -397,7 +481,13 @@ fun ConsoleScreen(
                     )
                 }
                 is ClipboardReadResult.Empty -> pasteError = pasteEmptyMessage
-                is ClipboardReadResult.Rejected -> pasteError = pasteRejectedMessage
+                is ClipboardReadResult.Rejected -> pasteError = if (
+                    result.reason == ClipboardRejectionReason.TooLarge
+                ) {
+                    pasteTooLargeMessage
+                } else {
+                    pasteRejectedMessage
+                }
                 ClipboardReadResult.Unavailable -> pasteError = pasteUnavailableMessage
             }
         }
@@ -418,18 +508,12 @@ fun ConsoleScreen(
             pasteError = null
             revealSensitivePaste = false
             pendingPhase3Action = null
-            showVirtualMedia = false
-            showWakeOnLan = false
-            showDeviceInfo = false
-            showAdministration = false
             if (offlineResultSensitiveGeneration != sensitiveWorkGeneration) {
                 offlineDocumentHandoff.clear()
                 offlineDocumentPending = false
-                showOfflineUpdate = false
+                if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
             }
-            showOperatorTools = false
-            showPicoClaw = false
-            showAutomation = false
+            overlay = overlay.dismissSessionBoundOverlay()
             observedSensitiveWorkGeneration = sensitiveWorkGeneration
         }
     }
@@ -512,12 +596,11 @@ fun ConsoleScreen(
             keyboardLayout = keyboardLayout,
             viewNavigationVisible = viewNavigationVisible,
             viewportCommand = viewportCommand,
-            onZoomChanged = { zoom = it },
             onKeyboard = toggleKeyboard,
             onKeyboardLayoutChange = { keyboardLayout = it },
             onClipboard = {
                 if (session.pasteProgress != null) {
-                    commands.cancelPaste()
+                    coreControls.cancelPaste()
                 } else {
                     requestClipboardPaste()
                 }
@@ -528,7 +611,7 @@ fun ConsoleScreen(
                 input.releaseAllInput()
             },
             onViewportAction = requestViewportAction,
-            onCtrlAltDelete = { pendingPowerCode = POWER_CTRL_ALT_DELETE },
+            onCtrlAltDelete = { pendingPowerAction = PowerAction.CtrlAltDelete },
         )
         val controlsContent: @Composable (Modifier) -> Unit = { controlsModifier ->
             ConsoleControlContent(
@@ -537,14 +620,13 @@ fun ConsoleScreen(
                 pointerMode = pointerMode,
                 keyboardVisible = keyboardVisible,
                 viewNavigationVisible = viewNavigationVisible,
-                zoom = zoom,
                 scrollSensitivity = scrollSensitivity,
                 onClose = { controlsExpanded = false },
                 onKeyboard = toggleKeyboard,
                 onClipboard = {
                     controlsExpanded = false
                     if (session.pasteProgress != null) {
-                        commands.cancelPaste()
+                        coreControls.cancelPaste()
                     } else {
                         requestClipboardPaste()
                     }
@@ -558,19 +640,19 @@ fun ConsoleScreen(
                 },
                 onScrollSettings = {
                     controlsExpanded = false
-                    showScrollSettings = true
+                    overlay = ConsoleOverlay.ScrollSettings
                 },
                 onVideo = {
                     controlsExpanded = false
-                    showVideoSettings = true
+                    overlay = ConsoleOverlay.VideoSettings
                 },
                 onPower = {
                     controlsExpanded = false
-                    showPowerMenu = true
+                    overlay = ConsoleOverlay.PowerMenu
                 },
                 onMore = {
                     controlsExpanded = false
-                    showMoreMenu = true
+                    overlay = ConsoleOverlay.MoreMenu
                 },
                 modifier = controlsModifier,
             )
@@ -610,7 +692,7 @@ fun ConsoleScreen(
                         ),
                 ) {
                     ConsoleMainContent(consoleContentState)
-                    if (picoClawState.manualInputBlockedOrUncertain) {
+                    if (picoClawState?.value?.manualInputBlockedOrUncertain == true) {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
@@ -680,175 +762,203 @@ fun ConsoleScreen(
         }
     }
 
-    if (showVideoSettings) {
+    if (overlay == ConsoleOverlay.VideoSettings) {
         VideoSettingsDialog(
             initial = session.videoSettings,
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
-            onDismiss = { showVideoSettings = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
             onApply = { settings, frameDetectionEnabled ->
-                if (settings != session.videoSettings) commands.updateVideo(settings)
+                if (settings != session.videoSettings) coreControls.updateVideo(settings)
                 if (frameDetectionEnabled != mjpegFrameDetectionEnabled) {
                     onMjpegFrameDetectionEnabledChange(frameDetectionEnabled)
                 }
-                showVideoSettings = false
+                overlay = ConsoleOverlay.None
             },
         )
     }
-    if (showScrollSettings) {
+    if (overlay == ConsoleOverlay.ScrollSettings) {
         ScrollSettingsDialog(
             initialSensitivity = scrollSensitivity,
-            onDismiss = { showScrollSettings = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
             onApply = {
                 onScrollSensitivityChange(it)
-                showScrollSettings = false
+                overlay = ConsoleOverlay.None
             },
         )
     }
-    if (showPowerMenu) {
+    if (overlay == ConsoleOverlay.PowerMenu) {
         PowerMenuDialog(
-            onDismiss = { showPowerMenu = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
             onChoose = {
-                showPowerMenu = false
-                pendingPowerCode = it.toSaveableCode()
+                overlay = ConsoleOverlay.None
+                pendingPowerAction = it
             },
         )
     }
-    pendingPowerCode.toPowerActionOrNull()?.let { action ->
+    pendingPowerAction?.let { action ->
         ConfirmPowerDialog(
             action = action,
-            onDismiss = { pendingPowerCode = NO_PENDING_POWER },
+            onDismiss = { pendingPowerAction = null },
             onConfirm = {
-                commands.power(action)
-                pendingPowerCode = NO_PENDING_POWER
+                coreControls.power(action)
+                pendingPowerAction = null
             },
         )
     }
-    if (showMoreMenu) {
+    if (overlay == ConsoleOverlay.MoreMenu) {
         MoreActionsDialog(
-            onDismiss = { showMoreMenu = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
             onReconnect = {
-                showMoreMenu = false
+                overlay = ConsoleOverlay.None
                 input.releaseAllInput()
-                commands.reconnect()
+                coreControls.reconnect()
             },
             onResetHid = {
-                showMoreMenu = false
+                overlay = ConsoleOverlay.None
                 input.releaseAllInput()
-                commands.resetHid()
+                coreControls.resetHid()
             },
             onDeviceInfo = {
-                showMoreMenu = false
-                showDeviceInfo = true
+                overlay = ConsoleOverlay.DeviceInfo
             },
+            phase3Available = phase3Controls != null,
             onVirtualMedia = {
-                showMoreMenu = false
-                showVirtualMedia = true
+                if (phase3Controls != null) overlay = ConsoleOverlay.VirtualMedia
             },
             onWakeOnLan = {
-                showMoreMenu = false
-                showWakeOnLan = true
+                if (phase3Controls != null) overlay = ConsoleOverlay.WakeOnLan
             },
+            administrationAvailable = administrationControls != null,
             onAdministration = {
-                showMoreMenu = false
-                showAdministration = true
+                if (administrationControls != null) overlay = ConsoleOverlay.Administration
             },
+            operatorToolsAvailable = operatorControls != null,
             onOperatorTools = {
-                showMoreMenu = false
-                showOperatorTools = true
+                if (operatorControls != null) overlay = ConsoleOverlay.OperatorTools
             },
             automationAvailable = automationOwner != null,
             onAutomation = {
-                showMoreMenu = false
                 automationOwner?.setAutomationSurfaceVisible(true)
-                showAutomation = true
+                overlay = ConsoleOverlay.Automation
             },
+            picoClawAvailable = picoClawControls != null,
             onPicoClaw = {
-                showMoreMenu = false
-                showPicoClaw = true
+                if (picoClawControls != null) overlay = ConsoleOverlay.PicoClaw
             },
             immersiveMode = immersiveMode,
             onImmersiveMode = {
-                showMoreMenu = false
+                overlay = ConsoleOverlay.None
                 immersiveMode = !immersiveMode
             },
             onDisconnect = {
-                showMoreMenu = false
+                overlay = ConsoleOverlay.None
                 onDisconnect()
             },
         )
     }
-    if (showDeviceInfo) {
+    if (overlay == ConsoleOverlay.DeviceInfo) {
         DeviceInfoDialog(
             session = session,
-            onDismiss = { showDeviceInfo = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
         )
     }
-    if (showAdministration) {
+    if (overlay == ConsoleOverlay.Administration && administrationControls != null) {
         AdministrationDialog(
             destinationLabel = profile.name.ifBlank { profile.authority },
             destination = currentAdministrationDestination,
             state = session.administration,
-            commands = commands,
+            controls = administrationControls,
             passwordChangeInProgress = passwordChangeInProgress,
             canProtectPassword = canProtectPassword,
             onPasswordChange = onPasswordChange,
             offlineUpdateAvailable = offlineUpdateOwner != null,
             onOfflineUpdate = {
-                showAdministration = false
                 offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(true)
-                showOfflineUpdate = offlineUpdateOwner != null
+                overlay = if (offlineUpdateOwner != null) {
+                    ConsoleOverlay.OfflineUpdate
+                } else {
+                    ConsoleOverlay.None
+                }
             },
-            onDismiss = { showAdministration = false },
+            onDismiss = { overlay = ConsoleOverlay.None },
         )
     }
-    if (showOfflineUpdate) {
+    if (overlay == ConsoleOverlay.OfflineUpdate) {
         OfflineUpdateGatewayDialog(
             gateway = offlineUpdateGateway,
             onChoosePackage = chooseOfflineUpdateDocument,
             onDismiss = closeOfflineUpdate,
         )
     }
-    if (showOperatorTools) {
+    if (
+        overlay == ConsoleOverlay.OperatorTools &&
+        operatorControls != null && operatorState != null
+    ) {
+        val operatorMemory = remember(drafts, currentDraftSession) {
+            drafts.operatorMemory(currentDraftSession)
+        }
         OperatorDialog(
             destinationLabel = profile.name.ifBlank { profile.authority },
             destination = currentOperatorDestination,
-            state = operatorState,
-            output = commands.operatorOutput,
-            commands = commands,
-            onDismiss = { showOperatorTools = false },
+            state = operatorState.value,
+            output = operatorControls.operatorOutput,
+            controls = operatorControls,
+            onDismiss = {
+                drafts.clearOperator()
+                overlay = ConsoleOverlay.None
+            },
+            retainedMemory = operatorMemory,
         )
     }
-    if (showAutomation) {
+    if (overlay == ConsoleOverlay.Automation) {
         val gateway = automationOwner?.currentAutomationGateway()
         if (gateway != null) {
+            val leaderKeyAvailable = session.capabilities
+                ?.get(NanoKvmCapability.HID_LEADER_KEY) !is
+                NanoKvmCapabilitySupport.Unsupported
+            val automationController = remember(
+                drafts,
+                currentDraftSession,
+                gateway,
+                leaderKeyAvailable,
+            ) {
+                drafts.automationController(
+                    session = currentDraftSession,
+                    gateway = gateway,
+                    leaderKeyAvailable = leaderKeyAvailable,
+                )
+            }
             AutomationDialog(
                 destinationLabel = profile.name.ifBlank { profile.authority },
                 gateway = gateway,
-                onDismiss = { showAutomation = false },
-                leaderKeyAvailable = session.capabilities
-                    ?.get(NanoKvmCapability.HID_LEADER_KEY) !is
-                    NanoKvmCapabilitySupport.Unsupported,
+                onDismiss = {
+                    drafts.clearAutomation()
+                    overlay = ConsoleOverlay.None
+                },
+                leaderKeyAvailable = leaderKeyAvailable,
+                retainedController = automationController,
             )
         } else {
-            LaunchedEffect(showAutomation, session.sessionGeneration) {
-                showAutomation = false
+            LaunchedEffect(overlay, session.sessionGeneration) {
+                drafts.clearAutomation()
+                overlay = ConsoleOverlay.None
             }
         }
     }
-    if (showPicoClaw) {
+    if (overlay == ConsoleOverlay.PicoClaw && picoClawControls != null && picoClawState != null) {
         PicoClawDialog(
             destinationLabel = profile.name.ifBlank { profile.authority },
             destination = currentPicoClawDestination,
-            state = picoClawState,
-            commands = commands,
-            onDismiss = { showPicoClaw = false },
+            state = picoClawState.value,
+            controls = picoClawControls,
+            onDismiss = { overlay = ConsoleOverlay.None },
         )
     }
-    if (showVirtualMedia) {
+    if (overlay == ConsoleOverlay.VirtualMedia && phase3Controls != null) {
         VirtualMediaDialog(
             state = session.phase3,
-            onDismiss = { showVirtualMedia = false },
-            onRefresh = commands::refreshPhase3,
+            onDismiss = { overlay = ConsoleOverlay.None },
+            onRefresh = phase3Controls::refreshPhase3,
             onMount = { image, mode ->
                 pendingPhase3Action = PendingPhase3Action.MountImage(image, mode)
             },
@@ -870,16 +980,16 @@ fun ConsoleScreen(
             },
         )
     }
-    if (showWakeOnLan) {
+    if (overlay == ConsoleOverlay.WakeOnLan && phase3Controls != null) {
         WakeOnLanDialog(
             state = session.phase3,
-            onDismiss = { showWakeOnLan = false },
-            onRefresh = commands::refreshPhase3,
+            onDismiss = { overlay = ConsoleOverlay.None },
+            onRefresh = phase3Controls::refreshPhase3,
             onWake = { macAddress ->
                 pendingPhase3Action = PendingPhase3Action.SendWakeOnLan(macAddress)
             },
             onRename = { target, name ->
-                commands.renamePhase3WakeOnLanTarget(
+                phase3Controls.renamePhase3WakeOnLanTarget(
                     currentPhase3Destination,
                     target.id,
                     name,
@@ -891,6 +1001,7 @@ fun ConsoleScreen(
         )
     }
     pendingPhase3Action?.let { action ->
+        val controls = phase3Controls ?: return@let
         ConfirmPhase3ActionDialog(
             action = action,
             destinationLabel = profile.name.ifBlank { profile.authority },
@@ -898,41 +1009,41 @@ fun ConsoleScreen(
             onDismiss = { pendingPhase3Action = null },
             onConfirm = {
                 when (action) {
-                    is PendingPhase3Action.MountImage -> commands.mountPhase3Image(
+                    is PendingPhase3Action.MountImage -> controls.mountPhase3Image(
                         currentPhase3Destination,
                         action.image.id,
                         action.mode,
                     )
                     PendingPhase3Action.RestorePhysicalMedia ->
-                        commands.restorePhase3PhysicalMedia(currentPhase3Destination)
-                    is PendingPhase3Action.DeleteImage -> commands.deletePhase3Image(
+                        controls.restorePhase3PhysicalMedia(currentPhase3Destination)
+                    is PendingPhase3Action.DeleteImage -> controls.deletePhase3Image(
                         currentPhase3Destination,
                         action.image.id,
                     )
-                    is PendingPhase3Action.SetDiskEnabled -> commands.setPhase3DiskEnabled(
+                    is PendingPhase3Action.SetDiskEnabled -> controls.setPhase3DiskEnabled(
                         currentPhase3Destination,
                         action.enabled,
                     )
                     is PendingPhase3Action.SetNetworkEnabled ->
-                        commands.setPhase3NetworkEnabled(
+                        controls.setPhase3NetworkEnabled(
                             currentPhase3Destination,
                             action.enabled,
                         )
-                    is PendingPhase3Action.SetHidMode -> commands.setPhase3HidMode(
+                    is PendingPhase3Action.SetHidMode -> controls.setPhase3HidMode(
                         currentPhase3Destination,
                         action.selection,
                     )
                     is PendingPhase3Action.StartImageTransfer ->
-                        commands.startPhase3ImageTransfer(
+                        controls.startPhase3ImageTransfer(
                             currentPhase3Destination,
                             action.sourceUrl,
                         )
-                    is PendingPhase3Action.SendWakeOnLan -> commands.sendPhase3WakeOnLan(
+                    is PendingPhase3Action.SendWakeOnLan -> controls.sendPhase3WakeOnLan(
                         currentPhase3Destination,
                         action.macAddress,
                     )
                     is PendingPhase3Action.DeleteWakeOnLan ->
-                        commands.deletePhase3WakeOnLanTarget(
+                        controls.deletePhase3WakeOnLanTarget(
                             currentPhase3Destination,
                             action.target.id,
                         )
@@ -955,8 +1066,8 @@ fun ConsoleScreen(
                 val stillConnected = session.connection == ConnectionState.Connected
                 val confirmation = request.confirmation
                 val stillBound = confirmation.remainsBoundTo(currentPasteTarget)
-                if (stillConnected && stillBound && confirmation.payload.fitsServerPasteLimit) {
-                    commands.pasteText(
+                if (stillConnected && stillBound) {
+                    coreControls.pasteText(
                         ApprovedPasteRequest(
                             profileId = confirmation.target.profileId,
                             authority = confirmation.target.authority,
@@ -1003,7 +1114,7 @@ private fun OfflineUpdateGatewayDialog(
         )
         return
     }
-    val state by gateway.state.collectAsState()
+    val state by gateway.state.collectAsStateWithLifecycle()
     OfflineUpdateDialog(
         state = state,
         onChoosePackage = onChoosePackage,
@@ -1073,7 +1184,6 @@ private data class ConsoleContentState(
     val keyboardLayout: KeyboardLayout,
     val viewNavigationVisible: Boolean,
     val viewportCommand: ViewportCommand?,
-    val onZoomChanged: (Float) -> Unit,
     val onKeyboard: () -> Unit,
     val onKeyboardLayoutChange: (KeyboardLayout) -> Unit,
     val onClipboard: () -> Unit,
@@ -1098,7 +1208,6 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             keyboardLayout = state.keyboardLayout,
             viewNavigationVisible = state.viewNavigationVisible,
             viewportCommand = state.viewportCommand,
-            onZoomChanged = state.onZoomChanged,
             onKeyboard = state.onKeyboard,
             onKeyboardLayoutChange = state.onKeyboardLayoutChange,
             onClipboard = state.onClipboard,
@@ -1133,7 +1242,6 @@ private fun ConsoleBody(
     keyboardLayout: KeyboardLayout,
     viewNavigationVisible: Boolean,
     viewportCommand: ViewportCommand?,
-    onZoomChanged: (Float) -> Unit,
     onKeyboard: () -> Unit,
     onKeyboardLayoutChange: (KeyboardLayout) -> Unit,
     onClipboard: () -> Unit,
@@ -1158,7 +1266,6 @@ private fun ConsoleBody(
                 viewNavigationVisible = viewNavigationVisible,
                 keyboardVisible = keyboardVisible,
                 viewportCommand = viewportCommand,
-                onZoomChanged = onZoomChanged,
                 navigationActions = {
                     ConsoleQuickActions(
                         session = session,
@@ -1189,7 +1296,8 @@ private fun ConsoleBody(
                     ) {
                         Text(connectionLabel(session.connection), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            session.message ?: stringResource(R.string.console_waiting_for_video),
+                            session.status?.displayText()
+                                ?: stringResource(R.string.console_waiting_for_video),
                             color = consoleColors.onSurfaceMuted,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -1384,8 +1492,16 @@ private fun ClipboardPasteDialog(
                 Text(
                     stringResource(
                         R.string.console_clipboard_size,
-                        payload.characterCount,
-                        payload.utf8ByteCount,
+                        pluralStringResource(
+                            R.plurals.console_clipboard_character_count,
+                            payload.characterCount,
+                            payload.characterCount,
+                        ),
+                        pluralStringResource(
+                            R.plurals.console_clipboard_utf8_byte_count,
+                            payload.utf8ByteCount,
+                            payload.utf8ByteCount,
+                        ),
                     ),
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -1445,11 +1561,7 @@ private fun ClipboardPasteDialog(
                 payload.warnings.forEach { warning ->
                     Text(
                         text = "• " + stringResource(warning.stringResourceId()),
-                        color = if (warning == ClipboardTextWarning.ExceedsServerPasteLimit) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -1466,7 +1578,7 @@ private fun ClipboardPasteDialog(
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
-                enabled = payload.fitsServerPasteLimit,
+                enabled = true,
                 modifier = Modifier.testTag("clipboard-confirm"),
             ) {
                 Text(stringResource(R.string.console_clipboard_type_remote))
@@ -1480,7 +1592,6 @@ private fun ClipboardTextWarning.stringResourceId(): Int = when (this) {
     ClipboardTextWarning.ContainsTab -> R.string.console_clipboard_warning_tab
     ClipboardTextWarning.ContainsOtherControlCharacter ->
         R.string.console_clipboard_warning_control
-    ClipboardTextWarning.ExceedsServerPasteLimit -> R.string.console_clipboard_warning_too_long
 }
 
 @Composable
@@ -1523,7 +1634,6 @@ private fun ConsoleControlContent(
     pointerMode: PointerMode,
     keyboardVisible: Boolean,
     viewNavigationVisible: Boolean,
-    zoom: Float,
     scrollSensitivity: Float,
     onClose: () -> Unit,
     onKeyboard: () -> Unit,
@@ -1544,23 +1654,21 @@ private fun ConsoleControlContent(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        SheetControl(
+        SheetAction(
             Icons.AutoMirrored.Filled.KeyboardArrowRight,
             stringResource(R.string.console_close_controls),
-            false,
             onClose,
         )
         SideSessionStatus(profile, session)
-        SheetControl(
+        SheetAction(
             Icons.Default.OpenWith,
             stringResource(
                 R.string.console_scroll_sensitivity_value,
                 scrollSensitivity.formatZoom(),
             ),
-            false,
             onScrollSettings,
         )
-        SheetControl(
+        SheetToggle(
             Icons.Default.Keyboard,
             stringResource(
                 if (keyboardVisible) {
@@ -1573,7 +1681,7 @@ private fun ConsoleControlContent(
             onKeyboard,
         )
         val pasteProgress = session.pasteProgress
-        SheetControl(
+        SheetAction(
             if (pasteProgress == null) Icons.Default.ContentPaste else Icons.Default.Close,
             if (pasteProgress == null) {
                 stringResource(R.string.console_type_phone_clipboard)
@@ -1588,10 +1696,9 @@ private fun ConsoleControlContent(
                     pasteProgress.totalKeystrokes,
                 )
             },
-            pasteProgress != null,
             onClipboard,
         )
-        SheetControl(
+        SheetToggle(
             if (pointerMode == PointerMode.Direct) Icons.Default.TouchApp else Icons.Default.Mouse,
             stringResource(
                 if (pointerMode == PointerMode.Direct) {
@@ -1603,7 +1710,7 @@ private fun ConsoleControlContent(
             pointerMode == PointerMode.Trackpad,
             onPointerMode,
         )
-        SheetControl(
+        SheetToggle(
             Icons.Default.OpenWith,
             stringResource(
                 if (viewNavigationVisible) {
@@ -1616,32 +1723,24 @@ private fun ConsoleControlContent(
             onViewNavigation,
         )
         MouseClickControls(onMouseClick)
-        SheetControl(
+        SheetAction(
             Icons.Default.FitScreen,
-            if (zoom > 1.01f) {
-                stringResource(R.string.console_fit_view_value, zoom.formatZoom())
-            } else {
-                stringResource(R.string.console_fit_view)
-            },
-            false,
+            stringResource(R.string.console_fit_view),
             onFit,
         )
-        SheetControl(
+        SheetAction(
             Icons.Default.Tune,
             stringResource(R.string.console_video_settings),
-            false,
             onVideo,
         )
-        SheetControl(
+        SheetAction(
             Icons.Default.PowerSettingsNew,
             stringResource(R.string.console_power_controls),
-            false,
             onPower,
         )
-        SheetControl(
+        SheetAction(
             Icons.Default.MoreVert,
             stringResource(R.string.console_more_actions),
-            false,
             onMore,
         )
     }
@@ -1777,14 +1876,26 @@ private fun SideSessionStatus(profile: HostProfile, session: BackendSession) {
                 color = consoleColors.onSurfaceMuted,
             )
         }
-        session.message?.takeIf(String::isNotBlank)?.let { message ->
+        session.status?.let { status ->
             Text(
-                message,
+                status.displayText(),
                 style = MaterialTheme.typography.labelSmall,
                 color = consoleColors.onSurfaceMuted,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        session.lastActionFeedback?.let { feedback ->
+            key(feedback.revision) {
+                Text(
+                    feedback.content.displayText(),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = consoleColors.onSurfaceMuted,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1821,31 +1932,59 @@ private fun sessionStatusSummary(session: BackendSession): String {
     val stalls = session.videoStallEvents.takeIf { it > 0L }?.let { value ->
         stringResource(R.string.console_status_video_stalls, value)
     }
-    return listOfNotNull(session.streamLabel, frames, latency, dropped, stalls)
+    return listOfNotNull(session.streamLabel.displayText(), frames, latency, dropped, stalls)
         .joinToString(stringResource(R.string.console_status_separator))
 }
 
 @Composable
-private fun SheetControl(
+private fun SheetAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val consoleColors = LocalConsoleColorScheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = consoleColors.onSurface,
+        )
+        Text(
+            label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge,
+            color = consoleColors.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun SheetToggle(
     icon: ImageVector,
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
-    val selectionState = stringResource(
-        if (selected) R.string.console_selected else R.string.console_not_selected,
-    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(onClick = onClick)
-            .semantics {
-                contentDescription = label
-                this.selected = selected
-                stateDescription = selectionState
-            }
+            .toggleable(
+                value = selected,
+                role = Role.Switch,
+                onValueChange = { onClick() },
+            )
+            .semantics { contentDescription = label }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1857,10 +1996,9 @@ private fun SheetControl(
         )
         Text(
             label,
+            modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.labelLarge,
-            color = if (selected) consoleColors.active else consoleColors.onSurfaceMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            color = if (selected) consoleColors.active else consoleColors.onSurface,
         )
     }
 }
@@ -1992,7 +2130,13 @@ private fun VideoSettingsDialog(
                     stringResource(R.string.console_h264_gop),
                     listOf(10, 30, 50, 100),
                     gop,
-                    { stringResource(R.string.console_h264_gop_value, it) },
+                    {
+                        pluralStringResource(
+                            R.plurals.console_h264_gop_value,
+                            it,
+                            it,
+                        )
+                    },
                 ) { gop = it }
                 Text(
                     stringResource(R.string.console_video_settings_help),
@@ -2186,12 +2330,16 @@ private fun MoreActionsDialog(
     onReconnect: () -> Unit,
     onResetHid: () -> Unit,
     onDeviceInfo: () -> Unit,
+    phase3Available: Boolean,
     onVirtualMedia: () -> Unit,
     onWakeOnLan: () -> Unit,
+    administrationAvailable: Boolean,
     onAdministration: () -> Unit,
+    operatorToolsAvailable: Boolean,
     onOperatorTools: () -> Unit,
     automationAvailable: Boolean,
     onAutomation: () -> Unit,
+    picoClawAvailable: Boolean,
     onPicoClaw: () -> Unit,
     immersiveMode: Boolean,
     onImmersiveMode: () -> Unit,
@@ -2225,45 +2373,51 @@ private fun MoreActionsDialog(
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.console_device_details))
                 }
-                OutlinedButton(
-                    onClick = onVirtualMedia,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("phase3-virtual-media-action"),
-                ) {
-                    Icon(Icons.Default.Usb, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_virtual_media))
+                if (phase3Available) {
+                    OutlinedButton(
+                        onClick = onVirtualMedia,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("phase3-virtual-media-action"),
+                    ) {
+                        Icon(Icons.Default.Usb, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.console_virtual_media))
+                    }
+                    OutlinedButton(
+                        onClick = onWakeOnLan,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("phase3-wol-action"),
+                    ) {
+                        Icon(Icons.Default.PowerSettingsNew, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.console_wake_on_lan))
+                    }
                 }
-                OutlinedButton(
-                    onClick = onWakeOnLan,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("phase3-wol-action"),
-                ) {
-                    Icon(Icons.Default.PowerSettingsNew, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_wake_on_lan))
+                if (administrationAvailable) {
+                    OutlinedButton(
+                        onClick = onAdministration,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("administration-action"),
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.console_administration))
+                    }
                 }
-                OutlinedButton(
-                    onClick = onAdministration,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("administration-action"),
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_administration))
-                }
-                OutlinedButton(
-                    onClick = onOperatorTools,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("operator-tools-action"),
-                ) {
-                    Icon(Icons.Default.Keyboard, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_operator_tools))
+                if (operatorToolsAvailable) {
+                    OutlinedButton(
+                        onClick = onOperatorTools,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("operator-tools-action"),
+                    ) {
+                        Icon(Icons.Default.Keyboard, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.console_operator_tools))
+                    }
                 }
                 if (automationAvailable) {
                     OutlinedButton(
@@ -2277,15 +2431,17 @@ private fun MoreActionsDialog(
                         Text(stringResource(R.string.automation_title))
                     }
                 }
-                OutlinedButton(
-                    onClick = onPicoClaw,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("picoclaw-action"),
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.picoclaw_action))
+                if (picoClawAvailable) {
+                    OutlinedButton(
+                        onClick = onPicoClaw,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("picoclaw-action"),
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.picoclaw_action))
+                    }
                 }
                 OutlinedButton(
                     onClick = onImmersiveMode,
@@ -2343,21 +2499,6 @@ private fun consoleSideSheetWidth(widthDp: Float): Float = when {
 @Composable
 private fun Float.formatZoom(): String = stringResource(R.string.console_multiplier_format, this)
 
-private fun PowerAction.toSaveableCode(): Int = when (this) {
-    PowerAction.ShortPress -> POWER_SHORT_PRESS
-    PowerAction.Reset -> POWER_RESET
-    is PowerAction.LongPress -> POWER_LONG_PRESS
-    PowerAction.CtrlAltDelete -> POWER_CTRL_ALT_DELETE
-}
-
-private fun Int.toPowerActionOrNull(): PowerAction? = when (this) {
-    POWER_SHORT_PRESS -> PowerAction.ShortPress
-    POWER_RESET -> PowerAction.Reset
-    POWER_LONG_PRESS -> PowerAction.LongPress()
-    POWER_CTRL_ALT_DELETE -> PowerAction.CtrlAltDelete
-    else -> null
-}
-
 @Composable
 private fun connectionLabel(state: ConnectionState): String = stringResource(
     when (state) {
@@ -2382,8 +2523,3 @@ private val OFFLINE_UPDATE_MIME_TYPES = arrayOf(
     "application/x-gzip",
     "application/octet-stream",
 )
-private const val NO_PENDING_POWER = 0
-private const val POWER_SHORT_PRESS = 1
-private const val POWER_RESET = 2
-private const val POWER_LONG_PRESS = 3
-private const val POWER_CTRL_ALT_DELETE = 4

@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,7 +60,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,10 +80,11 @@ import androidx.compose.ui.unit.dp
 import org.nanokvm.mobile.BuildConfig
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.data.HostProfile
+import org.nanokvm.mobile.data.ProfileInputPolicy
 import org.nanokvm.mobile.data.ThemeMode
 import org.nanokvm.mobile.ui.ProfileStorageIssue
-import org.nanokvm.mobile.ui.WifiAccessPointOnboardingNoticeKind
-import org.nanokvm.mobile.ui.WifiAccessPointOnboardingUiState
+import org.nanokvm.mobile.ui.profileStorageIssueMessageResource
+import org.nanokvm.mobile.ui.ProfileMutationUiState
 
 private val ProfileContentMaxWidth = 720.dp
 private val EditorContentMaxWidth = 640.dp
@@ -113,23 +112,15 @@ fun ProfilesScreen(
     onRetryProfileStorage: () -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
     onUseDynamicColorChange: (Boolean) -> Unit,
-    onOpenWifiAccessPointOnboarding: () -> Unit = {},
 ) {
     var showAbout by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
-    val profileStorageIssueKey = when (profileStorageIssue) {
-        is ProfileStorageIssue.Corrupted -> "corrupted:${profileStorageIssue.userMessage}"
-        is ProfileStorageIssue.Unavailable -> "unavailable:${profileStorageIssue.userMessage}"
-        null -> "none"
-    }
-    var showCorruptStorageRecovery by rememberSaveable(profileStorageIssueKey) {
-        mutableStateOf(profileStorageIssue is ProfileStorageIssue.Corrupted)
+    var showCorruptStorageRecovery by rememberSaveable(profileStorageIssue) {
+        mutableStateOf(profileStorageIssue == ProfileStorageIssue.Corrupted)
     }
     val aboutDescription = stringResource(R.string.profiles_about_content_description)
     val addDescription = stringResource(R.string.profiles_add_content_description)
     val appearanceDescription = stringResource(R.string.appearance_content_description)
-    val wifiOnboardingDescription =
-        stringResource(R.string.wifi_ap_onboarding_content_description)
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -142,14 +133,6 @@ fun ProfilesScreen(
                     containerColor = MaterialTheme.colorScheme.background,
                 ),
                 actions = {
-                    IconButton(
-                        onClick = onOpenWifiAccessPointOnboarding,
-                        modifier = Modifier.semantics {
-                            contentDescription = wifiOnboardingDescription
-                        },
-                    ) {
-                        Icon(Icons.Default.Wifi, contentDescription = null)
-                    }
                     IconButton(
                         onClick = { showAppearance = true },
                         modifier = Modifier.semantics { contentDescription = appearanceDescription },
@@ -255,7 +238,7 @@ fun ProfilesScreen(
     }
     profileStorageIssue?.let { issue ->
         when (issue) {
-            is ProfileStorageIssue.Corrupted -> if (showCorruptStorageRecovery) {
+            ProfileStorageIssue.Corrupted -> if (showCorruptStorageRecovery) {
                 AlertDialog(
                     onDismissRequest = {
                         if (!profileStorageBusy) showCorruptStorageRecovery = false
@@ -266,7 +249,7 @@ fun ProfilesScreen(
                         Text(
                             stringResource(
                                 R.string.profile_storage_corrupted_message,
-                                issue.userMessage,
+                                stringResource(profileStorageIssueMessageResource(issue)),
                                 stringResource(R.string.profile_storage_reset_consequence),
                             ),
                         )
@@ -302,11 +285,11 @@ fun ProfilesScreen(
                 )
             }
 
-            is ProfileStorageIssue.Unavailable -> AlertDialog(
+            ProfileStorageIssue.Unavailable -> AlertDialog(
                 onDismissRequest = {},
                 icon = { Icon(Icons.Default.Info, contentDescription = null) },
                 title = { Text(stringResource(R.string.profile_storage_unavailable_title)) },
-                text = { Text(issue.userMessage) },
+                text = { Text(stringResource(profileStorageIssueMessageResource(issue))) },
                 confirmButton = {
                     Button(onClick = onRetryProfileStorage, enabled = !profileStorageBusy) {
                         Text(
@@ -322,186 +305,6 @@ fun ProfilesScreen(
                 },
             )
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun WifiAccessPointOnboardingScreen(
-    state: WifiAccessPointOnboardingUiState,
-    onConnect: (String, CharArray, String, CharArray) -> Unit,
-    onBack: () -> Unit,
-) {
-    var endpoint by remember { mutableStateOf("") }
-    var apPassword by remember { mutableStateOf("") }
-    var targetSsid by remember { mutableStateOf("") }
-    var targetPassword by remember { mutableStateOf("") }
-    var confirm by remember { mutableStateOf(false) }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            apPassword = ""
-            targetPassword = ""
-            confirm = false
-        }
-    }
-
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.wifi_ap_onboarding_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.common_back),
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            LazyColumn(
-                modifier = Modifier
-                    .widthIn(max = EditorContentMaxWidth)
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .testTag("wifi-ap-onboarding-screen"),
-                contentPadding = PaddingValues(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                item {
-                    EditorSection(stringResource(R.string.wifi_ap_onboarding_connection_section)) {
-                        Text(
-                            stringResource(R.string.wifi_ap_onboarding_explanation),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        OutlinedTextField(
-                            value = endpoint,
-                            onValueChange = { endpoint = it.trim() },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("wifi-ap-endpoint"),
-                            label = { Text(stringResource(R.string.wifi_ap_endpoint)) },
-                            placeholder = { Text("http://10.10.10.1") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        )
-                        OutlinedTextField(
-                            value = apPassword,
-                            onValueChange = { apPassword = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("wifi-ap-password"),
-                            label = { Text(stringResource(R.string.wifi_ap_password)) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        )
-                    }
-                }
-                item {
-                    EditorSection(stringResource(R.string.wifi_ap_onboarding_target_section)) {
-                        OutlinedTextField(
-                            value = targetSsid,
-                            onValueChange = { targetSsid = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("wifi-ap-target-ssid"),
-                            label = { Text(stringResource(R.string.wifi_ap_target_ssid)) },
-                            singleLine = true,
-                        )
-                        OutlinedTextField(
-                            value = targetPassword,
-                            onValueChange = { targetPassword = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("wifi-ap-target-password"),
-                            label = { Text(stringResource(R.string.wifi_ap_target_password)) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        )
-                        Text(
-                            stringResource(R.string.wifi_ap_manual_and_memory_only),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                state.notice?.let { notice ->
-                    item {
-                        Surface(
-                            color = when (state.noticeKind) {
-                                WifiAccessPointOnboardingNoticeKind.Applied ->
-                                    MaterialTheme.colorScheme.primaryContainer
-                                WifiAccessPointOnboardingNoticeKind.Indeterminate,
-                                WifiAccessPointOnboardingNoticeKind.Rejected ->
-                                    MaterialTheme.colorScheme.errorContainer
-                                WifiAccessPointOnboardingNoticeKind.Information ->
-                                    MaterialTheme.colorScheme.surfaceContainerHigh
-                            },
-                            shape = MaterialTheme.shapes.medium,
-                        ) {
-                            Text(notice, modifier = Modifier.padding(16.dp))
-                        }
-                    }
-                }
-                item {
-                    Button(
-                        onClick = { confirm = true },
-                        enabled = !state.operationInProgress && endpoint.isNotBlank() &&
-                            apPassword.isNotEmpty() && targetSsid.isNotEmpty() &&
-                            targetPassword.isNotEmpty(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 52.dp)
-                            .testTag("wifi-ap-review"),
-                    ) {
-                        if (state.operationInProgress) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Text(stringResource(R.string.wifi_ap_review))
-                    }
-                }
-            }
-        }
-    }
-
-    if (confirm) {
-        AlertDialog(
-            onDismissRequest = { confirm = false },
-            title = { Text(stringResource(R.string.wifi_ap_confirm_title)) },
-            text = { Text(stringResource(R.string.wifi_ap_confirm_consequence)) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirm = false
-                        val ownedApPassword = apPassword.toCharArray()
-                        val ownedTargetPassword = targetPassword.toCharArray()
-                        apPassword = ""
-                        targetPassword = ""
-                        onConnect(endpoint, ownedApPassword, targetSsid, ownedTargetPassword)
-                    },
-                ) {
-                    Text(stringResource(R.string.wifi_ap_connect_once))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirm = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
     }
 }
 
@@ -662,11 +465,11 @@ private fun ProfileStorageRecoveryState(
                 color = MaterialTheme.colorScheme.error,
             )
             Text(
-                issue.userMessage,
+                stringResource(profileStorageIssueMessageResource(issue)),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (issue is ProfileStorageIssue.Corrupted) {
+            if (issue == ProfileStorageIssue.Corrupted) {
                 Text(
                     stringResource(R.string.profile_storage_recovery_pending_message),
                     style = MaterialTheme.typography.bodySmall,
@@ -898,6 +701,7 @@ private fun PasswordDialog(
 fun ProfileEditorScreen(
     initial: HostProfile,
     isNew: Boolean,
+    mutation: ProfileMutationUiState = ProfileMutationUiState.Idle,
     hasSavedPassword: Boolean,
     onSave: (HostProfile) -> Unit,
     onDelete: ((HostProfile) -> Unit)?,
@@ -914,7 +718,15 @@ fun ProfileEditorScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRemovePassword by remember { mutableStateOf(false) }
     val portValue = port.toIntOrNull()
-    val valid = name.isNotBlank() && host.isNotBlank() && username.isNotBlank() && portValue in 1..65535
+    val prospectiveProfile = initial.copy(
+        name = name.trim(),
+        host = host,
+        port = portValue ?: initial.port,
+        useHttps = true,
+        username = username.trim(),
+    )
+    val valid = portValue != null && ProfileInputPolicy.isValid(prospectiveProfile)
+    val mutationInProgress = mutation != ProfileMutationUiState.Idle
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -957,14 +769,16 @@ fun ProfileEditorScreen(
                     EditorSection(title = stringResource(R.string.profile_editor_connection_section)) {
                         OutlinedTextField(
                             value = name,
-                            onValueChange = { name = it },
+                            onValueChange = { name = ProfileInputPolicy.boundName(it) },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_name_label)) },
                             singleLine = true,
                         )
                         OutlinedTextField(
                             value = host,
-                            onValueChange = { host = it.trim() },
+                            onValueChange = {
+                                host = ProfileInputPolicy.boundHost(it.trim())
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_host_label)) },
                             placeholder = { Text(stringResource(R.string.profile_host_placeholder)) },
@@ -991,7 +805,9 @@ fun ProfileEditorScreen(
                     EditorSection(title = stringResource(R.string.profile_editor_authentication_section)) {
                         OutlinedTextField(
                             value = username,
-                            onValueChange = { username = it },
+                            onValueChange = {
+                                username = ProfileInputPolicy.boundUsername(it)
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_username_label)) },
                             singleLine = true,
@@ -1098,21 +914,21 @@ fun ProfileEditorScreen(
                     Button(
                         onClick = {
                             onSave(
-                                initial.copy(
-                                    name = name.trim(),
-                                    host = host,
-                                    port = portValue ?: initial.port,
-                                    useHttps = true,
-                                    username = username.trim(),
-                                ),
+                                prospectiveProfile,
                             )
                         },
-                        enabled = valid,
+                        enabled = valid && !mutationInProgress,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 52.dp),
                     ) {
-                        Text(stringResource(R.string.profile_save_action))
+                        if (mutation is ProfileMutationUiState.Saving) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.profile_saving_action))
+                        } else {
+                            Text(stringResource(R.string.profile_save_action))
+                        }
                     }
                 }
                 if (onDelete != null) {
@@ -1125,6 +941,7 @@ fun ProfileEditorScreen(
                             )
                             OutlinedButton(
                                 onClick = { confirmDelete = true },
+                                enabled = !mutationInProgress,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 52.dp),
@@ -1145,18 +962,27 @@ fun ProfileEditorScreen(
 
     if (confirmDelete && onDelete != null) {
         AlertDialog(
-            onDismissRequest = { confirmDelete = false },
+            onDismissRequest = {
+                if (mutation !is ProfileMutationUiState.Deleting) confirmDelete = false
+            },
             title = { Text(stringResource(R.string.profile_delete_dialog_title, initial.name)) },
             text = { Text(stringResource(R.string.profile_delete_dialog_message)) },
             confirmButton = {
                 Button(
                     onClick = { onDelete(initial) },
+                    enabled = !mutationInProgress,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
                     ),
                 ) {
-                    Text(stringResource(R.string.common_delete))
+                    if (mutation is ProfileMutationUiState.Deleting) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.profile_deleting_action))
+                    } else {
+                        Text(stringResource(R.string.common_delete))
+                    }
                 }
             },
             dismissButton = {

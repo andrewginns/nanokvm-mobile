@@ -112,11 +112,9 @@ debug/emulator result does not close a signed-candidate or manual gate.
 
 ## Security and privacy
 
-- [ ] Authenticated traffic contains only the selected HTTPS origin; HTTP
-  profiles are rejected and certificate inspection sends no credentials,
-  tokens, or application data. The sole cleartext exception is an explicitly
-  started, cookie-suppressed AP bootstrap to the user-entered endpoint; verify
-  that no authenticated token or persisted password enters that flow.
+- [ ] Traffic contains only the selected HTTPS origin; HTTP profiles are
+  rejected, merged manifest/Network Security Config deny cleartext, and
+  certificate inspection sends no credentials, tokens, or application data.
 - [ ] Self-signed trust, saved-pin mismatch, redirect/cookie origin, invalid/
   expired hostname, and certificate recovery tests pass.
 - [ ] Real Keystore success, cancellation, authorization expiry, invalidation,

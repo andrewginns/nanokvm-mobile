@@ -1,10 +1,11 @@
 package org.nanokvm.mobile.runtime
 
 import java.io.IOException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.protocol.NanoKvmPicoClawAgentProfile
@@ -180,6 +182,58 @@ class NanoKvmPicoClawFeatureGatewayTest {
         }
 
     @Test
+    fun `history port catalog requires its exact typed member`() {
+        val created = Instant.parse("2026-07-18T08:00:00Z")
+        val updated = Instant.parse("2026-07-18T09:00:00Z")
+        val member = NanoKvmPicoClawPortHistorySession(
+            "title",
+            "preview",
+            1,
+            created,
+            updated,
+        )
+        val lookalike = NanoKvmPicoClawPortHistorySession(
+            "title",
+            "preview",
+            1,
+            created,
+            updated,
+        )
+        val catalog = NanoKvmPicoClawPortHistoryCatalog(listOf(member))
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            catalog.requireExactMember(lookalike)
+        }
+
+        assertEquals(
+            "History session must be an exact member of the supplied catalog",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `history deletion reconciliation preserves cancellation`() = runTest {
+        val port = FakePicoClawPort().apply {
+            deleteFailsAfterApplying = true
+            historyPresenceFailure = CancellationException("history read cancelled")
+        }
+        val current = binding()
+        val gateway = gateway(port, current, backgroundScope) { current }
+        gateway.enterFeature()
+        val catalog = historySuccess(gateway.refreshHistories())
+        val item = catalog.items.single()
+        val consent = requireNotNull(gateway.recordHistoryDeletionConsent(catalog, item))
+
+        val failure = runCatching {
+            gateway.deleteHistory(catalog, item, consent)
+        }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertEquals(1, port.deleteCalls)
+        assertEquals(1, port.presenceCalls)
+    }
+
+    @Test
     fun `cancel keeps manual HID locked and only close release restores it`() = runTest {
         val port = FakePicoClawPort()
         val current = binding()
@@ -217,7 +271,7 @@ class NanoKvmPicoClawFeatureGatewayTest {
         runCurrent()
 
         assertTrue(gateway.chat.sendMessage("one private request") is
-            NanoKvmPicoClawChatActionResult.Dispatched)
+            NanoKvmPicoClawChatActionResult.MessageDispatched)
         port.chat.acceptMessages = false
         assertChatRejected(
             gateway.chat.sendMessage("must not queue"),
@@ -232,6 +286,30 @@ class NanoKvmPicoClawFeatureGatewayTest {
         )
         assertEquals(1, port.newChatCalls)
         assertEquals(1, port.chat.connectCalls)
+    }
+
+    @Test
+    fun `dispatched chat message reuses exact normalized bounded display payload`() = runTest {
+        val port = FakePicoClawPort()
+        val current = binding()
+        val gateway = gateway(port, current, backgroundScope) { current }
+        gateway.enterFeature()
+        gateway.chat.open(requireNotNull(gateway.recordBroadControlConsentAfterDisclosure()))
+        runCurrent()
+        val remotePayload = "one private request"
+        val multibyteWhitespace = "\u2003".repeat(12_000)
+
+        val result = gateway.chat.sendMessage(
+            multibyteWhitespace + remotePayload + multibyteWhitespace,
+        )
+
+        assertTrue(result is NanoKvmPicoClawChatActionResult.MessageDispatched)
+        result as NanoKvmPicoClawChatActionResult.MessageDispatched
+        assertEquals(remotePayload, port.chat.sentMessages.single())
+        assertEquals(
+            port.chat.sentMessages.single(),
+            (result.message.content as PicoClawMessageContent.ApplianceText).value,
+        )
     }
 
     @Test
@@ -286,6 +364,30 @@ class NanoKvmPicoClawFeatureGatewayTest {
             assertFalse(result.toString().contains("private release token"))
             assertFalse(gateway.chat.state.value.toString().contains("private status token"))
         }
+
+    @Test
+    fun `release reconciliation preserves cancellation and lock uncertainty`() = runTest {
+        val port = FakePicoClawPort().apply {
+            chat.releaseFailure = IOException("release response lost")
+            statusFailure = CancellationException("status read cancelled")
+        }
+        val current = binding()
+        val gateway = gateway(port, current, backgroundScope) { current }
+        gateway.enterFeature()
+        port.statusFailureEnabled = true
+        gateway.chat.open(requireNotNull(gateway.recordBroadControlConsentAfterDisclosure()))
+        runCurrent()
+
+        val failure = runCatching { gateway.chat.closeAndRelease() }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertEquals(
+            NanoKvmPicoClawManualInputState.ReleaseUncertain,
+            gateway.chat.manualInput.value,
+        )
+        assertEquals(1, port.chat.releaseCalls)
+        assertEquals(2, port.statusCalls)
+    }
 
     @Test
     fun `destructive and broad control approvals are one use and disclosures are explicit`() =
@@ -369,6 +471,7 @@ private class FakePicoClawPort : NanoKvmPicoClawPort {
     var startFailsAfterApplying = false
     var deleteFailsAfterApplying = false
     var historyPresenceAfterFailure = NanoKvmPicoClawHistoryPresence.UNKNOWN
+    var historyPresenceFailure: Throwable? = null
     var receivedProviderKey: String? = null
     var statusFailure: Throwable? = null
     var statusFailureEnabled = false
@@ -432,13 +535,12 @@ private class FakePicoClawPort : NanoKvmPicoClawPort {
                     messageCount = 3,
                     createdAt = Instant.parse("2026-07-18T08:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T09:00:00Z"),
-                    opaqueToken = "sk_v1_private_identity",
                 ),
             )
         } else {
             emptyList()
         }
-        return NanoKvmPicoClawPortHistoryCatalog(sessions, Any())
+        return NanoKvmPicoClawPortHistoryCatalog(sessions)
     }
 
     override suspend fun history(
@@ -477,6 +579,7 @@ private class FakePicoClawPort : NanoKvmPicoClawPort {
     ): NanoKvmPicoClawHistoryPresence {
         catalog.requireExactMember(session)
         presenceCalls++
+        historyPresenceFailure?.let { throw it }
         return historyPresenceAfterFailure
     }
 
@@ -512,6 +615,7 @@ private class FakePicoClawChatPort : NanoKvmPicoClawChatPort {
     var closeCalls = 0
     var acceptMessages = true
     var releaseFailure: Throwable? = null
+    val sentMessages = mutableListOf<String>()
 
     override fun connect(): Boolean {
         connectCalls++
@@ -525,6 +629,7 @@ private class FakePicoClawChatPort : NanoKvmPicoClawChatPort {
         options: NanoKvmPicoClawMessageOptions,
     ): NanoKvmPicoClawMessageReceipt? {
         sendCalls++
+        sentMessages += content
         return if (acceptMessages) NanoKvmPicoClawMessageReceipt("opaque-receipt", session) else null
     }
 

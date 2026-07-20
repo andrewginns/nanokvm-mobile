@@ -25,9 +25,91 @@
     <string name="console_host_power_off">Host power off</string>
     <string name="console_host_drive_active">Drive active</string>
 
+    <!-- Typed runtime connection failures and console messages -->
+    <string name="console_failure_session_closed">This console session has been closed.</string>
+    <string name="console_failure_app_in_background">Cannot connect while the app is in the background.</string>
+    <string name="console_failure_invalid_address">The NanoKVM address is not valid.</string>
+    <string name="console_failure_https_required">NanoKVM connections require HTTPS.</string>
+    <string name="console_failure_invalid_saved_certificate">The saved certificate fingerprint is invalid.</string>
+    <string name="console_failure_certificate_changed">The NanoKVM certificate differs from the saved certificate.</string>
+    <string name="console_failure_certificate_hostname_mismatch">The certificate does not identify %1$s.</string>
+    <string name="console_failure_certificate_date_invalid">The NanoKVM certificate is expired or not yet valid.</string>
+    <string name="console_failure_certificate_inspection_failed">The NanoKVM TLS certificate could not be inspected.</string>
+    <string name="console_failure_request_rejected_code">NanoKVM rejected the request (code %1$d).</string>
+    <string name="console_failure_request_rejected">NanoKVM rejected the request.</string>
+    <string name="console_failure_unsupported_application_version">This NanoKVM application version is unsupported; version 2.3.2 or newer is required.</string>
+    <string name="console_failure_protocol_error">NanoKVM returned an invalid protocol response.</string>
+    <string name="console_failure_timed_out">The NanoKVM connection timed out.</string>
+    <string name="console_failure_unreachable">Could not reach the NanoKVM.</string>
+    <string name="console_failure_unexpected">The NanoKVM connection stopped unexpectedly. Please try again.</string>
+
+    <string name="console_stream_webrtc">WebRTC</string>
+    <string name="console_stream_h264_direct">H.264 direct</string>
+    <string name="console_stream_mjpeg">MJPEG</string>
+    <string name="console_stream_webrtc_fallback">WebRTC fallback</string>
+    <string name="console_stream_h264_direct_fallback">H.264 direct fallback</string>
+    <string name="console_stream_mjpeg_fallback">MJPEG fallback</string>
+
+    <string name="console_message_verifying_destination">Verifying %1$s</string>
+    <string name="console_message_authenticating_destination">Authenticating with %1$s</string>
+    <string name="console_message_connected">NanoKVM connected</string>
+    <string name="console_message_paused_in_background">Paused in background</string>
+    <plurals name="console_message_unsupported_keyboard_characters">
+        <item quantity="one">%1$d character is unavailable in the selected target layout</item>
+        <item quantity="other">%1$d characters are unavailable in the selected target layout</item>
+    </plurals>
+    <string name="console_message_connect_before_video_settings">Connect before changing video settings.</string>
+    <string name="console_message_applying_video_settings">Applying video settings&#x2026;</string>
+    <string name="console_message_video_settings_applied">Video settings applied; restarting stream</string>
+    <string name="console_message_video_settings_not_applied">Video settings were not applied: %1$s</string>
+    <string name="console_message_clipboard_byte_limit">Clipboard text must contain 1 to %1$d UTF-8 bytes</string>
+    <string name="console_message_preparing_reconnect">Preparing to reconnect</string>
+    <string name="console_message_reconnect_attempt">Reconnect attempt %1$d of %2$d</string>
+    <string name="console_message_reconnect_attempt_delayed">Reconnect attempt %1$d of %2$d in %3$s</string>
+    <plurals name="console_message_reconnect_delay">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
+    <string name="console_message_reconnect_stopped">Reconnect stopped after %1$s: %2$s</string>
+    <plurals name="console_message_reconnect_attempt_count">
+        <item quantity="one">%1$d attempt</item>
+        <item quantity="other">%1$d attempts</item>
+    </plurals>
+    <string name="console_message_typing_clipboard">Typing approved clipboard text into remote</string>
+    <string name="console_message_clipboard_session_changed">The NanoKVM session changed before clipboard typing could start.</string>
+    <string name="console_message_clipboard_already_active">Clipboard typing is already active or stopping.</string>
+    <string name="console_message_clipboard_typed">Clipboard text typed into remote</string>
+    <plurals name="console_message_clipboard_unsupported">
+        <item quantity="one">%1$d character is unavailable in the selected target layout; nothing was typed</item>
+        <item quantity="other">%1$d characters are unavailable in the selected target layout; nothing was typed</item>
+    </plurals>
+    <plurals name="console_message_clipboard_cancelled">
+        <item quantity="one">Clipboard typing cancelled after %1$d of %2$d character</item>
+        <item quantity="other">Clipboard typing cancelled after %1$d of %2$d characters</item>
+    </plurals>
+    <plurals name="console_message_clipboard_connection_lost">
+        <item quantity="one">Clipboard typing stopped after %1$d of %2$d character because the input connection was lost</item>
+        <item quantity="other">Clipboard typing stopped after %1$d of %2$d characters because the input connection was lost</item>
+    </plurals>
+    <string name="console_message_authentication_expired">The NanoKVM login expired. Reconnect and authenticate again.</string>
+    <string name="console_message_hid_reset">HID interface reset</string>
+    <string name="console_message_ctrl_alt_delete_sent">Ctrl-Alt-Delete sent</string>
+    <string name="console_message_host_control_sent">Host control sent</string>
+    <string name="console_message_connecting_video">Connecting %1$s</string>
+    <string name="console_message_video_fallback">%1$s unavailable; using %2$s</string>
+    <string name="console_message_mjpeg_detection_unavailable">MJPEG frame detection is unavailable for this session.</string>
+    <string name="console_message_mjpeg_detection_not_acknowledged">NanoKVM did not acknowledge the MJPEG frame-detection request. The request was not retried.</string>
+
     <!-- Console controls -->
     <string name="console_pointer_direct">Direct pointer</string>
     <string name="console_pointer_trackpad">Trackpad pointer</string>
+    <string name="console_remote_pointer">Remote pointer controls</string>
+    <string name="console_move_pointer_left">Move remote pointer left</string>
+    <string name="console_move_pointer_right">Move remote pointer right</string>
+    <string name="console_move_pointer_up">Move remote pointer up</string>
+    <string name="console_move_pointer_down">Move remote pointer down</string>
+    <string name="console_click_pointer">Click remote pointer</string>
+    <string name="console_right_click_pointer">Right-click remote pointer</string>
     <string name="console_mouse_buttons">Mouse buttons</string>
     <string name="console_mouse_middle_click">Middle mouse click</string>
     <string name="console_mouse_back_click">Mouse Back</string>
@@ -36,18 +118,14 @@
     <string name="console_dock_view_pad">Dock view pad</string>
     <string name="console_scroll_sensitivity_value">Scroll sensitivity %1$s</string>
     <string name="console_fit_view">Fit view</string>
-    <string name="console_fit_view_value">Fit view %1$s</string>
     <string name="console_video_settings">Video settings</string>
     <string name="console_power_controls">Power controls</string>
     <string name="console_more_actions">More actions</string>
     <string name="console_enter_immersive">Enter full screen</string>
     <string name="console_exit_immersive">Exit full screen</string>
     <string name="console_type_phone_clipboard">Type phone clipboard</string>
-    <string name="console_cancel_clipboard_typing">Cancel clipboard typing</string>
     <string name="console_stopping_clipboard_typing_progress">Stopping clipboard typing: %1$d of %2$d</string>
     <string name="console_cancel_clipboard_typing_progress">Cancel clipboard typing · %1$d of %2$d</string>
-    <string name="console_selected">Selected</string>
-    <string name="console_not_selected">Not selected</string>
     <string name="console_multiplier_format">%1$.1f×</string>
 
     <!-- Scroll settings -->
@@ -66,7 +144,15 @@
     <string name="console_clipboard_preview_title">Type phone clipboard?</string>
     <string name="console_clipboard_keyboard_layout">Target keyboard layout: %1$s</string>
     <string name="console_clipboard_destination">Destination: %1$s (%2$s)</string>
-    <string name="console_clipboard_size">%1$d characters · %2$d UTF-8 bytes</string>
+    <string name="console_clipboard_size">%1$s · %2$s</string>
+    <plurals name="console_clipboard_character_count">
+        <item quantity="one">%1$d character</item>
+        <item quantity="other">%1$d characters</item>
+    </plurals>
+    <plurals name="console_clipboard_utf8_byte_count">
+        <item quantity="one">%1$d UTF-8 byte</item>
+        <item quantity="other">%1$d UTF-8 bytes</item>
+    </plurals>
     <string name="console_clipboard_sensitive_hidden">Sensitive clipboard text is hidden</string>
     <string name="console_clipboard_reveal_sensitive">Reveal text</string>
     <string name="console_clipboard_hide_sensitive">Hide text</string>
@@ -75,11 +161,11 @@
     <string name="console_clipboard_warning_newline">Contains line breaks that may submit a form or command.</string>
     <string name="console_clipboard_warning_tab">Contains tabs that may move remote focus.</string>
     <string name="console_clipboard_warning_control">Contains other control characters.</string>
-    <string name="console_clipboard_warning_too_long">Exceeds NanoKVM’s 1,024-byte paste limit. Copy a shorter value.</string>
     <string name="console_clipboard_error_title">Clipboard unavailable</string>
     <string name="console_clipboard_unavailable">Android could not read the clipboard. Keep NanoKVM in the foreground and try again.</string>
     <string name="console_clipboard_empty">The Android clipboard does not contain direct plain text.</string>
     <string name="console_clipboard_rejected">Only one direct plain-text clipboard item can be typed. Rich text, links, files, and shared content providers are not opened.</string>
+    <string name="console_clipboard_too_long">Clipboard text exceeds NanoKVM’s 1,024-byte paste limit and was not retained.</string>
     <string name="console_clipboard_connect_first">Connect to NanoKVM before typing clipboard text.</string>
     <string name="console_clipboard_session_changed">The NanoKVM session changed. Review the clipboard destination again.</string>
 
@@ -102,7 +188,10 @@
     <string name="console_mjpeg_frame_detection_state_on">Enabled</string>
     <string name="console_mjpeg_frame_detection_state_off">Disabled</string>
     <string name="console_h264_gop">H.264 keyframe interval</string>
-    <string name="console_h264_gop_value">%1$d frames</string>
+    <plurals name="console_h264_gop_value">
+        <item quantity="one">%1$d frame</item>
+        <item quantity="other">%1$d frames</item>
+    </plurals>
     <string name="console_video_settings_help">WebRTC uses hardware H.264 decoding and falls back to a fresh direct H.264 stream, then MJPEG. H.264 settings apply to the direct stream; quality applies to MJPEG.</string>
 
     <!-- Host and power actions -->
@@ -265,7 +354,7 @@
     <string name="console_administration">Administration</string>
     <string name="console_administration_title">NanoKVM administration</string>
     <string name="console_administration_refresh">Refresh administration state</string>
-    <string name="console_admin_loading">Loading authoritative state...</string>
+    <string name="console_admin_loading">Loading authoritative state…</string>
     <string name="console_admin_account">Account</string>
     <string name="console_admin_username">Username: %1$s</string>
     <string name="console_admin_password_updated">Factory password replaced</string>
@@ -285,10 +374,19 @@
     <string name="console_admin_reboot">Reboot NanoKVM</string>
     <string name="console_admin_oled">OLED sleep</string>
     <string name="console_admin_oled_absent">No OLED was reported by this hardware.</string>
-    <string name="console_admin_oled_unknown">Current OLED sleep: %1$d seconds (unrecognised preset)</string>
+    <plurals name="console_admin_oled_unknown">
+        <item quantity="one">Current OLED sleep: %1$d second (unrecognised preset)</item>
+        <item quantity="other">Current OLED sleep: %1$d seconds (unrecognised preset)</item>
+    </plurals>
     <string name="console_admin_oled_never">Never</string>
-    <string name="console_admin_oled_seconds">%1$d seconds</string>
-    <string name="console_admin_oled_minutes">%1$d minutes</string>
+    <plurals name="console_admin_oled_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
+    <plurals name="console_admin_oled_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
     <string name="console_admin_oled_hour">1 hour</string>
     <string name="console_admin_access">Remote access</string>
     <string name="console_admin_ssh_on">SSH: enabled</string>
@@ -394,7 +492,7 @@
     <string name="console_operator_exit_serial">Exit serial and disconnect</string>
     <string name="console_operator_scripts">Root scripts</string>
     <string name="console_operator_refresh_scripts">Refresh script catalog</string>
-    <string name="console_operator_loading_scripts">Loading script catalog...</string>
+    <string name="console_operator_loading_scripts">Loading script catalog…</string>
     <string name="console_operator_no_scripts">No scripts are listed.</string>
     <string name="console_operator_script_upload">Upload script text</string>
     <string name="console_operator_script_name">Safe .sh or .py filename</string>
@@ -414,7 +512,15 @@
     <string name="console_operator_confirm_action">Action: %1$s</string>
     <string name="console_operator_confirm_consequence">Risk: %1$s</string>
     <string name="console_operator_action_open_terminal">Open an unrestricted root PTY</string>
-    <string name="console_operator_action_start_serial">Start picocom on %1$s at %2$d baud, %3$s parity, %4$s flow, %5$d data bits, %6$d stop bits</string>
+    <string name="console_operator_action_start_serial">Start picocom on %1$s with baud rate %2$d, %3$s parity, %4$s flow, %5$s, %6$s</string>
+    <plurals name="console_operator_serial_data_bit_count">
+        <item quantity="one">%1$d data bit</item>
+        <item quantity="other">%1$d data bits</item>
+    </plurals>
+    <plurals name="console_operator_serial_stop_bit_count">
+        <item quantity="one">%1$d stop bit</item>
+        <item quantity="other">%1$d stop bits</item>
+    </plurals>
     <string name="console_operator_action_upload">Upload %1$s (%2$d UTF-8 bytes)</string>
     <string name="console_operator_action_run_foreground">Run %1$s in foreground</string>
     <string name="console_operator_action_run_background">Run %1$s in background</string>
@@ -428,7 +534,7 @@
     <string name="console_admin_network">Network</string>
     <string name="console_admin_wifi_title">Wi-Fi</string>
     <string name="console_admin_wifi_unsupported">Wi-Fi administration is not supported by this appliance.</string>
-    <string name="console_admin_wifi_ap_mode">The appliance is in access-point mode. Use the separate AP onboarding flow from Connections.</string>
+    <string name="console_admin_wifi_ap_mode">The appliance is in access-point mode. Complete initial network setup through the trusted NanoKVM setup interface, then connect with an HTTPS profile.</string>
     <string name="console_admin_wifi_connected">Connected to %1$s</string>
     <string name="console_admin_wifi_disconnected">Not connected to Wi-Fi</string>
     <string name="console_admin_wifi_ssid">Target SSID</string>
@@ -453,6 +559,8 @@
     <string name="console_admin_tailscale_down">Bring down</string>
     <string name="console_admin_tailscale_login">Log in</string>
     <string name="console_admin_tailscale_logout">Log out</string>
+    <string name="console_admin_tailscale_open_login">Open Tailscale login</string>
+    <string name="console_admin_tailscale_open_login_failed">Couldn\'t open Tailscale login. Try again.</string>
     <string name="console_admin_consequence_wifi_connect">This sends the manually entered SSID and password once. It can move NanoKVM to another network and immediately drop this connection. The password is cleared locally and the write is never replayed.</string>
     <string name="console_admin_consequence_wifi_disconnect">This stops Wi-Fi and deletes NanoKVM\'s saved SSID and password. It may immediately drop this connection, and an ambiguous response is never replayed.</string>
     <string name="console_admin_consequence_tailscale_install">This downloads and installs executable Tailscale code from the internet, then starts its service. The command is sent once.</string>

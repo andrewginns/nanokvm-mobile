@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.runtime
 
+import java.util.IdentityHashMap
 import org.nanokvm.protocol.NanoKvmApi
 import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmImage
@@ -45,7 +46,7 @@ internal interface NanoKvmPhase3Port {
 
 internal class NanoKvmPhase3PortImage internal constructor(
     val displayName: String,
-    internal val opaqueToken: Any,
+    internal val identity: NanoKvmPhase3PortImageIdentity,
 ) {
     init {
         require(displayName.isNotBlank()) { "Image display name must not be blank" }
@@ -54,16 +55,41 @@ internal class NanoKvmPhase3PortImage internal constructor(
     override fun toString(): String = "NanoKvmPhase3PortImage(<redacted>)"
 }
 
+/** Redacted, feature-specific identity used to reconcile one image across catalog snapshots. */
+internal class NanoKvmPhase3PortImageIdentity internal constructor(
+    private val scope: NanoKvmPhase3PortImageIdentityScope,
+    private val canonicalValue: String,
+) {
+    init {
+        require(canonicalValue.isNotBlank()) { "Image identity must not be blank" }
+    }
+
+    internal fun sameAs(other: NanoKvmPhase3PortImageIdentity): Boolean =
+        scope === other.scope && canonicalValue == other.canonicalValue
+
+    override fun toString(): String = "NanoKvmPhase3PortImageIdentity(<redacted>)"
+}
+
+/** Distinguishes otherwise-equal image identities issued by different port instances. */
+internal class NanoKvmPhase3PortImageIdentityScope internal constructor() {
+    override fun toString(): String = "NanoKvmPhase3PortImageIdentityScope(<redacted>)"
+}
+
 internal class NanoKvmPhase3PortImageCatalog internal constructor(
     val images: List<NanoKvmPhase3PortImage>,
     val mountedImage: NanoKvmPhase3PortImage?,
     val hasUnlistedMountedImage: Boolean,
     val cdRomEnabled: Boolean,
-    internal val opaqueToken: Any,
 ) {
     init {
         require(mountedImage == null || images.any { it === mountedImage }) {
             "Mounted image must be an exact port catalog member"
+        }
+    }
+
+    internal fun requireExactMember(image: NanoKvmPhase3PortImage) {
+        require(images.any { it === image }) {
+            "Image must be an exact member of the supplied port catalog"
         }
     }
 
@@ -81,45 +107,60 @@ internal class NanoKvmProtocolPhase3Port(
     private val api: NanoKvmApi,
     private val applicationVersion: NanoKvmApplicationVersion?,
 ) : NanoKvmPhase3Port {
+    private val imageIdentityScope = NanoKvmPhase3PortImageIdentityScope()
+    private var latestImageCatalog: ProtocolImageCatalogBinding? = null
+
     override suspend fun hidMode(): NanoKvmHidMode = api.hidMode()
 
     override suspend fun setHidMode(mode: NanoKvmHidMode) = api.setHidMode(mode)
 
     override suspend fun imageCatalog(): NanoKvmPhase3PortImageCatalog {
+        latestImageCatalog = null
         val protocolCatalog = api.listImages()
         val mounted = api.mountedImage()
         val cdRom = api.cdRomState()
-        val images = protocolCatalog.images.map { image ->
+        val members = protocolCatalog.images.map { image ->
             NanoKvmPhase3PortImage(
                 displayName = image.fileName,
-                opaqueToken = ProtocolImageToken(image),
-            )
+                identity = NanoKvmPhase3PortImageIdentity(imageIdentityScope, image.path),
+            ) to image
         }
+        val images = members.map { it.first }
         val mountedImage = mounted?.let { mountedState ->
             protocolCatalog.images.indexOfFirst { it.path == mountedState.path }
                 .takeIf { it >= 0 }
                 ?.let(images::get)
         }
-        return NanoKvmPhase3PortImageCatalog(
+        val portCatalog = NanoKvmPhase3PortImageCatalog(
             images = images,
             mountedImage = mountedImage,
             hasUnlistedMountedImage = mounted != null && mountedImage == null,
             cdRomEnabled = cdRom.enabled,
-            opaqueToken = ProtocolCatalogToken(protocolCatalog),
         )
+        val protocolMembers = IdentityHashMap<NanoKvmPhase3PortImage, NanoKvmImage>()
+        members.forEach { (portImage, protocolImage) ->
+            protocolMembers[portImage] = protocolImage
+        }
+        latestImageCatalog = ProtocolImageCatalogBinding(
+            portCatalog = portCatalog,
+            protocolCatalog = protocolCatalog,
+            members = protocolMembers,
+        )
+        return portCatalog
     }
 
     override fun sameImage(
         left: NanoKvmPhase3PortImage,
         right: NanoKvmPhase3PortImage,
-    ): Boolean = left.protocolImage().path == right.protocolImage().path
+    ): Boolean = left.identity.sameAs(right.identity)
 
     override suspend fun mountImage(
         catalog: NanoKvmPhase3PortImageCatalog,
         image: NanoKvmPhase3PortImage,
         mode: NanoKvmImageMountMode,
     ) {
-        api.mountImage(catalog.protocolCatalog(), image.protocolImage(), mode)
+        val binding = requireLatestImageCatalog(catalog)
+        api.mountImage(binding.protocolCatalog, binding.requireProtocolImage(image), mode)
     }
 
     override suspend fun restorePhysicalMedia() = api.restorePhysicalMedia()
@@ -128,7 +169,8 @@ internal class NanoKvmProtocolPhase3Port(
         catalog: NanoKvmPhase3PortImageCatalog,
         image: NanoKvmPhase3PortImage,
     ) {
-        api.deleteImage(catalog.protocolCatalog(), image.protocolImage())
+        val binding = requireLatestImageCatalog(catalog)
+        api.deleteImage(binding.protocolCatalog, binding.requireProtocolImage(image))
     }
 
     override suspend fun virtualDevices(): NanoKvmVirtualDevices = api.virtualDevices()
@@ -160,20 +202,23 @@ internal class NanoKvmProtocolPhase3Port(
     override suspend fun deleteWakeOnLanEntry(macAddress: NanoKvmMacAddress) =
         api.deleteWakeOnLanEntry(macAddress)
 
-    private fun NanoKvmPhase3PortImageCatalog.protocolCatalog(): NanoKvmImageCatalog =
-        (opaqueToken as? ProtocolCatalogToken)?.catalog
-            ?: throw IllegalArgumentException("Foreign image catalog")
+    private fun requireLatestImageCatalog(
+        catalog: NanoKvmPhase3PortImageCatalog,
+    ): ProtocolImageCatalogBinding = latestImageCatalog
+        ?.takeIf { it.portCatalog === catalog }
+        ?: throw IllegalArgumentException("Foreign or stale image catalog")
 
-    private fun NanoKvmPhase3PortImage.protocolImage(): NanoKvmImage =
-        (opaqueToken as? ProtocolImageToken)?.image
-            ?: throw IllegalArgumentException("Foreign image handle")
+    private class ProtocolImageCatalogBinding(
+        val portCatalog: NanoKvmPhase3PortImageCatalog,
+        val protocolCatalog: NanoKvmImageCatalog,
+        private val members: Map<NanoKvmPhase3PortImage, NanoKvmImage>,
+    ) {
+        fun requireProtocolImage(image: NanoKvmPhase3PortImage): NanoKvmImage {
+            portCatalog.requireExactMember(image)
+            return members[image] ?: throw IllegalArgumentException("Foreign image handle")
+        }
 
-    private class ProtocolCatalogToken(val catalog: NanoKvmImageCatalog) {
-        override fun toString(): String = "ProtocolCatalogToken(<redacted>)"
-    }
-
-    private class ProtocolImageToken(val image: NanoKvmImage) {
-        override fun toString(): String = "ProtocolImageToken(<redacted>)"
+        override fun toString(): String = "ProtocolImageCatalogBinding(<redacted>)"
     }
 }
 

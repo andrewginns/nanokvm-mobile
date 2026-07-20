@@ -127,12 +127,12 @@ review.
 | A-08 | Hostname and mDNS enable/disable | P | safe state GETs; 2.4.3 reference | LAN/mDNS | R2; warn restart/name change may affect access | P4 | C/U: strict native label validation, explicit enable/disable and rediscovery guidance; E/A open |
 | A-09 | Web title and custom logo | P | title probe; no 2.4.3 REST logo API | OLED for WebUI branding | R2 | P4 | C/U: native bounded custom/reset title and exact absent-file default; logo deliberately not claimed; E/A open |
 | A-10 | DNS mode and servers | P | safe GET; 2.4.3 reference | network | R3; access/update impact warning | P4 | C/U: native canonical IP-only max-six desired-state/readback and recovery guidance; E/A open |
-| A-11 | Wi-Fi manual connect/disconnect and AP onboarding | P | safe Wi-Fi info probe; authenticated/AP modes differ | optional Wi-Fi module | R3; network handoff confirmation | P4 | C/U: manual SSID only (2.4.3 has no scan API), authenticated UI, isolated cookie-suppressed pre-auth AP flow, mutable secret clearing and local-network permission recovery; A open |
+| A-11 | Wi-Fi manual connect/disconnect | P | safe Wi-Fi info probe; initial AP setup is out of app | optional Wi-Fi module | R3; network handoff confirmation | P4 | C/U: manual SSID only (2.4.3 has no scan API), authenticated UI and local-network permission recovery; AP onboarding intentionally excluded so cleartext remains disabled; A open |
 | A-12 | RNDIS/NCM/virtual-device configuration | P | virtual-device state; NCM available after `2.1.5` | host USB | R3; safe-eject/loss-of-access warning | P4 | C/U: native NETWORK/DISK desired-state review, MEDIA read-only state, readback and input recycle; E/A open |
 | A-13 | TLS enable/disable | P | enable-only write floor `>=2.2.7` | none | R3; disabling TLS is blocked by this app's security policy | P4 | C/U: confirmed native one-shot enable with HTTPS/certificate recovery guidance; no disable surface; E/A open |
 | A-14 | Memory limit and swap size | P | memory `>=2.1.4`, swap `>=2.2.6` | available appliance storage/RAM | R3; performance/storage warning | P4 | C/U: native WebUI-pinned 75 MB memory limit and 0/64/128/256/512 MB swap choices with unknown read-only values; E/A soak open |
 | A-15 | Tailscale extension status/control | P | extension state/write floor `>=2.1.6` | appliance internet/account | R3; external account/network side effects | P4 | C/U: typed state gate, native UI for all nine 2.4.3 commands, official HTTPS login-origin validation and one-shot approvals; A open |
-| A-16 | WebUI language/theme/toolbar preferences | X | browser-local presentation | none | R0 | - | Replaced by resource-backed Android UI text, Material theme, adaptive controls and persisted app preferences; translations beyond the base English resources remain future work |
+| A-16 | WebUI language/theme/toolbar preferences | X | browser-local presentation | none | R0 | - | Replaced by resource-backed static and semantic runtime Android messages, Material theme, adaptive controls and persisted app preferences; translations plus long-string/narrow-window coverage remain explicit UI-06 future work |
 
 ## Operator tools and optional extensions
 
@@ -169,10 +169,12 @@ mode, test case IDs, outcome, and links to redacted logs/screenshots. Never put
 passwords, tokens, clipboard contents, terminal commands containing secrets, or
 remote framebuffer captures with sensitive data in the evidence bundle.
 
-The source-matched public milestone passed 463/463 JVM tests, 59/59 app
-instrumentation tests, and the video module's native WebRTC crash-regression
-test on API 37. Exact local build evidence is recorded in
-`BUILD_VERIFICATION.md`. This remains development evidence: no production
-binary is approved or signed, and the real-appliance, compatibility-floor,
-physical-device, endurance, destructive, and performance cases above remain
-open.
+The current 2026-07-20 adversarial remediation checkpoint passed 548/548 JVM
+tests across 83 suites, 76/76 app instrumentation tests, the video module's 1/1
+native WebRTC crash regression, and 1/1 real process-restart test on API 37.
+`WebSocketIngressMemoryInstrumentedTest` was not invoked and no Android heap/PSS
+result is claimed. Exact local build evidence, including historical checkpoints,
+is recorded in `BUILD_VERIFICATION.md`. This remains development evidence: no
+production binary is approved or signed, and the real-appliance,
+compatibility-floor, physical-device, endurance, destructive, and performance
+cases above remain open.

@@ -17,7 +17,7 @@ saveable state, or broaden background behavior.
 | --- | --- | --- |
 | Foundation | Complete Material 3 fallback light/dark schemes, Android 12+ dynamic colour, restrained typography and shapes, and semantic fixed console tokens | Exact dependencies, strict verification metadata, no third-party design SDK, automated contrast checks |
 | App shell and platform | Persisted System/Light/Dark and device-colour preferences, edge-to-edge rendering, screen-aware system-bar contrast, and Android 17 local-network permission | DataStore remains authoritative; permission state is ViewModel-owned UDF; Connect is the contextual request point; denial starts no transport; revocation clears pending secrets and disconnects |
-| Profiles, credentials, and trust | Compact cards/list items, explicit connection/authentication/trust groups, secure-password affordances, certificate-warning hierarchy, fingerprint copy feedback, and guarded destructive recovery | Password text is never saveable; trust precedes credentials; destructive actions describe consequences and retain a cancel route; visible text is resource-backed |
+| Profiles, credentials, and trust | Compact cards/list items, explicit connection/authentication/trust groups, secure-password affordances, certificate-warning hierarchy, fingerprint copy feedback, and guarded destructive recovery | Password text is never saveable; trust precedes credentials; destructive actions describe consequences and retain a cancel route; static labels and content descriptions are resource-backed |
 | Console chrome and input | Neutral console surfaces, compact status and quick actions, bottom-sheet/side/supporting controls, full-width phone pan/zoom/scroll strip, native keyboard accessory, and semantic gesture alternatives | Remote video remains outside decorative surfaces; direct touch, trackpad, IME, pan, zoom, four-direction scroll, HID release, and guarded host controls retain their existing runtime ports |
 | Adaptive windows | Decisions derive from the current window size class: compact portrait uses a bottom sheet, compact landscape and medium widths use a side overlay, and expanded widths use a supporting pane | No orientation/aspect restriction; non-secret console/viewport state is saveable; the video keeps a permanent main-pane composition parent while adaptive directives change, so a controls transition does not recreate its decoder Surface or reconnect the stream |
 | Evidence | JVM state/layout/contrast tests, Compose semantics and surface-lifecycle instrumentation, release lint, minified release/profile/SBOM gates, and API 37 emulator journeys | Emulator evidence is diagnostic; signed-candidate, representative physical ARM, assistive-technology, and long real-appliance gates remain explicit rather than being inferred from source tests |
@@ -44,9 +44,10 @@ the remote viewport consumes the space assigned to the main pane.
 - Material controls and custom gesture alternatives provide at least 48dp
   targets. Pan/zoom and four-direction scrolling expose custom accessibility
   actions in addition to gestures.
-- Visible labels and content descriptions live in Android resources. Runtime
-  transport details remain typed session data or bounded diagnostic messages;
-  migration of legacy backend-originated English errors is tracked separately.
+- Static labels, content descriptions, and affected runtime/feature notices live
+  in Android resources behind exhaustive semantic mappings. Translated resource
+  sets and complete long-string/narrow-state coverage remain explicit UI-06
+  backlog rather than a completed localization claim.
 - Non-secret layout context survives recreation. Passwords, staged credentials,
   tokens, and certificate decisions do not enter `rememberSaveable` or
   `SavedStateHandle`.

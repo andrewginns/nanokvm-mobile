@@ -15,12 +15,21 @@ data class CredentialPromptRequest(
 
 enum class CredentialPromptKind { Unlock, Save }
 
+enum class CredentialPromptFailure {
+    DeviceProtectionUnavailable,
+    AuthenticationStartFailed,
+    AuthenticationFailed,
+}
+
 sealed interface CredentialPromptResult {
     val requestId: Long
 
     data class Authenticated(override val requestId: Long) : CredentialPromptResult
     data class Cancelled(override val requestId: Long) : CredentialPromptResult
-    data class Failed(override val requestId: Long, val message: String) : CredentialPromptResult
+    data class Failed(
+        override val requestId: Long,
+        val failure: CredentialPromptFailure,
+    ) : CredentialPromptResult
 }
 
 /**
@@ -43,7 +52,10 @@ internal class CredentialAuthenticationCoordinator : ViewModel() {
     @Synchronized
     fun activateHost(hostToken: Long) {
         require(hostToken in 1..nextHostToken) { "Host token was not reserved by this coordinator" }
-        activeHostToken = hostToken
+        // Activity recreation is ordered in normal Android delivery, but a cancellation-ignoring
+        // BiometricPrompt callback can overlap teardown. Never let an older host reclaim routing
+        // after a newer Activity has become authoritative.
+        if (hostToken >= (activeHostToken ?: 0L)) activeHostToken = hostToken
     }
 
     @Synchronized
@@ -76,9 +88,12 @@ internal class CredentialAuthenticationCoordinator : ViewModel() {
         pendingRequest?.id?.takeIf { activeHostToken == hostToken }
 
     @Synchronized
-    fun cancel(hostToken: Long, message: String? = null): CredentialPromptRequest? {
+    fun cancel(
+        hostToken: Long,
+        failure: CredentialPromptFailure? = null,
+    ): CredentialPromptRequest? {
         if (activeHostToken != hostToken) return null
-        return removeAndReport(message)
+        return removeAndReport(failure)
     }
 
     @Synchronized
@@ -90,14 +105,14 @@ internal class CredentialAuthenticationCoordinator : ViewModel() {
         activeHostToken = null
     }
 
-    private fun removeAndReport(message: String?): CredentialPromptRequest? {
+    private fun removeAndReport(failure: CredentialPromptFailure?): CredentialPromptRequest? {
         val request = pendingRequest ?: return null
         pendingRequest = null
         mutableResults.tryEmit(
-            if (message == null) {
+            if (failure == null) {
                 CredentialPromptResult.Cancelled(request.id)
             } else {
-                CredentialPromptResult.Failed(request.id, message)
+                CredentialPromptResult.Failed(request.id, failure)
             },
         )
         return request

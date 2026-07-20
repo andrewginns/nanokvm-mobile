@@ -77,6 +77,7 @@ internal data class NanoKvmAutomationHidKey(
 
 /** UI handle bound to one exact gateway/catalog generation. */
 internal class NanoKvmAutomationHidShortcut internal constructor(
+    val stableId: String,
     keys: List<NanoKvmAutomationHidKey>,
     val runnable: Boolean,
     internal val binding: NanoKvmSessionBinding,
@@ -293,6 +294,7 @@ internal class NanoKvmAutomationGateway internal constructor(
             val catalog = NanoKvmAutomationHidCatalog(
                 shortcuts = portCatalog.shortcuts.map { shortcut ->
                     NanoKvmAutomationHidShortcut(
+                        stableId = shortcut.stableId,
                         keys = shortcut.keys.map { key ->
                             NanoKvmAutomationHidKey(key.code, key.label, key.known)
                         },

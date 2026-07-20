@@ -94,6 +94,14 @@ class AndroidClipboardGatewayInstrumentedTest {
         assertEquals(ClipboardReadResult.Unavailable, result)
     }
 
+    @Test
+    fun rejectsOversizedPlainTextWithoutRetainingIt() {
+        assertRejected(
+            ClipData.newPlainText("oversized", "a".repeat(1_025)),
+            ClipboardRejectionReason.TooLarge,
+        )
+    }
+
     private fun assertRejected(clip: ClipData, expected: ClipboardRejectionReason) {
         assertEquals(
             ClipboardReadResult.Rejected(expected),

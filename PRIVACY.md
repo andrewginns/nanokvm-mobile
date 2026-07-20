@@ -40,8 +40,9 @@ data from the app.
   selected NanoKVM. They are not queued for later replay or sent to the
   maintainers.
 - The app reads Android clipboard text only after the user chooses the phone
-  clipboard action. Plain-text share intents are copied into memory and removed
-  from the Activity intent immediately. Clipboard/share text remains memory-only
+  clipboard action. Plain-text share intents are removed from the Activity
+  intent immediately. Normalized clipboard/share text above 1,024 UTF-8 bytes
+  is rejected before the app retains it; accepted text remains memory-only
   while the app prepares the destination-bound preview or paced HID operation
   and is cleared after consumption, cancellation, session invalidation, or
   genuine backgrounding. Paste/share content is never written to the Android
@@ -75,13 +76,13 @@ application request. The probe is discarded after inspection and is never used
 for normal application traffic. Authenticated profiles are HTTPS-only and may
 not downgrade to cleartext HTTP.
 
-Android cleartext transport is enabled solely for the explicit,
-pre-authentication NanoKVM access-point onboarding flow used by stock AP
-firmware. That flow reaches only the endpoint typed by the user, does not scan
-for nearby networks, suppresses session cookies, cannot reuse an authenticated
-profile transport, and keeps the AP and target-network passwords in mutable
-memory only for the one verify/connect sequence. It neither saves those
-passwords nor creates a normal HTTP profile.
+Android cleartext transport is disabled. Initial NanoKVM access-point setup must
+be completed outside the app before creating an HTTPS profile.
+
+Passwords and provider keys are removed promptly from app-owned state and
+mutable buffers when their operation ends. Android text fields, the selected
+IME, JSON/header serialization, and the JVM may create immutable string copies;
+the app cannot guarantee those external or runtime-managed copies are zeroed.
 
 The app does not contact a NanoKVM until the user requests a connection. It has
 no developer-operated cloud endpoint. Android and the user's installed keyboard
@@ -114,9 +115,9 @@ Android's system authentication prompt. `ACCESS_NETWORK_STATE` lets native
 WebRTC process connectivity and interface/address metadata; it does not grant
 packet-payload access or Wi-Fi scanning. WebRTC logging is disabled at
 `LS_NONE` so that metadata is not written to logcat. On Android 17 and later,
-local-network access is requested only after the user chooses Connect or
-explicitly starts AP onboarding; denial leaves the profile usable and offers a
-recoverable retry or system-settings route without starting a transport. The app
+local-network access is requested only after the user chooses Connect; denial
+leaves the profile usable and offers a recoverable retry or system-settings
+route without starting a transport. The app
 requests no location, storage, camera, microphone, notification, or
 background-service permission. The merged manifest also contains AndroidX's
 package-scoped dynamic-receiver permission, a DUMP-protected Profile Installer

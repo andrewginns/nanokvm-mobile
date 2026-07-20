@@ -2,20 +2,27 @@ package org.nanokvm.mobile.ui
 
 import android.view.Surface
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -35,9 +42,12 @@ import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.CertificateDetails
 import org.nanokvm.mobile.runtime.CertificateTrustSource
+import org.nanokvm.mobile.runtime.ConnectionFailure
+import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.ConsoleMessage
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.runtime.NanoKvmAdministrationAccountSnapshot
@@ -47,14 +57,17 @@ import org.nanokvm.mobile.runtime.NanoKvmAdministrationImpact
 import org.nanokvm.mobile.runtime.NanoKvmAdministrationMutationResult
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeCoordinator
 import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeFeatureOwner
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
+import org.nanokvm.mobile.runtime.NanoKvmPasswordChangeRequest
 import org.nanokvm.mobile.runtime.NanoKvmPasswordMutation
 import org.nanokvm.mobile.runtime.NanoKvmSessionBinding
-import org.nanokvm.mobile.runtime.passwordChangeFactoryRequestOrNull
 import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.runtime.TrustPreflightOutcome
 import org.nanokvm.mobile.runtime.VideoSettings
+import org.nanokvm.mobile.ui.screens.ConsoleDraftSession
 import org.nanokvm.mobile.security.CredentialPromptKind
+import org.nanokvm.mobile.security.CredentialPromptFailure
 import org.nanokvm.mobile.security.CredentialPromptResult
 import org.nanokvm.mobile.security.SavedCredentials
 import org.nanokvm.mobile.security.StagedCredential
@@ -118,6 +131,67 @@ class AppViewModelTest {
         assertEquals(ThemeMode.DARK, viewModel.state.value.themeMode)
         assertTrue(viewModel.state.value.useDynamicColor)
     }
+
+    @Test
+    fun failedSettingWriteLeavesRepositoryValueAuthoritative() = runTest(dispatcher) {
+        val settings = FakeAppSettingsStore(
+            initial = AppSettings(themeMode = ThemeMode.LIGHT),
+            writeFailure = IOException("settings unavailable"),
+        )
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(emptyList())),
+            FakeSavedCredentials(),
+            FakeConsoleBackend(),
+            appSettings = settings,
+        )
+        advanceUntilIdle()
+
+        viewModel.setThemeMode(ThemeMode.DARK)
+        advanceUntilIdle()
+
+        assertEquals(ThemeMode.LIGHT, viewModel.state.value.themeMode)
+        assertSameNotice(
+            AppNotice.Simple(SimpleNotice.ThemePreferenceSaveFailed),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
+        assertTrue(settings.savedThemeModes.isEmpty())
+    }
+
+    @Test
+    fun clearingViewModelReleasesAndClosesBackendAndIgnoresLaterSessionEmissions() =
+        runTest(dispatcher) {
+            val backend = FakeConsoleBackend()
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(emptyList())),
+                FakeSavedCredentials(),
+                backend,
+            )
+            val store = ViewModelStore().apply { put("app", viewModel) }
+            advanceUntilIdle()
+            backend.emitSession(
+                BackendSession(
+                    connection = ConnectionState.Connected,
+                    sessionGeneration = 8L,
+                ),
+            )
+            advanceUntilIdle()
+
+            store.clear()
+
+            assertEquals(1, backend.releaseAllInputCalls)
+            assertEquals(1, backend.closeCalls)
+            val stateAfterClear = viewModel.state.value
+
+            backend.emitSession(
+                BackendSession(
+                    connection = ConnectionState.Failed,
+                    status = ConsoleMessage.ConnectionFailed(ConnectionFailure.Unexpected),
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(stateAfterClear, viewModel.state.value)
+        }
 
     @Test
     fun frameDetectionCollectionIsLocalAndEachUserChangeWritesAndPersistsOnce() =
@@ -307,6 +381,59 @@ class AppViewModelTest {
     }
 
     @Test
+    fun typedConnectionFailureBecomesCoreAppNotice() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val backend = FakeConsoleBackend().apply {
+            connectHandler = {
+                ConnectOutcome.Failed(ConnectionFailure.TimedOut)
+            }
+        }
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            FakeSavedCredentials(),
+            backend,
+        )
+        advanceUntilIdle()
+
+        viewModel.prepareConnection(profile)
+        advanceUntilIdle()
+        viewModel.submitPassword(profile, "session-only".toCharArray(), savePassword = false)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
+        assertSameNotice(
+            AppNotice.Core(ConnectionFailure.TimedOut),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
+    }
+
+    @Test
+    fun typedTrustFailureBecomesCoreAppNoticeBeforePasswordCollection() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val backend = FakeConsoleBackend(
+            trustOutcome = TrustPreflightOutcome.Failed(
+                failure = ConnectionFailure.CertificateDateInvalid,
+                retryable = false,
+            ),
+        )
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            FakeSavedCredentials(),
+            backend,
+        )
+        advanceUntilIdle()
+
+        viewModel.prepareConnection(profile)
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.passwordEntryProfile)
+        assertSameNotice(
+            AppNotice.Core(ConnectionFailure.CertificateDateInvalid),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
+    }
+
+    @Test
     fun changedCertificateIsReplacedOnlyWhenRememberingTheDecision() = runTest(dispatcher) {
         val profile = HostProfile.Default.copy(trustedCertificateSha256 = "11:22")
         val repository = FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile)))
@@ -368,23 +495,55 @@ class AppViewModelTest {
         advanceUntilIdle()
 
         assertEquals(0, repository.deleteCalls)
-        assertTrue(viewModel.state.value.errorMessage.orEmpty().contains("not deleted"))
+        assertSameNotice(
+            AppNotice.Credential(
+                CredentialNotice.ProfileDeleteCredentialRemovalUnverified,
+            ),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
+    }
+
+    @Test
+    fun duplicateProfileSaveIsRejectedWhileTheFirstMutationOwnsTheSlot() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val repository = FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile)))
+        val viewModel = viewModel(repository, FakeSavedCredentials(), FakeConsoleBackend())
+        advanceUntilIdle()
+
+        viewModel.saveProfile(profile)
+        viewModel.saveProfile(profile)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.upsertCalls)
+        assertEquals(ProfileMutationUiState.Idle, viewModel.state.value.profileMutation)
+    }
+
+    @Test
+    fun duplicateProfileDeleteIsRejectedWhileTheFirstMutationOwnsTheSlot() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val repository = FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile)))
+        val credentials = FakeSavedCredentials(mutableSetOf(profile.id))
+        val viewModel = viewModel(repository, credentials, FakeConsoleBackend())
+        advanceUntilIdle()
+
+        viewModel.deleteProfile(profile)
+        viewModel.deleteProfile(profile)
+        advanceUntilIdle()
+
+        assertEquals(1, credentials.deleteCalls)
+        assertEquals(1, repository.deleteCalls)
+        assertEquals(ProfileMutationUiState.Idle, viewModel.state.value.profileMutation)
     }
 
     @Test
     fun corruptionIsExplicitAndResetAlsoRemovesOrphanableCredentials() = runTest(dispatcher) {
-        val repository = FakeProfilesRepository(
-            ProfileCatalogState.Corrupted("Saved connections are damaged."),
-        )
+        val repository = FakeProfilesRepository(ProfileCatalogState.Corrupted)
         val credentials = FakeSavedCredentials(mutableSetOf("unknown-profile"))
         val viewModel = viewModel(repository, credentials, FakeConsoleBackend())
         advanceUntilIdle()
 
         assertTrue(viewModel.state.value.profiles.isEmpty())
-        assertEquals(
-            "Saved connections are damaged.",
-            (viewModel.state.value.profileStorageIssue as ProfileStorageIssue.Corrupted).userMessage,
-        )
+        assertEquals(ProfileStorageIssue.Corrupted, viewModel.state.value.profileStorageIssue)
 
         viewModel.resetProfileStorage()
         advanceUntilIdle()
@@ -396,14 +555,12 @@ class AppViewModelTest {
 
     @Test
     fun unavailableStorageCanOnlyRetryAndNeverDeletesCredentials() = runTest(dispatcher) {
-        val repository = FakeProfilesRepository(
-            ProfileCatalogState.Unavailable("Saved connections cannot be read right now."),
-        )
+        val repository = FakeProfilesRepository(ProfileCatalogState.Unavailable)
         val credentials = FakeSavedCredentials(mutableSetOf("existing"))
         val viewModel = viewModel(repository, credentials, FakeConsoleBackend())
         advanceUntilIdle()
 
-        assertTrue(viewModel.state.value.profileStorageIssue is ProfileStorageIssue.Unavailable)
+        assertEquals(ProfileStorageIssue.Unavailable, viewModel.state.value.profileStorageIssue)
         viewModel.resetProfileStorage()
         advanceUntilIdle()
         assertEquals(0, credentials.deleteAllCalls)
@@ -411,7 +568,7 @@ class AppViewModelTest {
 
         viewModel.retryProfileStorage()
         advanceUntilIdle()
-        assertTrue(viewModel.state.value.profileStorageIssue is ProfileStorageIssue.Unavailable)
+        assertEquals(ProfileStorageIssue.Unavailable, viewModel.state.value.profileStorageIssue)
         assertEquals(0, credentials.deleteAllCalls)
     }
 
@@ -428,7 +585,10 @@ class AppViewModelTest {
 
         assertEquals(0, repository.upsertCalls)
         assertEquals(0, credentials.deleteCalls)
-        assertTrue(viewModel.state.value.errorMessage.orEmpty().contains("Remove the saved password"))
+        assertSameNotice(
+            AppNotice.Credential(CredentialNotice.RemoveBeforeEndpointChange),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
     }
 
     @Test
@@ -491,6 +651,127 @@ class AppViewModelTest {
             assertTrue(password.all { it == '\u0000' })
             assertFalse(backend.events.contains("connect"))
             assertNull(viewModel.state.value.credentialPrompt)
+        }
+
+    @Test
+    fun credentialPromptFailurePublishesTypedNoticeAndClearsOwnedPassword() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val promptResults = MutableSharedFlow<CredentialPromptResult>(extraBufferCapacity = 1)
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            FakeSavedCredentials(),
+            FakeConsoleBackend(),
+            promptResults,
+        )
+        advanceUntilIdle()
+        val password = "credential-prompt-secret".toCharArray()
+
+        viewModel.submitPassword(profile, password, savePassword = true)
+        advanceUntilIdle()
+        val request = checkNotNull(viewModel.state.value.credentialPrompt)
+        promptResults.emit(
+            CredentialPromptResult.Failed(
+                requestId = request.id,
+                failure = CredentialPromptFailure.AuthenticationStartFailed,
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(password.all { it == '\u0000' })
+        assertSameNotice(
+            AppNotice.Credential(CredentialNotice.AuthenticationStartFailed),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
+    }
+
+    @Test
+    fun cancellationIgnoringConnectOutcomeCannotRestoreBackgroundedSessionOrSecret() =
+        runTest(dispatcher) {
+            val profile = HostProfile.Default
+            val backend = FakeConsoleBackend()
+            val connectStarted = CompletableDeferred<Unit>()
+            val releaseLateResult = CompletableDeferred<Unit>()
+            backend.connectHandler = {
+                connectStarted.complete(Unit)
+                withContext(NonCancellable) { releaseLateResult.await() }
+                ConnectOutcome.Connected
+            }
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+                FakeSavedCredentials(),
+                backend,
+            )
+            advanceUntilIdle()
+            viewModel.prepareConnection(profile)
+            advanceUntilIdle()
+            val password = "late-connect-secret".toCharArray()
+
+            viewModel.submitPassword(profile, password, savePassword = false)
+            runCurrent()
+            connectStarted.await()
+            viewModel.clearSensitiveWorkForBackground()
+            releaseLateResult.complete(Unit)
+            advanceUntilIdle()
+
+            assertTrue(password.all { it == '\u0000' })
+            assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
+            assertNull(viewModel.state.value.credentialPrompt)
+            assertFalse(viewModel.state.value.backendSession.connection == ConnectionState.Connected)
+        }
+
+    @Test
+    fun processRestartRestoresOnlyEditorStateAndCannotResurrectLiveOwners() =
+        runTest(dispatcher) {
+            val profile = HostProfile.Default.copy(name = "Restored editor")
+            val repository = FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile)))
+            val firstBackend = FakeConsoleBackend()
+            val firstHandle = SavedStateHandle()
+            val first = viewModel(
+                repository,
+                FakeSavedCredentials(),
+                firstBackend,
+                savedStateHandle = firstHandle,
+            )
+            advanceUntilIdle()
+            first.editProfile(profile)
+            first.receiveSharedPlainText(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("memory-only shared text"),
+            )
+            firstBackend.emitSession(
+                BackendSession(ConnectionState.Connected, sessionGeneration = 33L),
+            )
+            advanceUntilIdle()
+            first.consoleSessionDraftOwner.operatorMemory(
+                ConsoleDraftSession(profile.id, profile.authority, 33L),
+            ).updateScriptContent("memory-only script")
+
+            val restoredValues = firstHandle.keys().associateWith { key ->
+                firstHandle.get<Any?>(key)
+            }
+            ViewModelStore().apply { put("first", first) }.clear()
+            val replacementBackend = FakeConsoleBackend()
+            val replacement = viewModel(
+                repository,
+                FakeSavedCredentials(),
+                replacementBackend,
+                savedStateHandle = SavedStateHandle(restoredValues),
+            )
+            advanceUntilIdle()
+
+            assertEquals(AppScreen.EditProfile(profile, isNew = false), replacement.state.value.screen)
+            assertNull(replacement.state.value.credentialPrompt)
+            assertNull(replacement.state.value.pendingSharedPaste)
+            assertTrue(replacement.state.value.pendingAppNotices.isEmpty())
+            assertEquals(ConnectionState.Disconnected, replacement.state.value.backendSession.connection)
+            assertTrue(replacementBackend.events.isEmpty())
+            assertEquals(
+                "",
+                replacement.consoleSessionDraftOwner.operatorMemory(
+                    ConsoleDraftSession(profile.id, profile.authority, 33L),
+                ).scriptContent,
+            )
+            assertTrue(restoredValues.keys.none { it.contains("password", ignoreCase = true) })
+            assertTrue(restoredValues.values.none { it is CharArray })
         }
 
     @Test
@@ -590,7 +871,10 @@ class AppViewModelTest {
             assertEquals(0, credentials.deleteCalls)
             assertFalse(backend.events.contains("disconnect"))
             assertTrue(viewModel.state.value.screen is AppScreen.Console)
-            assertTrue(viewModel.state.value.errorMessage.orEmpty().contains("preserved"))
+            assertSameNotice(
+                AppNotice.Password(PasswordNotice.Rejected),
+                viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+            )
         }
 
     @Test
@@ -627,8 +911,65 @@ class AppViewModelTest {
         assertEquals(1, credentials.deleteCalls)
         assertTrue(backend.events.contains("disconnect"))
         assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
-        assertTrue(viewModel.state.value.errorMessage.orEmpty().contains("unknown"))
+        assertSameNotice(
+            AppNotice.Password(PasswordNotice.ManualVerificationRequired),
+            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
+        )
     }
+
+    @Test
+    fun identicalNoticesAreQueuedFifoAndOnlyTheMatchingHeadCanBeAcknowledged() =
+        runTest(dispatcher) {
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(emptyList())),
+                FakeSavedCredentials(),
+                FakeConsoleBackend(),
+            )
+            advanceUntilIdle()
+
+            viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
+            val first = viewModel.state.value.pendingAppNotices.single()
+            viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
+            val queued = viewModel.state.value.pendingAppNotices
+
+            assertEquals(2, queued.size)
+            assertEquals(first, queued.first())
+            assertEquals(first.content, queued.last().content)
+            assertNotEquals(first.id, queued.last().id)
+
+            viewModel.acknowledgeNotice(queued.last().id)
+            assertEquals(queued, viewModel.state.value.pendingAppNotices)
+
+            viewModel.acknowledgeNotice(first.id)
+            assertEquals(listOf(queued.last()), viewModel.state.value.pendingAppNotices)
+
+            viewModel.acknowledgeNotice(first.id)
+            assertEquals(listOf(queued.last()), viewModel.state.value.pendingAppNotices)
+
+            viewModel.acknowledgeNotice(queued.last().id)
+            assertTrue(viewModel.state.value.pendingAppNotices.isEmpty())
+        }
+
+    @Test
+    fun pendingNoticeSurvivesNavigationOperationAndBackgroundSensitiveWorkCleanup() =
+        runTest(dispatcher) {
+            val profile = HostProfile.Default
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+                FakeSavedCredentials(),
+                FakeConsoleBackend(),
+            )
+            advanceUntilIdle()
+            viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
+            val pending = viewModel.state.value.pendingAppNotices.single()
+
+            viewModel.editProfile(profile)
+            viewModel.saveProfile(profile)
+            advanceUntilIdle()
+            viewModel.clearSensitiveWorkForBackground()
+
+            assertEquals(listOf(pending), viewModel.state.value.pendingAppNotices)
+        }
 
     @Test
     fun sharedPlainTextIsMemoryOnlyConsumedByIdentityAndClearedOnBackground() = runTest(dispatcher) {
@@ -642,6 +983,10 @@ class AppViewModelTest {
 
         viewModel.receiveSharedPlainText(shared)
         assertSame(shared, viewModel.state.value.pendingSharedPaste)
+        assertEquals(
+            AppNotice.Share(ShareNotice.ChooseConnection),
+            viewModel.state.value.pendingAppNotices.single().content,
+        )
 
         viewModel.consumeSharedPlainText(other)
         assertSame(shared, viewModel.state.value.pendingSharedPaste)
@@ -650,45 +995,52 @@ class AppViewModelTest {
         assertNull(viewModel.state.value.pendingSharedPaste)
 
         viewModel.receiveSharedPlainText(shared)
+        val queuedBeforeBackground = viewModel.state.value.pendingAppNotices
         viewModel.clearSensitiveWorkForBackground()
         assertNull(viewModel.state.value.pendingSharedPaste)
+        assertEquals(queuedBeforeBackground, viewModel.state.value.pendingAppNotices)
     }
 
     @Test
-    fun accessPointOnboardingIsSeparateMemoryOnlyAndInvalidatedOnBackground() =
-        runTest(dispatcher) {
-            val viewModel = viewModel(
-                FakeProfilesRepository(ProfileCatalogState.Ready(emptyList())),
-                FakeSavedCredentials(),
-                FakeConsoleBackend(),
-                localNetworkAccess = FakeLocalNetworkAccess(granted = true),
-            )
-            advanceUntilIdle()
+    fun consoleSessionMemoryClearsOnReplacementBackgroundAndDisconnect() = runTest(dispatcher) {
+        val backend = FakeConsoleBackend()
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(emptyList())),
+            FakeSavedCredentials(),
+            backend,
+        )
+        backend.emitSession(BackendSession(ConnectionState.Connected, sessionGeneration = 7))
+        advanceUntilIdle()
+        val first = viewModel.consoleSessionDraftOwner.operatorMemory(
+            ConsoleDraftSession("profile", "192.0.2.250", 7),
+        )
+        first.updateScriptContent("first session")
 
-            viewModel.openWifiAccessPointOnboarding()
-            assertEquals(AppScreen.WifiAccessPointOnboarding, viewModel.state.value.screen)
-            val apPassword = "ap-secret".toCharArray()
-            val targetPassword = "wifi-secret".toCharArray()
-            viewModel.connectWifiAccessPoint(
-                endpoint = "not a valid endpoint / path",
-                apPassword = apPassword,
-                targetSsid = "manual-ssid",
-                targetPassword = targetPassword,
-            )
-            advanceUntilIdle()
+        backend.emitSession(BackendSession(ConnectionState.Connected, sessionGeneration = 8))
+        advanceUntilIdle()
+        assertEquals("", first.scriptContent)
 
-            assertTrue(apPassword.all { it == '\u0000' })
-            assertTrue(targetPassword.all { it == '\u0000' })
-            assertEquals(
-                WifiAccessPointOnboardingNoticeKind.Rejected,
-                viewModel.state.value.wifiAccessPointOnboarding.noticeKind,
-            )
-            assertFalse(viewModel.state.value.toString().contains("ap-secret"))
-            assertFalse(viewModel.state.value.toString().contains("wifi-secret"))
+        val foreground = viewModel.consoleSessionDraftOwner.operatorMemory(
+            ConsoleDraftSession("profile", "192.0.2.250", 8),
+        )
+        foreground.updateScriptContent("foreground only")
+        viewModel.clearSensitiveWorkForBackground()
+        assertEquals("", foreground.scriptContent)
 
-            viewModel.clearSensitiveWorkForBackground()
-            assertEquals(AppScreen.Profiles, viewModel.state.value.screen)
-        }
+        val connected = viewModel.consoleSessionDraftOwner.operatorMemory(
+            ConsoleDraftSession("profile", "192.0.2.250", 8),
+        )
+        connected.updateScriptContent("disconnect clears")
+        viewModel.disconnect()
+        assertEquals("", connected.scriptContent)
+
+        val clearing = viewModel.consoleSessionDraftOwner.operatorMemory(
+            ConsoleDraftSession("profile", "192.0.2.250", 8),
+        )
+        clearing.updateScriptContent("view model clear")
+        ViewModelStore().apply { put("app", viewModel) }.clear()
+        assertEquals("", clearing.scriptContent)
+    }
 
     private fun viewModel(
         profiles: FakeProfilesRepository,
@@ -697,13 +1049,14 @@ class AppViewModelTest {
         promptResults: Flow<CredentialPromptResult> = MutableSharedFlow(),
         appSettings: FakeAppSettingsStore = FakeAppSettingsStore(),
         localNetworkAccess: LocalNetworkAccess = LocalNetworkAccess.Unrestricted,
+        savedStateHandle: SavedStateHandle = SavedStateHandle(),
     ) = AppViewModel(
         profilesRepository = profiles,
         appSettingsStore = appSettings,
         backend = backend,
         savedCredentialStore = credentials,
         credentialResults = promptResults,
-        savedStateHandle = SavedStateHandle(),
+        savedStateHandle = savedStateHandle,
         localNetworkAccess = localNetworkAccess,
     )
 
@@ -728,7 +1081,10 @@ class AppViewModelTest {
         ApprovedAdministrationDestination(profile.id, profile.authority, 0L)
 }
 
-private class FakeAppSettingsStore(initial: AppSettings = AppSettings()) : AppSettingsStore {
+private class FakeAppSettingsStore(
+    initial: AppSettings = AppSettings(),
+    private val writeFailure: Throwable? = null,
+) : AppSettingsStore {
     private val mutableSettings = MutableStateFlow(initial)
     override val settings: Flow<AppSettings> = mutableSettings
     val savedSensitivities = mutableListOf<Float>()
@@ -737,21 +1093,25 @@ private class FakeAppSettingsStore(initial: AppSettings = AppSettings()) : AppSe
     val savedFrameDetectionValues = mutableListOf<Boolean>()
 
     override suspend fun setScrollSensitivity(sensitivity: Float) {
+        writeFailure?.let { throw it }
         savedSensitivities += sensitivity
         mutableSettings.value = mutableSettings.value.copy(scrollSensitivity = sensitivity)
     }
 
     override suspend fun setThemeMode(themeMode: ThemeMode) {
+        writeFailure?.let { throw it }
         savedThemeModes += themeMode
         mutableSettings.value = mutableSettings.value.copy(themeMode = themeMode)
     }
 
     override suspend fun setUseDynamicColor(enabled: Boolean) {
+        writeFailure?.let { throw it }
         savedDynamicColorValues += enabled
         mutableSettings.value = mutableSettings.value.copy(useDynamicColor = enabled)
     }
 
     override suspend fun setMjpegFrameDetectionEnabled(enabled: Boolean) {
+        writeFailure?.let { throw it }
         savedFrameDetectionValues += enabled
         mutableSettings.value = mutableSettings.value.copy(mjpegFrameDetectionEnabled = enabled)
     }
@@ -828,6 +1188,10 @@ private class FakeSavedCredentials(
     }
 }
 
+private fun assertSameNotice(expected: AppNotice, actual: AppNotice?) {
+    assertEquals(expected, actual)
+}
+
 private class FakeConsoleBackend(
     var trustOutcome: TrustPreflightOutcome = TrustPreflightOutcome.Trusted(
         CertificateTrustSource.System,
@@ -836,10 +1200,14 @@ private class FakeConsoleBackend(
 ) : ConsoleBackend, NanoKvmPasswordChangeFeatureOwner {
     private val mutableSession = MutableStateFlow(BackendSession())
     override val session = mutableSession
+    override val features = ConsoleFeatureBundle(core = this, passwordChange = this)
     val events = mutableListOf<String>()
     val frameDetectionPreferences = mutableListOf<Boolean>()
     val frameDetectionWrites = mutableListOf<Boolean>()
+    var releaseAllInputCalls = 0
+    var closeCalls = 0
     var passwordDispatches = 0
+    var connectHandler: suspend (ConnectRequest) -> ConnectOutcome = { ConnectOutcome.Connected }
     var passwordMutationResult:
         NanoKvmAdministrationMutationResult<NanoKvmAdministrationAccountSnapshot> =
         NanoKvmAdministrationMutationResult.CredentialsChanged
@@ -850,7 +1218,7 @@ private class FakeConsoleBackend(
     }
     override suspend fun connect(request: ConnectRequest): ConnectOutcome {
         events += "connect"
-        return ConnectOutcome.Connected
+        return connectHandler(request)
     }
     override suspend fun disconnect() {
         events += "disconnect"
@@ -867,7 +1235,12 @@ private class FakeConsoleBackend(
     override fun scrollHorizontal(steps: Int) = Unit
     override fun typeCommittedText(text: String, layout: KeyboardLayout) = Unit
     override fun key(key: RemoteKey, pressed: Boolean) = Unit
-    override fun releaseAllInput() = Unit
+    override fun releaseAllInput() {
+        releaseAllInputCalls++
+    }
+    override fun close() {
+        closeCalls++
+    }
     override fun updateVideo(settings: VideoSettings) = Unit
     override fun setMjpegFrameDetectionPreference(enabled: Boolean) {
         frameDetectionPreferences += enabled
@@ -880,8 +1253,13 @@ private class FakeConsoleBackend(
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
 
-    override fun createPasswordChangeCoordinatorToken(requestToken: Any): Any? {
-        val request = requestToken.passwordChangeFactoryRequestOrNull() ?: return null
+    fun emitSession(session: BackendSession) {
+        mutableSession.value = session
+    }
+
+    override fun createPasswordChangeCoordinator(
+        request: NanoKvmPasswordChangeRequest,
+    ): NanoKvmPasswordChangeCoordinator {
         val binding = NanoKvmSessionBinding(
             request.destination.profileId,
             request.destination.authority,

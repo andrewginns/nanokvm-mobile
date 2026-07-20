@@ -2,12 +2,17 @@ package org.nanokvm.mobile
 
 import android.view.Surface
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -15,13 +20,17 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.nanokvm.mobile.data.HostProfile
+import org.nanokvm.mobile.clipboard.ClipboardGateway
+import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.runtime.AdministrationAccountUiState
 import org.nanokvm.mobile.runtime.AdministrationDnsMode
 import org.nanokvm.mobile.runtime.AdministrationDnsUiState
@@ -37,18 +46,25 @@ import org.nanokvm.mobile.runtime.AdministrationUpdateUiState
 import org.nanokvm.mobile.runtime.AdministrationWifiUiState
 import org.nanokvm.mobile.runtime.AdministrationTailscaleSelection
 import org.nanokvm.mobile.runtime.AdministrationTailscaleUiState
+import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
+import org.nanokvm.mobile.runtime.ConnectionFailure
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.TrustPreflightOutcome
+import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.runtime.PowerAction
+import org.nanokvm.mobile.runtime.PendingAdministrationHttpsNavigationRequest
 import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
+import org.nanokvm.mobile.ui.screens.AdministrationDialog
+import org.nanokvm.mobile.ui.screens.ConsoleSessionDraftOwner
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
 
 class AdministrationUiInstrumentedTest {
@@ -63,6 +79,7 @@ class AdministrationUiInstrumentedTest {
             name = "Lab NanoKVM",
             host = "192.0.2.44",
         )
+        val sessionDraftOwner = ConsoleSessionDraftOwner()
 
         composeRule.setContent {
             val session by backend.session.collectAsState()
@@ -72,8 +89,14 @@ class AdministrationUiInstrumentedTest {
                     session = session,
                     input = backend,
                     videoSurface = backend,
-                    commands = backend,
+                    features = backend.features,
                     onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
                 )
             }
         }
@@ -117,6 +140,132 @@ class AdministrationUiInstrumentedTest {
             assertTrue(backend.administrationVisible)
             assertEquals(0, backend.mutationCalls)
         }
+    }
+
+    @Test
+    fun tailscaleLoginHandoffRemainsAvailableWhenAndroidCannotOpenIt() {
+        val destination = ApprovedAdministrationDestination(
+            profileId = "admin-ui",
+            authority = "192.0.2.44",
+            sessionGeneration = 4L,
+        )
+        val request = PendingAdministrationHttpsNavigationRequest(
+            requestId = 9L,
+            profileId = destination.profileId,
+            authority = destination.authority,
+            sessionGeneration = destination.sessionGeneration,
+            value = "https://login.tailscale.com/a/auth-token",
+        )
+        val uriHandler = FailingThenSuccessfulUriHandler()
+        val commands = NavigationAcknowledgementCommands()
+
+        composeRule.setContent {
+            CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+                NanoKvmTheme {
+                    AdministrationDialog(
+                        destinationLabel = "Lab NanoKVM",
+                        destination = destination,
+                        state = AdministrationUiState(
+                            available = true,
+                            tailscale = AdministrationTailscaleUiState(
+                                selection = AdministrationTailscaleSelection.NotLoggedIn,
+                            ),
+                            pendingHttpsNavigation = request,
+                        ),
+                        controls = commands,
+                        onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                        onOfflineUpdate = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("administration-tailscale-open-login")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        // Button descendants are merged into the button's accessibility node. Assert the actual
+        // user-visible retry label rather than an implementation-only child semantics node.
+        composeRule.onNodeWithText("Couldn't open Tailscale login. Try again.")
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("administration-tailscale-open-login")
+            .assertIsDisplayed()
+        composeRule.runOnIdle { assertNull(commands.acknowledgedRequestId) }
+
+        uriHandler.fail = false
+        composeRule.onNodeWithTag("administration-tailscale-open-login").performClick()
+        composeRule.runOnIdle {
+            assertEquals(9L, commands.acknowledgedRequestId)
+            assertEquals(destination, commands.acknowledgedDestination)
+        }
+    }
+
+    @Test
+    fun safeWifiDraftSurvivesRestorationButPasswordDoesNotEnterSavedState() {
+        val restorationTester = StateRestorationTester(composeRule)
+        val destination = ApprovedAdministrationDestination(
+            profileId = "admin-ui",
+            authority = "192.0.2.44",
+            sessionGeneration = 4L,
+        )
+        restorationTester.setContent {
+            NanoKvmTheme {
+                AdministrationDialog(
+                    destinationLabel = "Lab NanoKVM",
+                    destination = destination,
+                    state = AdministrationUiState(
+                        available = true,
+                        wifi = AdministrationWifiUiState(
+                            supported = true,
+                            accessPointMode = false,
+                            connected = false,
+                            ssid = null,
+                        ),
+                    ),
+                    controls = NoOpAdministrationControls(),
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                    onOfflineUpdate = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("administration-wifi-ssid")
+            .performScrollTo()
+            .performTextInput("safe-network")
+        composeRule.onNodeWithTag("administration-wifi-password")
+            .performScrollTo()
+            .performTextInput("must-not-be-saved")
+        composeRule.onNodeWithTag("administration-wifi-connect").assertIsEnabled()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("administration-wifi-ssid")
+            .performScrollTo()
+            .assertTextContains("safe-network")
+        composeRule.onNodeWithTag("administration-wifi-connect").assertIsNotEnabled()
+    }
+}
+
+private class FailingThenSuccessfulUriHandler : UriHandler {
+    var fail = true
+
+    override fun openUri(uri: String) {
+        if (fail) error("No activity can handle this URI")
+    }
+}
+
+private class NavigationAcknowledgementCommands : NoOpAdministrationControls() {
+    var acknowledgedDestination: ApprovedAdministrationDestination? = null
+    var acknowledgedRequestId: Long? = null
+
+    override fun acknowledgeAdministrationNavigationOpened(
+        destination: ApprovedAdministrationDestination,
+        requestId: Long,
+    ) {
+        acknowledgedDestination = destination
+        acknowledgedRequestId = requestId
     }
 }
 
@@ -173,6 +322,21 @@ private class AdministrationReadOnlyBackend : ConsoleBackend {
     override val session: StateFlow<BackendSession> = mutableSession
     var administrationVisible = false
     var mutationCalls = 0
+    private val administrationControls = object : NoOpAdministrationControls() {
+        override fun setAdministrationSurfaceVisible(visible: Boolean) {
+            administrationVisible = visible
+        }
+    }
+    override val features = ConsoleFeatureBundle(
+        core = this,
+        administration = administrationControls,
+    )
+
+    override suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome =
+        TrustPreflightOutcome.Failed(
+            failure = ConnectionFailure.Unexpected,
+            retryable = false,
+        )
 
     override suspend fun connect(request: ConnectRequest): ConnectOutcome = ConnectOutcome.Connected
     override suspend fun disconnect() = Unit
@@ -190,12 +354,11 @@ private class AdministrationReadOnlyBackend : ConsoleBackend {
     override fun detachVideoSurface(surface: Surface) = Unit
     override fun reconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
+    override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
+    override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
     override fun power(action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
 
-    override fun setAdministrationSurfaceVisible(visible: Boolean) {
-        administrationVisible = visible
-    }
 }

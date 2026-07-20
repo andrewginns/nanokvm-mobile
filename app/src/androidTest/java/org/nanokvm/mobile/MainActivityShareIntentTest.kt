@@ -36,6 +36,16 @@ class MainActivityShareIntentTest {
         )
     }
 
+    @Test
+    fun oversizedSharedTextIsRejectedAndScrubbedFromTheActivityIntent() {
+        assertShareIntentDiscarded(
+            Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
+                .setAction(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, "x".repeat(1_025)),
+        )
+    }
+
     private fun assertShareIntentDiscarded(launchIntent: Intent) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)

@@ -115,7 +115,6 @@ enum class NanoKvmCapability {
     VIRTUAL_MEDIA_MOUNT,
     WAKE_ON_LAN,
     WIFI_CONFIGURATION,
-    ACCESS_POINT_AUTHENTICATION,
     TAILSCALE_EXTENSION,
     OLED_CONFIGURATION,
     TERMINAL,
@@ -265,7 +264,6 @@ private val VERSION_RULES: Map<NanoKvmCapability, VersionRule> = mapOf(
     // 2.3.1 fixed PTY disconnect cleanup; the app's 2.3.2 floor therefore has the
     // authenticated `/api/vm/terminal` contract without a separate hardware gate.
     NanoKvmCapability.TERMINAL to versionRule("2.3.2"),
-    NanoKvmCapability.ACCESS_POINT_AUTHENTICATION to versionRule("2.3.6", runtimeProbe = true),
     NanoKvmCapability.RESOLUTION_640_X_480 to versionRule("2.3.6"),
     NanoKvmCapability.PICOCLAW to versionRule("2.4.0", runtimeProbe = true),
     NanoKvmCapability.DNS_CONFIGURATION to versionRule("2.4.1"),

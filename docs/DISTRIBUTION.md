@@ -28,9 +28,14 @@ Default Android debug signing is not a distribution identity. Its keystore is
 selected from the build JVM's user-home directory, so Android Studio, an
 ordinary terminal, and a sandboxed build can produce mutually incompatible
 update APKs on the same computer. Verify every artifact with `apksigner`; never
-publish or promise upgrade compatibility for a debug-signed APK. Before the
-first binary release, freeze the application ID and establish one protected,
-recoverable production signing lineage.
+publish an ambient debug build or promise it as a production update channel.
+During active development, an explicitly selected and retained local identity
+may be used for best-effort updates between named test APKs only when package,
+signer, monotonically increasing version code, and an actual in-place update are
+verified. That development lineage is neither a public release identity nor a
+recoverable compatibility promise. Before the first binary release, freeze the
+application ID and establish one protected, recoverable production signing
+lineage.
 
 ## Build and verify
 

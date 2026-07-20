@@ -7,10 +7,12 @@ import android.graphics.Rect
 import android.view.Surface
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.security.cert.CertificateException
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -52,6 +54,7 @@ import org.nanokvm.protocol.GpioAction
 import org.nanokvm.protocol.HidKeyboardReport
 import org.nanokvm.protocol.HidModifier
 import org.nanokvm.protocol.HidUsage
+import org.nanokvm.protocol.HttpResponseException
 import org.nanokvm.protocol.InputConnectionState
 import org.nanokvm.protocol.KeyboardReportState
 import org.nanokvm.protocol.NanoKvmClient
@@ -103,20 +106,36 @@ import org.nanokvm.video.NanoKvmVideoStatus
 import org.nanokvm.video.NanoKvmVideoTransport
 
 /** Real console adapter joining the protocol, HID, video, and Compose-facing contracts. */
-class NanoKvmConsoleBackend internal constructor(
+internal class NanoKvmConsoleBackend internal constructor(
     private val workerDispatcher: CoroutineDispatcher,
     private val reconnectPolicy: ReconnectPolicy,
-    private val webRtcRuntime: NanoKvmWebRtcRuntime? = null,
+    private val webRtcRuntimeProvider: WebRtcRuntimeProvider? = null,
 ) : ConsoleBackend,
+    Phase3Controls,
+    AdministrationControls,
+    OperatorControls,
+    PicoClawControls,
     NanoKvmAutomationFeatureOwner,
     NanoKvmOfflineUpdateFeatureOwner,
     NanoKvmPasswordChangeFeatureOwner {
     constructor() : this(Dispatchers.IO, ReconnectPolicy(), null)
     constructor(webRtcRuntime: NanoKvmWebRtcRuntime) :
-        this(Dispatchers.IO, ReconnectPolicy(), webRtcRuntime)
+        this(Dispatchers.IO, ReconnectPolicy(), WebRtcRuntimeProvider { webRtcRuntime })
+    constructor(webRtcRuntimeProvider: () -> NanoKvmWebRtcRuntime?) :
+        this(Dispatchers.IO, ReconnectPolicy(), WebRtcRuntimeProvider(webRtcRuntimeProvider))
 
     private val mutableSession = MutableStateFlow(BackendSession())
     override val session: StateFlow<BackendSession> = mutableSession.asStateFlow()
+    override val features = ConsoleFeatureBundle(
+        core = this,
+        phase3 = this,
+        administration = this,
+        operator = this,
+        picoClaw = this,
+        automation = this,
+        offlineUpdate = this,
+        passwordChange = this,
+    )
 
     private val lifecycleMutex = Mutex()
     /** Serializes paced typing with every keyboard/host-state command that cancels it. */
@@ -132,7 +151,7 @@ class NanoKvmConsoleBackend internal constructor(
         onRejected = { message ->
             mutableSession.update { current ->
                 if (current.connection == ConnectionState.Connected) {
-                    current.copy(message = message)
+                    current.withActionFeedback(message)
                 } else {
                     current
                 }
@@ -161,13 +180,6 @@ class NanoKvmConsoleBackend internal constructor(
         mutableOperatorOutput.asSharedFlow()
     private val mutablePicoClawState = MutableStateFlow(PicoClawUiState())
     override val picoClawState: StateFlow<PicoClawUiState> = mutablePicoClawState.asStateFlow()
-    private val mutableExternalNavigation = MutableSharedFlow<ExternalHttpsNavigationRequest>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    override val externalNavigation: SharedFlow<ExternalHttpsNavigationRequest> =
-        mutableExternalNavigation.asSharedFlow()
     private val applianceStatusPollingBackoff = PollingBackoffPolicy()
     private val videoCallbacks: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "NanoKVM-video-callback").apply { isDaemon = true }
@@ -198,6 +210,7 @@ class NanoKvmConsoleBackend internal constructor(
     private var queuedKeyboardTail: Job? = null
     private var activeConnectJob: Job? = null
     private var video: NanoKvmVideoSession? = null
+    private var activeVideoListener: SessionBoundVideoListener? = null
     private var surface: Surface? = null
     @Volatile private var foreground = true
     @Volatile private var phase3SurfaceVisible = false
@@ -224,6 +237,7 @@ class NanoKvmConsoleBackend internal constructor(
     private var phase3WakeSnapshot: NanoKvmWakeOnLanSnapshot? = null
     private var phase3WakeHandles: Map<Long, NanoKvmWakeOnLanTarget> = emptyMap()
     private var phase3HandleCounter = 0L
+    private var administrationNavigationRequestCounter = 0L
     private var operatorScriptCatalog: NanoKvmOperatorScriptCatalog? = null
     private var operatorScriptHandles: Map<Long, NanoKvmOperatorScript> = emptyMap()
     private var operatorScriptHandleCounter = 0L
@@ -231,17 +245,22 @@ class NanoKvmConsoleBackend internal constructor(
     private var picoClawHistoryHandles: Map<Long, NanoKvmPicoClawHistoryItem> = emptyMap()
     private var picoClawHistoryHandleCounter = 0L
 
+    private data class CloseResources(
+        val input: NanoKvmInputSocket?,
+        val connectJob: Job?,
+    )
+
     override suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome =
         withContext(workerDispatcher) {
             if (closed) {
                 return@withContext TrustPreflightOutcome.Failed(
-                    "This console session has been closed.",
+                    ConnectionFailure.SessionClosed,
                     retryable = false,
                 )
             }
             val endpoint = runCatching { NanoKvmEndpoint.parse(profile.baseUrl) }.getOrElse {
                 return@withContext TrustPreflightOutcome.Failed(
-                    it.message ?: "Invalid NanoKVM address.",
+                    ConnectionFailure.InvalidAddress,
                     retryable = false,
                 )
             }
@@ -260,12 +279,12 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!accepted) {
-            val message = if (closed) {
-                "This console session has been closed."
+            val failure = if (closed) {
+                ConnectionFailure.SessionClosed
             } else {
-                "Cannot connect while the app is in the background."
+                ConnectionFailure.AppInBackground
             }
-            return@withContext ConnectOutcome.Failed(message, false)
+            return@withContext ConnectOutcome.Failed(failure, false)
         }
         try {
             cancelPasteAndJoin(userInitiated = false)
@@ -278,18 +297,18 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     private suspend fun connectLocked(request: ConnectRequest): ConnectOutcome {
-        if (closed) return ConnectOutcome.Failed("This console session has been closed.", false)
+        if (closed) return ConnectOutcome.Failed(ConnectionFailure.SessionClosed, false)
         cleanupSessionLocked(forgetClient = true)
         videoSettings = VideoSettings()
         mutableSession.value = BackendSession(
             connection = ConnectionState.Connecting,
-            message = "Verifying ${request.profile.authority}",
+            status = ConsoleMessage.VerifyingDestination(request.profile.authority),
         )
 
         val endpoint = runCatching { NanoKvmEndpoint.parse(request.profile.baseUrl) }
             .getOrElse {
                 mutableSession.value = BackendSession(connection = ConnectionState.Failed)
-                return ConnectOutcome.Failed(it.message ?: "Invalid NanoKVM address.", false)
+                return ConnectOutcome.Failed(ConnectionFailure.InvalidAddress, false)
             }
         when (val trust = performTrustPreflight(endpoint, request.acceptedCertificateSha256)) {
             is TrustPreflightOutcome.CertificateReviewRequired -> {
@@ -298,12 +317,12 @@ class NanoKvmConsoleBackend internal constructor(
             }
             is TrustPreflightOutcome.Failed -> {
                 mutableSession.value = BackendSession(connection = ConnectionState.Failed)
-                return ConnectOutcome.Failed(trust.userMessage, trust.retryable)
+                return ConnectOutcome.Failed(trust.failure, trust.retryable)
             }
             is TrustPreflightOutcome.Trusted -> Unit
         }
         mutableSession.update {
-            it.copy(message = "Authenticating with ${request.profile.authority}")
+            it.copy(status = ConsoleMessage.AuthenticatingDestination(request.profile.authority))
         }
         val tlsMode = try {
             request.acceptedCertificateSha256?.let {
@@ -311,7 +330,7 @@ class NanoKvmConsoleBackend internal constructor(
             } ?: TlsMode.SystemTrusted
         } catch (error: IllegalArgumentException) {
             mutableSession.value = BackendSession(connection = ConnectionState.Failed)
-            return ConnectOutcome.Failed("The saved certificate fingerprint is invalid.", false)
+            return ConnectOutcome.Failed(ConnectionFailure.InvalidSavedCertificate, false)
         }
 
         val createdClient = NanoKvmClient.create(endpoint, tlsMode)
@@ -333,7 +352,7 @@ class NanoKvmConsoleBackend internal constructor(
                 createdClient.close()
                 mutableSession.value = BackendSession(connection = ConnectionState.Failed)
                 return ConnectOutcome.Failed(
-                    "NanoKVM application ${info.application.ifBlank { "unknown" }} is unsupported; version 2.3.2 or newer is required.",
+                    ConnectionFailure.UnsupportedApplicationVersion,
                     false,
                 )
             }
@@ -366,24 +385,17 @@ class NanoKvmConsoleBackend internal constructor(
                 val generation = ++sessionGenerationCounter
                 authenticatedSession = createdSession
                 input = createdInput
-                installPhase3GatewayLocked(createdSession, generation)
-                installAdministrationGatewayLocked(createdSession, generation)
-                installDeviceControlGatewayLocked(createdSession, generation)
-                installOperatorGatewayLocked(createdSession, generation)
-                installPicoClawGatewayLocked(createdSession, generation)
-                installAutomationGatewayLocked(createdSession, generation)
-                installOfflineUpdateGatewayLocked(createdSession, generation)
-                mjpegFrameDetectionCoordinator.install(createdSession, generation)
+                installSessionFeatureSetLocked(createdSession, generation)
                 mutableSession.value = BackendSession(
                     connection = ConnectionState.Connected,
                     sessionGeneration = generation,
-                    streamLabel = "H.264 direct",
+                    streamLabel = VideoStreamDescriptor.DirectH264,
                     roundTripMs = discoveryElapsedMs,
                     deviceStatus = info.toNanoKvmDeviceStatus(hardware, gpio),
                     capabilities = probe.capabilities,
                     phase3 = Phase3FeatureUiState(available = true),
                     administration = AdministrationUiState(available = true),
-                    message = "NanoKVM ${info.application}",
+                    status = ConsoleMessage.ConnectedToNanoKvm,
                 )
                 openCommandAcceptanceLocked()
             }
@@ -407,10 +419,10 @@ class NanoKvmConsoleBackend internal constructor(
             }
             if (error is CancellationException) throw error
             mutableSession.value = BackendSession(connection = ConnectionState.Failed)
+            val failure = ReconnectFailure(error, inputFailureStatus)
             ConnectOutcome.Failed(
-                error.toUserMessage(),
-                retryable = ReconnectFailure(error, inputFailureStatus).disposition() ==
-                    ReconnectFailureDisposition.RETRY,
+                failure.toConnectionFailure(),
+                retryable = failure.disposition() == ReconnectFailureDisposition.RETRY,
             )
         }
     }
@@ -479,7 +491,8 @@ class NanoKvmConsoleBackend internal constructor(
                 mutableSession.update {
                     it.copy(
                         connection = ConnectionState.Disconnected,
-                        message = "Paused in background",
+                        status = ConsoleMessage.PausedInBackground,
+                        lastActionFeedback = null,
                         reconnectAttempt = null,
                         reconnectMaximumAttempts = null,
                         nextReconnectDelayMillis = null,
@@ -665,7 +678,11 @@ class NanoKvmConsoleBackend internal constructor(
             ) ?: return@queueKeyboardCommandAfterPaste
             if (result.unsupported.isNotEmpty()) {
                 mutableSession.update {
-                    it.copy(message = "${result.unsupported.size} character(s) are unavailable in the selected target layout")
+                    it.withActionFeedback(
+                        ConsoleMessage.UnsupportedKeyboardCharacters(
+                            result.unsupported.size,
+                        ),
+                    )
                 }
             }
         }
@@ -703,10 +720,12 @@ class NanoKvmConsoleBackend internal constructor(
             lifecycleMutex.withLock {
                 val activeSession = authenticatedSession
                 if (activeSession == null) {
-                    mutableSession.update { it.copy(message = "Connect before changing video settings.") }
+                    mutableSession.update {
+                        it.withActionFeedback(ConsoleMessage.ConnectBeforeChangingVideoSettings)
+                    }
                     return@withLock
                 }
-                mutableSession.update { it.copy(message = "Applying video settings…") }
+                mutableSession.update { it.withActionFeedback(ConsoleMessage.ApplyingVideoSettings) }
                 try {
                     activeSession.console.updateScreen(
                         ScreenSetting.RESOLUTION,
@@ -726,13 +745,16 @@ class NanoKvmConsoleBackend internal constructor(
                             videoSettings = settings,
                             videoSurfaceGeneration = it.videoSurfaceGeneration + 1,
                             framesPerSecond = null,
-                            message = "Video settings applied; restarting stream",
-                        )
+                        ).withActionFeedback(ConsoleMessage.VideoSettingsApplied)
                     }
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     mutableSession.update {
-                        it.copy(message = "Video settings were not applied: ${error.toUserMessage()}")
+                        it.withActionFeedback(
+                            ConsoleMessage.VideoSettingsNotApplied(
+                                error.toConnectionFailure(),
+                            ),
+                        )
                     }
                 }
             }
@@ -748,7 +770,7 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun resetHid() {
-        runControlAfterPaste(CONTROL_RESET_HID, "HID interface reset") {
+        runControlAfterPaste(CONTROL_RESET_HID, ConsoleMessage.HidInterfaceReset) {
             releaseAllInputNow()
             it.console.resetHid()
         }
@@ -757,7 +779,9 @@ class NanoKvmConsoleBackend internal constructor(
     override fun pasteText(request: ApprovedPasteRequest) {
         if (request.content.isEmpty() || request.content.encodeToByteArray().size > MAX_PASTE_BYTES) {
             mutableSession.update {
-                it.copy(message = "Clipboard text must contain 1 to $MAX_PASTE_BYTES UTF-8 bytes")
+                it.withActionFeedback(
+                    ConsoleMessage.ClipboardTextOutsideByteLimit(MAX_PASTE_BYTES),
+                )
             }
             return
         }
@@ -802,13 +826,17 @@ class NanoKvmConsoleBackend internal constructor(
         }
         if (selection == null) {
             rejectPhase3UiCommand(
-                "Refresh virtual media before choosing an image.",
+                Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.RefreshMediaBeforeSelectingImage,
+                ),
                 Phase3NoticeScope.VirtualMedia,
             )
             return
         }
+        val action = Phase3Notice.Action.MountImage(mode)
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -825,7 +853,7 @@ class NanoKvmConsoleBackend internal constructor(
                 publishUsbMediaResult(
                     binding = binding,
                     result = result,
-                    appliedMessage = "Virtual image mounted after authoritative readback.",
+                    action = action,
                 )
             } finally {
                 resumeInputMonitoringAfterPhase3UsbMutation(binding)
@@ -834,8 +862,10 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun restorePhase3PhysicalMedia(destination: ApprovedPhase3Destination) {
+        val action = Phase3Notice.Action.RestorePhysicalMedia
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -845,7 +875,7 @@ class NanoKvmConsoleBackend internal constructor(
                 publishUsbMediaResult(
                     binding = binding,
                     result = result,
-                    appliedMessage = "Physical storage restored after authoritative readback.",
+                    action = action,
                 )
             } finally {
                 resumeInputMonitoringAfterPhase3UsbMutation(binding)
@@ -861,18 +891,22 @@ class NanoKvmConsoleBackend internal constructor(
         }
         if (selection == null) {
             rejectPhase3UiCommand(
-                "Refresh virtual media before deleting an image.",
+                Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.RefreshMediaBeforeDeletingImage,
+                ),
                 Phase3NoticeScope.VirtualMedia,
             )
             return
         }
+        val action = Phase3Notice.Action.DeleteImage
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
             val result = gateway.deleteImage(selection.first, selection.second)
-            publishMediaMutation(binding, result, "Virtual image deleted after authoritative readback.")
+            publishMediaMutation(binding, result, action)
         }
     }
 
@@ -880,8 +914,10 @@ class NanoKvmConsoleBackend internal constructor(
         destination: ApprovedPhase3Destination,
         enabled: Boolean,
     ) {
+        val action = Phase3Notice.Action.SetDiskEnabled(enabled)
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -891,11 +927,7 @@ class NanoKvmConsoleBackend internal constructor(
                 publishUsbDeviceResult(
                     binding = binding,
                     result = result,
-                    appliedMessage = if (enabled) {
-                        "Virtual disk enabled after readback."
-                    } else {
-                        "Virtual disk disabled after readback."
-                    },
+                    action = action,
                 )
             } finally {
                 resumeInputMonitoringAfterPhase3UsbMutation(binding)
@@ -909,13 +941,21 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         if (selection == Phase3HidModeSelection.Other) {
             rejectPhase3UiCommand(
-                "Unknown HID modes are visible but read-only.",
+                Phase3Notice.Guidance(Phase3Notice.GuidanceReason.UnknownHidModeIsReadOnly),
                 Phase3NoticeScope.VirtualMedia,
             )
             return
         }
+        val action = Phase3Notice.Action.SetHidMode(
+            when (selection) {
+                Phase3HidModeSelection.Normal -> Phase3Notice.HidMode.Normal
+                Phase3HidModeSelection.HidOnly -> Phase3Notice.HidMode.HidOnly
+                Phase3HidModeSelection.Other -> return
+            },
+        )
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -925,13 +965,7 @@ class NanoKvmConsoleBackend internal constructor(
                 publishUsbHidModeResult(
                     binding = binding,
                     result = result,
-                    appliedMessage = when (selection) {
-                        Phase3HidModeSelection.Normal ->
-                            "Normal HID mode enabled after authoritative readback."
-                        Phase3HidModeSelection.HidOnly ->
-                            "HID-only mode enabled after authoritative readback."
-                        Phase3HidModeSelection.Other -> error("Unknown HID mode is read-only")
-                    },
+                    action = action,
                 )
             } finally {
                 resumeInputMonitoringAfterPhase3UsbMutation(binding)
@@ -943,8 +977,10 @@ class NanoKvmConsoleBackend internal constructor(
         destination: ApprovedPhase3Destination,
         enabled: Boolean,
     ) {
+        val action = Phase3Notice.Action.SetNetworkEnabled(enabled)
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -954,11 +990,7 @@ class NanoKvmConsoleBackend internal constructor(
                 publishUsbDeviceResult(
                     binding = binding,
                     result = result,
-                    appliedMessage = if (enabled) {
-                        "Virtual network enabled after readback."
-                    } else {
-                        "Virtual network disabled after readback."
-                    },
+                    action = action,
                 )
             } finally {
                 resumeInputMonitoringAfterPhase3UsbMutation(binding)
@@ -972,13 +1004,15 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val source = runCatching { NanoKvmRemoteImageUrl.parse(sourceUrl) }.getOrElse {
             rejectPhase3UiCommand(
-                "Enter a valid HTTP(S) image URL ending in .iso or .img.",
+                Phase3Notice.Guidance(Phase3Notice.GuidanceReason.EnterValidImageUrl),
                 Phase3NoticeScope.VirtualMedia,
             )
             return
         }
+        val action = Phase3Notice.Action.StartImageTransfer
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = true,
             noticeScope = Phase3NoticeScope.VirtualMedia,
         ) { gateway, binding ->
@@ -986,7 +1020,7 @@ class NanoKvmConsoleBackend internal constructor(
             publishTransferMutation(
                 binding,
                 result,
-                "Image transfer requested. It will not be mounted automatically.",
+                action,
             )
             phase3TransferSnapshot(result)?.let { snapshot ->
                 startPhase3TransferPollingIfNeeded(binding, gateway, snapshot)
@@ -1000,13 +1034,15 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val canonical = runCatching { NanoKvmMacAddress.parse(macAddress) }.getOrElse {
             rejectPhase3UiCommand(
-                "Enter a MAC address containing exactly 12 hexadecimal digits.",
+                Phase3Notice.Guidance(Phase3Notice.GuidanceReason.EnterValidMacAddress),
                 Phase3NoticeScope.WakeOnLan,
             )
             return
         }
+        val action = Phase3Notice.Action.SendWakePacket
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = false,
             noticeScope = Phase3NoticeScope.WakeOnLan,
         ) { gateway, binding ->
@@ -1014,7 +1050,7 @@ class NanoKvmConsoleBackend internal constructor(
             publishWakeOnLanMutation(
                 binding,
                 result,
-                "Wake packet submitted once. NanoKVM cannot confirm host delivery.",
+                action,
             )
         }
     }
@@ -1031,18 +1067,22 @@ class NanoKvmConsoleBackend internal constructor(
         }
         if (selection == null) {
             rejectPhase3UiCommand(
-                "Refresh Wake-on-LAN history before renaming this entry.",
+                Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.RefreshWakeHistoryBeforeRenaming,
+                ),
                 Phase3NoticeScope.WakeOnLan,
             )
             return
         }
+        val action = Phase3Notice.Action.RenameWakeTarget
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = false,
             noticeScope = Phase3NoticeScope.WakeOnLan,
         ) { gateway, binding ->
             val result = gateway.renameWakeOnLanTarget(selection.first, selection.second, name)
-            publishWakeOnLanMutation(binding, result, "Wake-on-LAN entry renamed after readback.")
+            publishWakeOnLanMutation(binding, result, action)
         }
     }
 
@@ -1057,18 +1097,22 @@ class NanoKvmConsoleBackend internal constructor(
         }
         if (selection == null) {
             rejectPhase3UiCommand(
-                "Refresh Wake-on-LAN history before deleting this entry.",
+                Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.RefreshWakeHistoryBeforeDeleting,
+                ),
                 Phase3NoticeScope.WakeOnLan,
             )
             return
         }
+        val action = Phase3Notice.Action.DeleteWakeTarget
         beginPhase3Action(
-            destination,
+            destination = destination,
+            action = action,
             releaseInput = false,
             noticeScope = Phase3NoticeScope.WakeOnLan,
         ) { gateway, binding ->
             val result = gateway.deleteWakeOnLanTarget(selection.first, selection.second)
-            publishWakeOnLanMutation(binding, result, "Wake-on-LAN entry deleted after readback.")
+            publishWakeOnLanMutation(binding, result, action)
         }
     }
 
@@ -1101,40 +1145,61 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationPreviewUpdates(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetPreviewUpdates(enabled),
+    ) { gateway, binding, action ->
         publishAdministrationMutation(
             binding,
             gateway.setPreviewUpdatesEnabled(enabled),
+            action,
         ) { state, snapshot -> state.copy(updates = snapshot.toUiState()) }
     }
 
     override fun startAdministrationOnlineUpdate(destination: ApprovedAdministrationDestination) =
-        beginAdministrationAction(destination) { gateway, binding ->
-            publishAdministrationMutation(binding, gateway.startOnlineUpdate()) { state, snapshot ->
+        beginAdministrationAction(
+            destination,
+            AdministrationNotice.Action.StartOnlineUpdate,
+        ) { gateway, binding, action ->
+            publishAdministrationMutation(binding, gateway.startOnlineUpdate(), action) {
+                    state, snapshot ->
                 state.copy(updates = snapshot.toUiState())
             }
         }
 
     override fun rebootAdministrationAppliance(destination: ApprovedAdministrationDestination) =
-        beginAdministrationAction(destination) { gateway, binding ->
-            publishAdministrationMutation(binding, gateway.rebootSystem()) { state, _ -> state }
+        beginAdministrationAction(
+            destination,
+            AdministrationNotice.Action.RebootAppliance,
+        ) { gateway, binding, action ->
+            publishAdministrationMutation(binding, gateway.rebootSystem(), action) { state, _ ->
+                state
+            }
         }
 
     override fun setAdministrationOledSleep(
         destination: ApprovedAdministrationDestination,
         preset: AdministrationOledPreset,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetOledSleep(preset),
+    ) { gateway, binding, action ->
         publishAdministrationMutation(
             binding,
             gateway.setOledSleep(preset.toProtocolPreset()),
+            action,
         ) { state, snapshot -> state.copy(oled = snapshot.toUiState()) }
     }
 
     override fun setAdministrationSshEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.setSshEnabled(enabled)) { state, snapshot ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetSshEnabled(enabled),
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.setSshEnabled(enabled), action) {
+                state, snapshot ->
             state.copy(sshEnabled = snapshot.enabled)
         }
     }
@@ -1142,8 +1207,12 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationHostname(
         destination: ApprovedAdministrationDestination,
         hostname: String,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.setHostname(hostname)) { state, snapshot ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetHostname,
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.setHostname(hostname), action) {
+                state, snapshot ->
             state.copy(hostname = snapshot.hostname)
         }
     }
@@ -1151,8 +1220,12 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationMdnsEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.setMdnsEnabled(enabled)) { state, snapshot ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetMdnsEnabled(enabled),
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.setMdnsEnabled(enabled), action) {
+                state, snapshot ->
             state.copy(mdnsEnabled = snapshot.enabled)
         }
     }
@@ -1160,15 +1233,23 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationWebTitle(
         destination: ApprovedAdministrationDestination,
         title: String,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.setCustomWebTitle(title)) { state, snapshot ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetWebTitle,
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.setCustomWebTitle(title), action) {
+                state, snapshot ->
             state.copy(webTitle = snapshot.title, webTitleIsDefault = snapshot.isDefault)
         }
     }
 
     override fun resetAdministrationWebTitle(destination: ApprovedAdministrationDestination) =
-        beginAdministrationAction(destination) { gateway, binding ->
-            publishAdministrationMutation(binding, gateway.resetWebTitle()) { state, snapshot ->
+        beginAdministrationAction(
+            destination,
+            AdministrationNotice.Action.ResetWebTitle,
+        ) { gateway, binding, action ->
+            publishAdministrationMutation(binding, gateway.resetWebTitle(), action) {
+                    state, snapshot ->
                 state.copy(webTitle = snapshot.title, webTitleIsDefault = snapshot.isDefault)
             }
         }
@@ -1176,15 +1257,22 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationManualDns(
         destination: ApprovedAdministrationDestination,
         servers: List<String>,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.setManualDns(servers)) { state, snapshot ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.SetManualDns,
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.setManualDns(servers), action) {
+                state, snapshot ->
             state.copy(dns = snapshot.toUiState())
         }
     }
 
     override fun setAdministrationDhcpDns(destination: ApprovedAdministrationDestination) =
-        beginAdministrationAction(destination) { gateway, binding ->
-            publishAdministrationMutation(binding, gateway.setDhcpDns()) { state, snapshot ->
+        beginAdministrationAction(
+            destination,
+            AdministrationNotice.Action.SetDhcpDns,
+        ) { gateway, binding, action ->
+            publishAdministrationMutation(binding, gateway.setDhcpDns(), action) { state, snapshot ->
                 state.copy(dns = snapshot.toUiState())
             }
         }
@@ -1195,17 +1283,22 @@ class NanoKvmConsoleBackend internal constructor(
         password: CharArray,
     ) = beginAdministrationAction(
         destination = destination,
+        action = AdministrationNotice.Action.ConnectWifi,
         onCompletion = { password.fill('\u0000') },
-    ) { gateway, binding ->
-        publishAdministrationMutation(binding, gateway.connectWifi(ssid, password)) {
+    ) { gateway, binding, action ->
+        publishAdministrationMutation(binding, gateway.connectWifi(ssid, password), action) {
                 state, snapshot ->
             state.copy(wifi = snapshot.toUiState())
         }
     }
 
     override fun disconnectAdministrationWifi(destination: ApprovedAdministrationDestination) =
-        beginAdministrationAction(destination) { gateway, binding ->
-            publishAdministrationMutation(binding, gateway.disconnectWifi()) { state, snapshot ->
+        beginAdministrationAction(
+            destination,
+            AdministrationNotice.Action.DisconnectWifi,
+        ) { gateway, binding, action ->
+            publishAdministrationMutation(binding, gateway.disconnectWifi(), action) {
+                    state, snapshot ->
                 state.copy(wifi = snapshot.toUiState())
             }
         }
@@ -1213,57 +1306,80 @@ class NanoKvmConsoleBackend internal constructor(
     override fun executeAdministrationTailscale(
         destination: ApprovedAdministrationDestination,
         command: AdministrationTailscaleCommand,
-    ) = beginAdministrationAction(destination) { gateway, binding ->
+    ) = beginAdministrationAction(
+        destination,
+        AdministrationNotice.Action.Tailscale(command),
+    ) { gateway, binding, action ->
         if (command == AdministrationTailscaleCommand.Login) {
             when (val outcome = gateway.loginTailscale()) {
                 is NanoKvmAdministrationTailscaleLoginOutcome.AuthorizationRequired -> {
                     if (currentAdministrationBinding() == binding) {
-                        mutableExternalNavigation.tryEmit(
-                            ExternalHttpsNavigationRequest(outcome.url.value),
-                        )
-                        publishAdministrationNotice(
+                        val request = newAdministrationHttpsNavigationRequest(
                             binding,
-                            AdministrationNoticeKind.Information,
-                            "The official Tailscale authorization page was opened. Return and refresh after approving it.",
+                            outcome.url.value,
                         )
+                        updateAdministrationIfCurrent(binding) {
+                            it.copy(
+                                notice = AdministrationNotice.Guidance(
+                                    AdministrationNotice.GuidanceReason
+                                        .TailscaleAuthorizationReady,
+                                ),
+                                pendingHttpsNavigation = request,
+                            )
+                        }
                     }
                     null
                 }
                 is NanoKvmAdministrationTailscaleLoginOutcome.Completed ->
-                    publishAdministrationMutation(binding, outcome.result) { state, snapshot ->
-                        state.copy(tailscale = snapshot.toUiState())
-                    }
+                    publishAdministrationMutation(
+                        binding,
+                        outcome.result,
+                        action,
+                    ) { state, snapshot -> state.copy(tailscale = snapshot.toUiState()) }
             }
         } else {
             publishAdministrationMutation(
                 binding,
                 gateway.executeTailscale(command.toProtocolCommand()),
+                action,
             ) { state, snapshot -> state.copy(tailscale = snapshot.toUiState()) }
+        }
+    }
+
+    override fun acknowledgeAdministrationNavigationOpened(
+        destination: ApprovedAdministrationDestination,
+        requestId: Long,
+    ) {
+        val binding = currentAdministrationBinding() ?: return
+        if (!destination.matches(binding)) return
+        updateAdministrationIfCurrent(binding) {
+            it.acknowledgeOpenedHttpsNavigation(destination, requestId)
         }
     }
 
     override fun setAdministrationHdmiEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = beginDeviceControlAction(destination) { gateway, binding ->
+    ) = beginDeviceControlAction(
+        destination,
+        AdministrationNotice.Action.SetHdmiEnabled(enabled),
+    ) { gateway, binding, action ->
         publishDeviceControlMutation(
             binding = binding,
             result = gateway.setHdmiEnabled(enabled),
-            appliedMessage = if (enabled) {
-                "HDMI capture enabled and confirmed by readback."
-            } else {
-                "HDMI capture disabled and confirmed by readback."
-            },
+            action = action,
         ) { state, snapshot -> state.copy(hdmiEnabled = snapshot.enabled) }
     }
 
     override fun resetAdministrationHdmi(destination: ApprovedAdministrationDestination) =
-        beginDeviceControlAction(destination) { gateway, binding ->
+        beginDeviceControlAction(
+            destination,
+            AdministrationNotice.Action.ResetHdmi,
+        ) { gateway, binding, action ->
             publishDeviceControlMutation(
                 binding = binding,
                 result = gateway.resetHdmi(),
-                appliedMessage =
-                    "HDMI reset was requested once. Video may pause; refresh before repeating it.",
+                action = action,
             ) { state, _ -> state }
         }
 
@@ -1272,7 +1388,11 @@ class NanoKvmConsoleBackend internal constructor(
         selection: AdministrationMouseJigglerSelection,
     ) {
         if (selection == AdministrationMouseJigglerSelection.Other) {
-            rejectAdministrationUiCommand("Unknown mouse-jiggler modes are visible but read-only.")
+            rejectAdministrationUiCommand(
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.UnknownMouseJigglerModeIsReadOnly,
+                ),
+            )
             return
         }
         val enabled = selection != AdministrationMouseJigglerSelection.Off
@@ -1282,11 +1402,22 @@ class NanoKvmConsoleBackend internal constructor(
             AdministrationMouseJigglerSelection.Absolute -> NanoKvmMouseJigglerMode.Absolute
             AdministrationMouseJigglerSelection.Other -> return
         }
-        beginDeviceControlAction(destination) { gateway, binding ->
+        val action = AdministrationNotice.Action.SetMouseJiggler(
+            when (selection) {
+                AdministrationMouseJigglerSelection.Off ->
+                    AdministrationNotice.MouseJigglerMode.Off
+                AdministrationMouseJigglerSelection.Relative ->
+                    AdministrationNotice.MouseJigglerMode.Relative
+                AdministrationMouseJigglerSelection.Absolute ->
+                    AdministrationNotice.MouseJigglerMode.Absolute
+                AdministrationMouseJigglerSelection.Other -> return
+            },
+        )
+        beginDeviceControlAction(destination, action) { gateway, binding, ownedAction ->
             publishDeviceControlMutation(
                 binding = binding,
                 result = gateway.setMouseJiggler(enabled, mode),
-                appliedMessage = "Mouse jiggler changed and confirmed by readback.",
+                action = ownedAction,
             ) { state, snapshot -> state.copy(mouseJiggler = snapshot.toUiState()) }
         }
     }
@@ -1294,32 +1425,40 @@ class NanoKvmConsoleBackend internal constructor(
     override fun setAdministrationMemoryLimitEnabled(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
-    ) = beginDeviceControlAction(destination) { gateway, binding ->
+    ) = beginDeviceControlAction(
+        destination,
+        AdministrationNotice.Action.SetMemoryLimitEnabled(enabled),
+    ) { gateway, binding, action ->
         publishDeviceControlMutation(
             binding = binding,
             result = gateway.setMemoryLimitEnabled(enabled),
-            appliedMessage = "Memory limit changed and confirmed by readback.",
+            action = action,
         ) { state, snapshot -> state.copy(memoryLimit = snapshot.toUiState()) }
     }
 
     override fun setAdministrationSwapSize(
         destination: ApprovedAdministrationDestination,
         preset: AdministrationSwapPreset,
-    ) = beginDeviceControlAction(destination) { gateway, binding ->
+    ) = beginDeviceControlAction(
+        destination,
+        AdministrationNotice.Action.SetSwapSize(preset),
+    ) { gateway, binding, action ->
         publishDeviceControlMutation(
             binding = binding,
             result = gateway.setSwapSize(preset.toProtocolPreset()),
-            appliedMessage = "Swap size changed and confirmed by readback.",
+            action = action,
         ) { state, snapshot -> state.copy(swap = snapshot.toUiState()) }
     }
 
     override fun enableAdministrationTls(destination: ApprovedAdministrationDestination) =
-        beginDeviceControlAction(destination) { gateway, binding ->
+        beginDeviceControlAction(
+            destination,
+            AdministrationNotice.Action.EnableTls,
+        ) { gateway, binding, action ->
             publishDeviceControlMutation(
                 binding = binding,
                 result = gateway.enableApplianceTls(),
-                appliedMessage =
-                    "TLS enable was requested once. Change this profile to HTTPS and verify before repeating it.",
+                action = action,
             ) { state, _ -> state }
         }
 
@@ -1356,12 +1495,15 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun enterOperatorTerminal(destination: ApprovedOperatorDestination) {
-        beginOperatorAction(destination) { gateway, binding ->
+        beginOperatorAction(
+            destination,
+            OperatorNotice.Action.EnterTerminal,
+        ) { gateway, binding, action ->
             val approval = gateway.terminal.recordExplicitElevatedEntryApproval()
             publishOperatorTerminalResult(
                 binding,
                 gateway.terminal.enter(approval),
-                "Root terminal connection requested. Input is sent once and is never replayed.",
+                action,
             )
         }
     }
@@ -1376,9 +1518,8 @@ class NanoKvmConsoleBackend internal constructor(
             it.copy(
                 terminalPhase = OperatorTerminalUiPhase.Inactive,
                 serialActive = false,
-                notice = OperatorNoticeUiState(
-                    OperatorNoticeKind.Information,
-                    "Terminal closed. Re-entry requires a new explicit root-risk confirmation.",
+                notice = OperatorNotice.Guidance(
+                    OperatorNotice.GuidanceReason.TerminalClosedNeedsFreshConfirmation,
                 ),
             )
         }
@@ -1393,7 +1534,7 @@ class NanoKvmConsoleBackend internal constructor(
         publishOperatorTerminalResult(
             selection.second,
             selection.first.terminal.sendInput(text),
-            "Terminal input dispatched once.",
+            OperatorNotice.Action.SendTerminalInput,
             publishSuccessNotice = false,
         )
     }
@@ -1405,13 +1546,15 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val selection = resolveOperatorGateway(destination) ?: return
         val size = runCatching { NanoKvmTerminalSize(rows, columns) }.getOrElse {
-            rejectOperatorUiCommand("Terminal dimensions are invalid.")
+            rejectOperatorUiCommand(
+                OperatorNotice.Guidance(OperatorNotice.GuidanceReason.InvalidTerminalDimensions),
+            )
             return
         }
         publishOperatorTerminalResult(
             selection.second,
             selection.first.terminal.resize(size),
-            "Terminal size dispatched once.",
+            OperatorNotice.Action.ResizeTerminal,
         )
     }
 
@@ -1419,21 +1562,27 @@ class NanoKvmConsoleBackend internal constructor(
         destination: ApprovedOperatorDestination,
         configuration: OperatorSerialConfiguration,
     ) {
-        beginOperatorAction(destination) { gateway, binding ->
+        beginOperatorAction(
+            destination,
+            OperatorNotice.Action.StartSerial,
+        ) { gateway, binding, action ->
             publishOperatorTerminalResult(
                 binding,
                 gateway.terminal.startSerial(configuration.toProtocolConfiguration()),
-                "Typed serial configuration dispatched once.",
+                action,
             )
         }
     }
 
     override fun exitOperatorSerial(destination: ApprovedOperatorDestination) {
-        beginOperatorAction(destination) { gateway, binding ->
+        beginOperatorAction(
+            destination,
+            OperatorNotice.Action.ExitSerial,
+        ) { gateway, binding, action ->
             publishOperatorTerminalResult(
                 binding,
                 gateway.terminal.exitSerial(),
-                "Serial exit dispatched once; the terminal connection was closed.",
+                action,
             )
         }
     }
@@ -1442,11 +1591,14 @@ class NanoKvmConsoleBackend internal constructor(
         destination: ApprovedOperatorDestination,
         request: OperatorScriptUploadRequest,
     ) {
-        val accepted = beginOperatorAction(destination, onCompletion = request::clear) {
-                gateway, binding ->
+        val accepted = beginOperatorAction(
+            destination = destination,
+            action = OperatorNotice.Action.UploadScript,
+            onCompletion = request::clear,
+        ) { gateway, binding, action ->
             clearOperatorScriptHandles()
             val result = gateway.uploadScript(request.fileName, request.content)
-            publishOperatorScriptResult(binding, result, operation = "upload")
+            publishOperatorScriptResult(binding, result, action)
             refreshOperatorScriptsAfterMutation(binding, gateway)
         }
         if (!accepted) request.clear()
@@ -1459,10 +1611,15 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val selection = resolveOperatorScript(scriptId)
         if (selection == null) {
-            rejectOperatorUiCommand("Refresh the script catalog before choosing a script.")
+            rejectOperatorUiCommand(
+                OperatorNotice.Guidance(OperatorNotice.GuidanceReason.RefreshScriptCatalog),
+            )
             return
         }
-        beginOperatorAction(destination) { gateway, binding ->
+        beginOperatorAction(
+            destination,
+            OperatorNotice.Action.RunScript(mode),
+        ) { gateway, binding, action ->
             clearOperatorScriptHandles()
             val result = gateway.runScript(
                 selection.first,
@@ -1478,7 +1635,7 @@ class NanoKvmConsoleBackend internal constructor(
                     OperatorEphemeralOutput(OperatorOutputKind.Script, output),
                 )
             }
-            publishOperatorScriptResult(binding, result, operation = "run")
+            publishOperatorScriptResult(binding, result, action)
             refreshOperatorScriptsAfterMutation(binding, gateway)
         }
     }
@@ -1489,13 +1646,18 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val selection = resolveOperatorScript(scriptId)
         if (selection == null) {
-            rejectOperatorUiCommand("Refresh the script catalog before choosing a script.")
+            rejectOperatorUiCommand(
+                OperatorNotice.Guidance(OperatorNotice.GuidanceReason.RefreshScriptCatalog),
+            )
             return
         }
-        beginOperatorAction(destination) { gateway, binding ->
+        beginOperatorAction(
+            destination,
+            OperatorNotice.Action.DeleteScript,
+        ) { gateway, binding, action ->
             clearOperatorScriptHandles()
             val result = gateway.deleteScript(selection.first, selection.second)
-            publishOperatorScriptResult(binding, result, operation = "delete")
+            publishOperatorScriptResult(binding, result, action)
             refreshOperatorScriptsAfterMutation(binding, gateway)
         }
     }
@@ -1508,7 +1670,7 @@ class NanoKvmConsoleBackend internal constructor(
         if (visible && foreground) gateway?.onForeground() else gateway?.onBackground()
     }
 
-    override fun currentAutomationGatewayToken(): Any? {
+    override fun currentAutomationGateway(): NanoKvmAutomationGateway? {
         val binding = currentAutomationBinding() ?: return null
         return automationLifecycle.resolve(binding)
     }
@@ -1522,13 +1684,14 @@ class NanoKvmConsoleBackend internal constructor(
         gateway?.setSurfaceVisible(visible)
     }
 
-    override fun currentOfflineUpdateGatewayToken(): Any? {
+    override fun currentOfflineUpdateGateway(): NanoKvmOfflineUpdateGateway? {
         val binding = currentOfflineUpdateBinding() ?: return null
         return offlineUpdateLifecycle.resolve(binding)
     }
 
-    override fun createPasswordChangeCoordinatorToken(requestToken: Any): Any? {
-        val request = requestToken.passwordChangeFactoryRequestOrNull() ?: return null
+    override fun createPasswordChangeCoordinator(
+        request: NanoKvmPasswordChangeRequest,
+    ): NanoKvmPasswordChangeCoordinator? {
         val binding = currentAdministrationBinding() ?: return null
         val gateway = administrationLifecycle.resolve(binding) ?: return null
         if (!request.destination.matches(binding)) return null
@@ -1573,14 +1736,16 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun enterPicoClaw(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        beginPicoClawAction(destination, PicoClawNotice.Action.EnterFeature) { gateway, binding ->
             when (val result = gateway.enterFeature()) {
                 is NanoKvmPicoClawReadResult.Success -> {
                     publishPicoClawRuntime(binding, result.state)
                     publishPicoClawNotice(
                         binding,
-                        PicoClawNoticeKind.Information,
-                        "PicoClaw entered explicitly. Runtime status was probed once.",
+                        PicoClawNotice.ActionOutcome(
+                            action = PicoClawNotice.Action.EnterFeature,
+                            outcome = PicoClawNotice.Outcome.EnteredAndProbed,
+                        ),
                     )
                 }
                 is NanoKvmPicoClawReadResult.Failure ->
@@ -1590,7 +1755,8 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun refreshPicoClaw(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        beginPicoClawAction(destination, PicoClawNotice.Action.RefreshRuntime) {
+                gateway, binding ->
             when (val result = gateway.refreshRuntime()) {
                 is NanoKvmPicoClawReadResult.Success -> publishPicoClawRuntime(binding, result.state)
                 is NanoKvmPicoClawReadResult.Failure -> publishPicoClawError(binding, result.error)
@@ -1599,30 +1765,34 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun installPicoClawRuntime(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
-            publishPicoClawMutation(binding, gateway.installRuntime(), "PicoClaw runtime installed.")
+        val action = PicoClawNotice.Action.InstallRuntime
+        beginPicoClawAction(destination, action) { gateway, binding ->
+            publishPicoClawMutation(binding, gateway.installRuntime(), action)
         }
     }
 
     override fun startPicoClawRuntime(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
-            publishPicoClawMutation(binding, gateway.startRuntime(), "PicoClaw runtime started.")
+        val action = PicoClawNotice.Action.StartRuntime
+        beginPicoClawAction(destination, action) { gateway, binding ->
+            publishPicoClawMutation(binding, gateway.startRuntime(), action)
         }
     }
 
     override fun stopPicoClawRuntime(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
-            publishPicoClawMutation(binding, gateway.stopRuntime(), "PicoClaw runtime stopped.")
+        val action = PicoClawNotice.Action.StopRuntime
+        beginPicoClawAction(destination, action) { gateway, binding ->
+            publishPicoClawMutation(binding, gateway.stopRuntime(), action)
         }
     }
 
     override fun uninstallPicoClawRuntime(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        val action = PicoClawNotice.Action.UninstallRuntime
+        beginPicoClawAction(destination, action) { gateway, binding ->
             val consent = gateway.recordUninstallConsentAfterWarning()
             publishPicoClawMutation(
                 binding,
                 gateway.uninstallRuntime(consent),
-                "PicoClaw runtime and appliance configuration were removed.",
+                action,
             )
         }
     }
@@ -1631,7 +1801,8 @@ class NanoKvmConsoleBackend internal constructor(
         destination: ApprovedPicoClawDestination,
         profile: PicoClawProfile,
     ) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        val action = PicoClawNotice.Action.SetAgentProfile(profile)
+        beginPicoClawAction(destination, action) { gateway, binding ->
             publishPicoClawMutation(
                 binding,
                 gateway.setAgentProfile(
@@ -1640,7 +1811,7 @@ class NanoKvmConsoleBackend internal constructor(
                         PicoClawProfile.Kvm -> NanoKvmPicoClawAgentProfile.KVM
                     },
                 ),
-                "PicoClaw agent profile updated.",
+                action,
             )
         }
     }
@@ -1657,15 +1828,24 @@ class NanoKvmConsoleBackend internal constructor(
             )
         }.getOrElse {
             request.clear()
-            rejectPicoClawUiCommand("Enter a valid model, HTTP(S) provider URL, and API key.")
+            rejectPicoClawUiCommand(
+                PicoClawNotice.Guidance(
+                    PicoClawNotice.GuidanceReason.EnterValidModelConfiguration,
+                ),
+            )
             return
         }
-        val accepted = beginPicoClawAction(destination, onCompletion = request::clear) {
+        val action = PicoClawNotice.Action.ConfigureModel
+        val accepted = beginPicoClawAction(
+            destination,
+            action,
+            onCompletion = request::clear,
+        ) {
                 gateway, binding ->
             publishPicoClawMutation(
                 binding,
                 gateway.updateModel(update),
-                "PicoClaw model configuration updated; the provider key was cleared from memory.",
+                action,
             )
         }
         if (!accepted) {
@@ -1675,7 +1855,8 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun refreshPicoClawHistories(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        beginPicoClawAction(destination, PicoClawNotice.Action.RefreshHistories) {
+                gateway, binding ->
             when (val result = gateway.refreshHistories()) {
                 is NanoKvmPicoClawReadResult.Success -> publishPicoClawHistories(binding, result.state)
                 is NanoKvmPicoClawReadResult.Failure -> publishPicoClawError(binding, result.error)
@@ -1689,23 +1870,29 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val selection = resolvePicoClawHistory(historyId)
         if (selection == null) {
-            rejectPicoClawUiCommand("Refresh PicoClaw history before opening this session.")
+            rejectPicoClawUiCommand(
+                PicoClawNotice.Guidance(
+                    PicoClawNotice.GuidanceReason.RefreshHistoryBeforeOpening,
+                ),
+            )
             return
         }
-        beginPicoClawAction(destination) { gateway, binding ->
+        beginPicoClawAction(destination, PicoClawNotice.Action.OpenHistory) { gateway, binding ->
             when (val result = gateway.historyDetail(selection.first, selection.second)) {
                 is NanoKvmPicoClawReadResult.Success -> updatePicoClawIfCurrent(binding) {
                     it.copy(
                         selectedHistoryTitle = selection.second.title,
                         selectedHistoryMessages = result.state.messages.map { message ->
                             PicoClawMessageUiState(
-                                role = when (message.role) {
-                                    org.nanokvm.protocol.NanoKvmPicoClawHistoryRole.USER ->
-                                        PicoClawMessageRole.User
-                                    org.nanokvm.protocol.NanoKvmPicoClawHistoryRole.ASSISTANT ->
-                                        PicoClawMessageRole.Assistant
-                                },
-                                content = message.content,
+                                PicoClawMessageContent.ApplianceText(
+                                    role = when (message.role) {
+                                        org.nanokvm.protocol.NanoKvmPicoClawHistoryRole.USER ->
+                                            PicoClawMessageRole.User
+                                        org.nanokvm.protocol.NanoKvmPicoClawHistoryRole.ASSISTANT ->
+                                            PicoClawMessageRole.Assistant
+                                    },
+                                    value = message.content,
+                                ),
                             )
                         },
                     )
@@ -1721,41 +1908,54 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         val selection = resolvePicoClawHistory(historyId)
         if (selection == null) {
-            rejectPicoClawUiCommand("Refresh PicoClaw history before deleting this session.")
+            rejectPicoClawUiCommand(
+                PicoClawNotice.Guidance(
+                    PicoClawNotice.GuidanceReason.RefreshHistoryBeforeDeleting,
+                ),
+            )
             return
         }
-        beginPicoClawAction(destination) { gateway, binding ->
+        val action = PicoClawNotice.Action.DeleteHistory
+        beginPicoClawAction(destination, action) { gateway, binding ->
             val consent = gateway.recordHistoryDeletionConsent(selection.first, selection.second)
             when (val result = gateway.deleteHistory(selection.first, selection.second, consent)) {
                 is NanoKvmPicoClawHistoryDeleteResult.Applied -> {
                     publishPicoClawHistories(binding, result.catalog)
                     publishPicoClawNotice(
                         binding,
-                        PicoClawNoticeKind.Applied,
-                        "PicoClaw history deleted after authoritative refresh.",
+                        PicoClawNotice.ActionOutcome(
+                            action = action,
+                            outcome = PicoClawNotice.Outcome.HistoryDeleted,
+                        ),
                     )
                 }
                 is NanoKvmPicoClawHistoryDeleteResult.Reconciled -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Reconciled,
-                    when (result.observation) {
+                    PicoClawNotice.ActionOutcome(
+                        action = action,
+                        outcome = when (result.observation) {
                         NanoKvmPicoClawHistoryDeleteObservation.ABSENT ->
-                            "The response was lost, but an authoritative read proved the history absent."
+                            PicoClawNotice.Outcome.HistoryAbsentAfterLostResponse
                         NanoKvmPicoClawHistoryDeleteObservation.PRESENT ->
-                            "The response was lost; the history is still present. The delete was not replayed."
+                            PicoClawNotice.Outcome.HistoryPresentAfterLostResponse
                         NanoKvmPicoClawHistoryDeleteObservation.UNKNOWN ->
-                            "The delete outcome is unknown and was not replayed."
-                    },
+                            PicoClawNotice.Outcome.HistoryOutcomeUnknown
+                        },
+                    ),
                 )
                 is NanoKvmPicoClawHistoryDeleteResult.Accepted -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "The delete was accepted, but history refresh failed. It was not replayed.",
+                    PicoClawNotice.ActionOutcome(
+                        action = action,
+                        outcome = PicoClawNotice.Outcome.HistoryAcceptedWithoutRefresh,
+                    ),
                 )
                 is NanoKvmPicoClawHistoryDeleteResult.Indeterminate -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "The delete outcome is unknown. It was sent once and was not replayed.",
+                    PicoClawNotice.ActionOutcome(
+                        action = action,
+                        outcome = PicoClawNotice.Outcome.HistoryOutcomeUnknown,
+                    ),
                 )
                 is NanoKvmPicoClawHistoryDeleteResult.Rejected ->
                     publishPicoClawError(binding, result.error)
@@ -1764,14 +1964,11 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun openPicoClawChat(destination: ApprovedPicoClawDestination) {
+        val action = PicoClawNotice.Action.OpenChat
         val selection = resolvePicoClawGateway(destination) ?: return
         val consent = selection.first.recordBroadControlConsentAfterDisclosure()
         val result = selection.first.chat.open(consent)
-        publishPicoClawChatAction(
-            selection.second,
-            result,
-            "PicoClaw control requested once. Manual HID stays locked until explicit release.",
-        )
+        publishPicoClawChatAction(selection.second, result, action)
     }
 
     override fun sendPicoClawChatMessage(
@@ -1779,16 +1976,17 @@ class NanoKvmConsoleBackend internal constructor(
         content: String,
     ) {
         val selection = resolvePicoClawGateway(destination) ?: return
+        val action = PicoClawNotice.Action.SendChatMessage
         val result = selection.first.chat.sendMessage(content)
-        if (result is NanoKvmPicoClawChatActionResult.Dispatched) {
+        if (result is NanoKvmPicoClawChatActionResult.MessageDispatched) {
             updatePicoClawIfCurrent(selection.second) {
                 it.copy(chatMessages = appendBoundedPicoClawMessage(
                     it.chatMessages,
-                    PicoClawMessageUiState(PicoClawMessageRole.User, content.take(MAX_PICOCLAW_UI_TEXT_CHARS)),
+                    result.message,
                 ))
             }
         }
-        publishPicoClawChatAction(selection.second, result, "Chat message dispatched once.")
+        publishPicoClawChatAction(selection.second, result, action)
     }
 
     override fun cancelPicoClawChat(destination: ApprovedPicoClawDestination) {
@@ -1796,27 +1994,31 @@ class NanoKvmConsoleBackend internal constructor(
         publishPicoClawChatAction(
             selection.second,
             selection.first.chat.cancelRun(),
-            "Run cancellation dispatched once. Manual HID remains locked until explicit release.",
+            PicoClawNotice.Action.CancelChat,
         )
     }
 
     override fun closeAndReleasePicoClaw(destination: ApprovedPicoClawDestination) {
-        beginPicoClawAction(destination) { gateway, binding ->
+        val action = PicoClawNotice.Action.CloseAndRelease
+        beginPicoClawAction(destination, action) { gateway, binding ->
             when (val result = gateway.chat.closeAndRelease()) {
                 NanoKvmPicoClawChatReleaseResult.Released -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Applied,
-                    "PicoClaw control closed and manual HID release was confirmed.",
+                    PicoClawNotice.ActionOutcome(action, PicoClawNotice.Outcome.Released),
                 )
                 NanoKvmPicoClawChatReleaseResult.HeldByOther -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "This session closed, but another PicoClaw session still holds manual HID.",
+                    PicoClawNotice.ActionOutcome(
+                        action,
+                        PicoClawNotice.Outcome.HeldByOtherSession,
+                    ),
                 )
                 is NanoKvmPicoClawChatReleaseResult.Indeterminate -> publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "The session closed, but manual HID release could not be confirmed.",
+                    PicoClawNotice.ActionOutcome(
+                        action,
+                        PicoClawNotice.Outcome.ReleaseUnconfirmed,
+                    ),
                 )
                 is NanoKvmPicoClawChatReleaseResult.Rejected ->
                     publishPicoClawError(binding, result.error)
@@ -1826,7 +2028,7 @@ class NanoKvmConsoleBackend internal constructor(
 
     override fun power(action: PowerAction) {
         if (action is PowerAction.CtrlAltDelete) {
-            runControlAfterPaste(CONTROL_CTRL_ALT_DELETE, "Ctrl-Alt-Delete sent") {
+            runControlAfterPaste(CONTROL_CTRL_ALT_DELETE, ConsoleMessage.CtrlAltDeleteSent) {
                 val socket = synchronized(stateLock) { input }
                 socket?.sendKeyboardChord(
                     modifiers = setOf(HidModifier.LEFT_CONTROL, HidModifier.LEFT_ALT),
@@ -1838,7 +2040,7 @@ class NanoKvmConsoleBackend internal constructor(
             }
             return
         }
-        runControlAfterPaste(CONTROL_GPIO, "Host control sent") { activeSession ->
+        runControlAfterPaste(CONTROL_GPIO, ConsoleMessage.HostControlSent) { activeSession ->
             when (action) {
                 PowerAction.ShortPress -> activeSession.console.pressGpio(GpioAction.POWER, 800)
                 PowerAction.Reset -> activeSession.console.pressGpio(GpioAction.RESET, 800)
@@ -1853,16 +2055,27 @@ class NanoKvmConsoleBackend internal constructor(
 
     override fun close() {
         closeCommandAcceptanceBarrier()
-        val connectToCancel = synchronized(stateLock) {
+        val resources = synchronized(stateLock) {
             if (closed) return
             closed = true
             foreground = false
-            activeConnectJob
+            val detachedInput = input
+            input = null
+            surface = null
+            CloseResources(
+                input = detachedInput,
+                connectJob = activeConnectJob.also { activeConnectJob = null },
+            )
         }
         controlGate.invalidate()
         cancelReconnect()
-        connectToCancel?.cancel(CancellationException("Console backend closed"))
+        resources.connectJob?.cancel(CancellationException("Console backend closed"))
         scope.cancel()
+        runCatching { releaseAllInputNow(resources.input) }
+        runCatching { resources.input?.close() }
+        synchronized(stateLock) {
+            mutableSession.value = BackendSession(connection = ConnectionState.Disconnected)
+        }
         closeScope.launch {
             try {
                 cancelPasteAndJoin(userInitiated = false)
@@ -1890,22 +2103,21 @@ class NanoKvmConsoleBackend internal constructor(
             expectedBinding?.let(::expireAuthenticatedSession)
             return
         }
-        closeCommandAcceptanceBarrier()
+        if (!closeCommandAcceptanceBarrier(expectedBinding)) return
         if (failure.disposition() == ReconnectFailureDisposition.TERMINAL) {
-            controlGate.invalidate()
-            mutableSession.update {
-                it.copy(
-                    connection = ConnectionState.Failed,
-                    message = failure.cause.toUserMessage(),
-                    reconnectAttempt = null,
-                    reconnectMaximumAttempts = null,
-                    nextReconnectDelayMillis = null,
-                )
+            if (expectedBinding == null) {
+                publishTerminalFailure(failure)
+            } else {
+                publishTerminalFailureWhenBindingStillCurrent(expectedBinding, failure)
             }
             return
         }
         val created = synchronized(stateLock) {
-            if (closed || !foreground || client == null || reconnectJob?.isActive == true) {
+            if (
+                closed || !foreground || client == null || reconnectJob?.isActive == true ||
+                (expectedBinding != null &&
+                    !matchesAuthenticatedSessionBindingLocked(expectedBinding))
+            ) {
                 return
             }
             scope.launch(start = CoroutineStart.LAZY) {
@@ -1938,9 +2150,22 @@ class NanoKvmConsoleBackend internal constructor(
     ) {
         cancelPasteAndJoin(userInitiated = false)
         val prepared = lifecycleMutex.withLock {
-            if (closed || !foreground || client == null) return@withLock false
+            if (
+                closed || !foreground || client == null ||
+                (expectedBinding != null && !synchronized(stateLock) {
+                    matchesAuthenticatedSessionBindingLocked(expectedBinding)
+                })
+            ) {
+                return@withLock false
+            }
+            // This is serialized with connect/replacement ownership. A late failure cannot clear
+            // feature owners installed by a newer binding after its initial callback check.
+            invalidateSessionFeatureSet()
             mutableSession.update {
-                it.copy(connection = ConnectionState.Reconnecting, message = "Preparing to reconnect")
+                it.copy(
+                    connection = ConnectionState.Reconnecting,
+                    status = ConsoleMessage.PreparingToReconnect,
+                )
             }
             stopStreamingLocked()
             forgetVideoSurfaceLocked()
@@ -1954,14 +2179,23 @@ class NanoKvmConsoleBackend internal constructor(
         val result = reconnectPolicy.execute(
             immediateFirstAttempt = immediateFirstAttempt,
             onWaiting = { progress ->
-                val delaySeconds = (progress.delayMillis + 999L) / 1_000L
+                val delaySeconds = ((progress.delayMillis + 999L) / 1_000L)
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                    .toInt()
                 mutableSession.update {
                     it.copy(
                         connection = ConnectionState.Reconnecting,
-                        message = if (progress.delayMillis == 0L) {
-                            "Reconnect attempt ${progress.attempt} of ${progress.maximumAttempts}"
+                        status = if (progress.delayMillis == 0L) {
+                            ConsoleMessage.ReconnectAttempt(
+                                progress.attempt,
+                                progress.maximumAttempts,
+                            )
                         } else {
-                            "Reconnect attempt ${progress.attempt} of ${progress.maximumAttempts} in ${delaySeconds}s"
+                            ConsoleMessage.ReconnectAttemptDelayed(
+                                progress.attempt,
+                                progress.maximumAttempts,
+                                delaySeconds,
+                            )
                         },
                         reconnectAttempt = progress.attempt,
                         reconnectMaximumAttempts = progress.maximumAttempts,
@@ -1980,7 +2214,9 @@ class NanoKvmConsoleBackend internal constructor(
                 mutableSession.update {
                     it.copy(
                         connection = ConnectionState.Failed,
-                        message = result.failure.cause.toUserMessage(),
+                        status = ConsoleMessage.ConnectionFailed(
+                            result.failure.toConnectionFailure(),
+                        ),
                         reconnectAttempt = null,
                         reconnectMaximumAttempts = null,
                         nextReconnectDelayMillis = null,
@@ -1990,7 +2226,10 @@ class NanoKvmConsoleBackend internal constructor(
             is ReconnectRunResult.Exhausted -> mutableSession.update {
                 it.copy(
                     connection = ConnectionState.Failed,
-                    message = "Reconnect stopped after ${result.attempts} attempts: ${result.failure.cause.toUserMessage()}",
+                    status = ConsoleMessage.ReconnectStopped(
+                        result.attempts,
+                        result.failure.toConnectionFailure(),
+                    ),
                     reconnectAttempt = null,
                     reconnectMaximumAttempts = null,
                     nextReconnectDelayMillis = null,
@@ -2021,14 +2260,7 @@ class NanoKvmConsoleBackend internal constructor(
             synchronized(stateLock) {
                 val sessionGeneration = ++sessionGenerationCounter
                 input = createdInput
-                installPhase3GatewayLocked(activeSession, sessionGeneration)
-                installAdministrationGatewayLocked(activeSession, sessionGeneration)
-                installDeviceControlGatewayLocked(activeSession, sessionGeneration)
-                installOperatorGatewayLocked(activeSession, sessionGeneration)
-                installPicoClawGatewayLocked(activeSession, sessionGeneration)
-                installAutomationGatewayLocked(activeSession, sessionGeneration)
-                installOfflineUpdateGatewayLocked(activeSession, sessionGeneration)
-                mjpegFrameDetectionCoordinator.install(activeSession, sessionGeneration)
+                installSessionFeatureSetLocked(activeSession, sessionGeneration)
                 mutableSession.update {
                     it.copy(
                         connection = ConnectionState.Connected,
@@ -2036,7 +2268,8 @@ class NanoKvmConsoleBackend internal constructor(
                         phase3 = Phase3FeatureUiState(available = true),
                         administration = AdministrationUiState(available = true),
                         pasteProgress = null,
-                        message = null,
+                        status = null,
+                        lastActionFeedback = null,
                         reconnectAttempt = null,
                         reconnectMaximumAttempts = null,
                         nextReconnectDelayMillis = null,
@@ -2070,20 +2303,37 @@ class NanoKvmConsoleBackend internal constructor(
         closeVideoAndAwaitDecoderReleaseLocked()
         if (synchronized(stateLock) { surface } !== output || !output.isValid) return
         mjpegFrameDetectionCoordinator.onVideoSessionStarting()
+        val config = videoSettings.toNanoKvmVideoConfig()
+        val boundListener = SessionBoundVideoListener(videoListener)
         val created = NanoKvmVideoSession(
             client = activeClient.transport,
             baseUrl = activeClient.endpoint.baseUrl,
             token = token,
-            listener = videoListener,
-            webRtcRuntime = webRtcRuntime,
+            listener = boundListener,
+            webRtcRuntime = webRtcRuntimeProvider?.resolve(config.preference),
             callbackExecutor = videoCallbacks,
         )
-        video = created
-        val config = videoSettings.toNanoKvmVideoConfig()
-        if (config.preference == NanoKvmVideoPreference.MJPEG) {
-            created.startMjpeg(config)
-        } else {
-            created.start(output, config)
+        val accepted = synchronized(stateLock) {
+            if (
+                closed || !foreground ||
+                mutableSession.value.connection != ConnectionState.Connected ||
+                surface !== output || !output.isValid
+            ) {
+                false
+            } else {
+                activeVideoListener = boundListener
+                video = created
+                if (config.preference == NanoKvmVideoPreference.MJPEG) {
+                    created.startMjpeg(config)
+                } else {
+                    created.start(output, config)
+                }
+                true
+            }
+        }
+        if (!accepted) {
+            boundListener.invalidate()
+            created.closeAndAwaitDecoderRelease().awaitCompletion()
         }
     }
 
@@ -2163,7 +2413,7 @@ class NanoKvmConsoleBackend internal constructor(
             savedCertificateSha256?.let(CertificateFingerprint::parse)
         } catch (_: IllegalArgumentException) {
             return TrustPreflightOutcome.Failed(
-                "The saved certificate fingerprint is invalid.",
+                ConnectionFailure.InvalidSavedCertificate,
                 retryable = false,
             )
         }
@@ -2175,15 +2425,17 @@ class NanoKvmConsoleBackend internal constructor(
                 },
                 certificate = result.inspection.toCertificateDetails(
                     when (result.source) {
-                        ProtocolCertificateTrustSource.SYSTEM -> "Trusted by Android."
-                        ProtocolCertificateTrustSource.SAVED_LEAF_PIN -> "Matches the saved certificate."
+                        ProtocolCertificateTrustSource.SYSTEM ->
+                            CertificatePresentationReason.TrustedByAndroid
+                        ProtocolCertificateTrustSource.SAVED_LEAF_PIN ->
+                            CertificatePresentationReason.MatchesSavedCertificate
                     },
                 ),
             )
             is EndpointTrustPreflightResult.ReviewRequired -> {
                 TrustPreflightOutcome.CertificateReviewRequired(
                     result.inspection.toCertificateDetails(
-                        "Android does not trust this private certificate.",
+                        CertificatePresentationReason.PrivateCertificateNotTrusted,
                     ),
                 )
             }
@@ -2195,24 +2447,23 @@ class NanoKvmConsoleBackend internal constructor(
                 ) {
                     return TrustPreflightOutcome.CertificateReviewRequired(
                         rejectedInspection.toCertificateDetails(
-                            "The presented certificate differs from the saved certificate.",
+                            CertificatePresentationReason.DiffersFromSavedCertificate,
                         ),
                     )
                 }
                 val rejectionCause = result.cause
-                val message = when (result.reason) {
-                    TrustPreflightRejection.INSECURE_ENDPOINT -> "NanoKVM connections require HTTPS."
-                    TrustPreflightRejection.PIN_MISMATCH ->
-                        "The NanoKVM certificate differs from the saved certificate."
+                val failure = when (result.reason) {
+                    TrustPreflightRejection.INSECURE_ENDPOINT -> ConnectionFailure.HttpsRequired
+                    TrustPreflightRejection.PIN_MISMATCH -> ConnectionFailure.CertificateChanged
                     TrustPreflightRejection.HOSTNAME_MISMATCH ->
-                        "The certificate does not identify ${endpoint.baseUrl.host}."
+                        ConnectionFailure.CertificateHostnameMismatch(endpoint.baseUrl.host)
                     TrustPreflightRejection.CERTIFICATE_DATE_INVALID ->
-                        "The NanoKVM certificate is expired or not yet valid."
+                        ConnectionFailure.CertificateDateInvalid
                     TrustPreflightRejection.INSPECTION_FAILED ->
-                        "The NanoKVM TLS certificate could not be inspected: ${result.cause?.toUserMessage() ?: "unknown error"}"
+                        ConnectionFailure.CertificateInspectionFailed
                 }
                 TrustPreflightOutcome.Failed(
-                    userMessage = message,
+                    failure = failure,
                     retryable = result.reason == TrustPreflightRejection.INSPECTION_FAILED &&
                         rejectionCause != null &&
                         ReconnectFailure(rejectionCause).disposition() == ReconnectFailureDisposition.RETRY,
@@ -2239,6 +2490,8 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     private fun beginVideoCloseLocked(): CompletableFuture<Unit>? {
+        activeVideoListener?.invalidate()
+        activeVideoListener = null
         val oldVideo = video ?: return null
         video = null
         return oldVideo.closeAndAwaitDecoderRelease()
@@ -2250,13 +2503,7 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     private suspend fun cleanupSessionLocked(forgetClient: Boolean) {
-        mjpegFrameDetectionCoordinator.clear()
-        invalidatePhase3Gateway()
-        invalidateAdministrationGateway()
-        invalidateOperatorGateway()
-        invalidatePicoClawGateway()
-        invalidateAutomationGateway()
-        invalidateOfflineUpdateGateway()
+        invalidateSessionFeatureSet()
         applianceStatusMonitor?.cancel()
         applianceStatusMonitor = null
         inputMonitor?.cancel()
@@ -2268,8 +2515,10 @@ class NanoKvmConsoleBackend internal constructor(
             if (forgetClient) authenticatedSession = null
             detachedInput to detachedSession
         }
-        releaseAllInputNow(oldInput)
-        oldInput?.close()
+        if (oldInput != null) {
+            releaseAllInputNow(oldInput)
+            oldInput.close()
+        }
         val decoderRelease = beginVideoCloseLocked()
         if (forgetClient) {
             oldSession?.close()
@@ -2299,6 +2548,36 @@ class NanoKvmConsoleBackend internal constructor(
                 currentBinding = ::currentPhase3Binding,
             )
         }
+    }
+
+    /**
+     * The complete authenticated-session feature inventory. Keeping installation in one place
+     * prevents reconnect and USB-input replacement paths from silently omitting a feature owner.
+     */
+    private fun installSessionFeatureSetLocked(
+        activeSession: AuthenticatedNanoKvmSession,
+        sessionGeneration: Long,
+    ) {
+        check(Thread.holdsLock(stateLock))
+        installPhase3GatewayLocked(activeSession, sessionGeneration)
+        installAdministrationGatewayLocked(activeSession, sessionGeneration)
+        installDeviceControlGatewayLocked(activeSession, sessionGeneration)
+        installOperatorGatewayLocked(activeSession, sessionGeneration)
+        installPicoClawGatewayLocked(activeSession, sessionGeneration)
+        installAutomationGatewayLocked(activeSession, sessionGeneration)
+        installOfflineUpdateGatewayLocked(activeSession, sessionGeneration)
+        mjpegFrameDetectionCoordinator.install(activeSession, sessionGeneration)
+    }
+
+    /** Invalidates the same feature inventory installed by [installSessionFeatureSetLocked]. */
+    private fun invalidateSessionFeatureSet() {
+        mjpegFrameDetectionCoordinator.clear()
+        invalidatePhase3Gateway()
+        invalidateAdministrationGateway()
+        invalidateOperatorGateway()
+        invalidatePicoClawGateway()
+        invalidateAutomationGateway()
+        invalidateOfflineUpdateGateway()
     }
 
     private fun installAdministrationGatewayLocked(
@@ -2374,6 +2653,18 @@ class NanoKvmConsoleBackend internal constructor(
         )
     }
 
+    /** Matches identity/generation after this failure has already closed command acceptance. */
+    private fun matchesAuthenticatedSessionBindingLocked(
+        binding: NanoKvmSessionBinding,
+    ): Boolean {
+        check(Thread.holdsLock(stateLock))
+        val activeSession = authenticatedSession ?: return false
+        return !closed &&
+            activeSession.profileId == binding.profileId &&
+            activeSession.authority == binding.authority &&
+            mutableSession.value.sessionGeneration == binding.sessionGeneration
+    }
+
     private fun isKnownUnsupportedCapability(
         binding: NanoKvmSessionBinding,
         capability: NanoKvmCapability,
@@ -2432,7 +2723,10 @@ class NanoKvmConsoleBackend internal constructor(
         if (!canLoad || binding == null || gateway == null) {
             if (administrationSurfaceVisible) {
                 rejectAdministrationUiCommand(
-                    "Connect to NanoKVM before opening administration settings.",
+                    AdministrationNotice.Guidance(
+                        AdministrationNotice.GuidanceReason
+                            .ConnectBeforeOpeningAdministration,
+                    ),
                 )
             }
             return
@@ -2572,8 +2866,9 @@ class NanoKvmConsoleBackend internal constructor(
         if (failedReads > 0) {
             publishAdministrationNotice(
                 binding,
-                AdministrationNoticeKind.Rejected,
-                "$failedReads administration section(s) could not be loaded. Refresh before making a related change.",
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.SectionsUnavailable(failedReads),
+                ),
             )
         }
     }
@@ -2616,13 +2911,20 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun beginDeviceControlAction(
         destination: ApprovedAdministrationDestination,
-        block: suspend (NanoKvmDeviceControlGateway, NanoKvmSessionBinding) -> Unit,
+        action: AdministrationNotice.Action,
+        block: suspend (
+            NanoKvmDeviceControlGateway,
+            NanoKvmSessionBinding,
+            AdministrationNotice.Action,
+        ) -> Unit,
     ) {
         val binding = currentDeviceControlBinding()
         val gateway = binding?.let(deviceControlLifecycle::resolve)
         if (binding == null || gateway == null || !destination.matches(binding)) {
             rejectAdministrationUiCommand(
-                "The authenticated NanoKVM destination changed. Review this action again.",
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.DestinationChangedReviewAction,
+                ),
             )
             return
         }
@@ -2639,19 +2941,24 @@ class NanoKvmConsoleBackend internal constructor(
                         if (currentDeviceControlBinding() != binding) {
                             publishAdministrationNotice(
                                 binding,
-                                AdministrationNoticeKind.Rejected,
-                                "The authenticated destination changed before the action was sent.",
+                                AdministrationNotice.Guidance(
+                                    AdministrationNotice.GuidanceReason
+                                        .DestinationChangedBeforeSend,
+                                ),
                             )
                             return@launch
                         }
-                        block(gateway, binding)
+                        block(gateway, binding, action)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Throwable) {
                         publishAdministrationNotice(
                             binding,
-                            AdministrationNoticeKind.Indeterminate,
-                            "The final state is unknown. The action was not retried; refresh before deciding whether to repeat it.",
+                            AdministrationNotice.ActionOutcome(
+                                action = action,
+                                outcome = AdministrationNotice.Outcome.Indeterminate,
+                                followUp = AdministrationNotice.FollowUp.RefreshBeforeRepeating,
+                            ),
                         )
                     } finally {
                         synchronized(stateLock) {
@@ -2669,7 +2976,11 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!accepted) {
-            rejectAdministrationUiCommand("Another administration operation is still running.")
+            rejectAdministrationUiCommand(
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.AnotherOperationRunning,
+                ),
+            )
             return
         }
         updateAdministrationIfCurrent(binding) {
@@ -2681,45 +2992,57 @@ class NanoKvmConsoleBackend internal constructor(
     private fun <State> publishDeviceControlMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmDeviceControlMutationResult<State>,
-        appliedMessage: String,
+        action: AdministrationNotice.Action,
         publishState: (AdministrationUiState, State) -> AdministrationUiState,
     ) {
         deviceControlMutationState(result)?.let { state ->
             updateAdministrationIfCurrent(binding) { publishState(it, state) }
         }
-        val kind = when (result) {
-            is NanoKvmDeviceControlMutationResult.Applied,
-            is NanoKvmDeviceControlMutationResult.AlreadySatisfied,
-            NanoKvmDeviceControlMutationResult.DisruptiveCommandAccepted ->
-                AdministrationNoticeKind.Applied
-            is NanoKvmDeviceControlMutationResult.Reconciled ->
-                AdministrationNoticeKind.Reconciled
-            is NanoKvmDeviceControlMutationResult.Accepted,
-            is NanoKvmDeviceControlMutationResult.Indeterminate ->
-                AdministrationNoticeKind.Indeterminate
-            is NanoKvmDeviceControlMutationResult.Rejected ->
-                AdministrationNoticeKind.Rejected
-        }
-        val message = when (result) {
-            is NanoKvmDeviceControlMutationResult.Applied -> appliedMessage
+        val notice = when (result) {
+            is NanoKvmDeviceControlMutationResult.Applied ->
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.Applied,
+                )
             is NanoKvmDeviceControlMutationResult.AlreadySatisfied ->
-                "The appliance already reported the requested value; no mutation was sent."
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.AlreadySatisfied,
+                )
             is NanoKvmDeviceControlMutationResult.Accepted ->
-                "NanoKVM acknowledged the request, but readback did not confirm it. The action was not retried."
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.AcceptedWithoutConfirmation,
+                )
             is NanoKvmDeviceControlMutationResult.Reconciled -> if (
                 result.observation == NanoKvmDeviceControlObservation.DESIRED_STATE
             ) {
-                "The response was lost, but readback shows the requested value. The action was not replayed."
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.ReconciledToRequestedState,
+                )
             } else {
-                "The response was ambiguous and readback shows another value. The action was not replayed."
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.ReconciledToDifferentState,
+                )
             }
             is NanoKvmDeviceControlMutationResult.Indeterminate ->
-                "The final state is unknown. The action was not retried; refresh before repeating it."
-            is NanoKvmDeviceControlMutationResult.Rejected ->
-                deviceControlErrorMessage(binding, result.error)
-            NanoKvmDeviceControlMutationResult.DisruptiveCommandAccepted -> appliedMessage
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.Indeterminate,
+                    followUp = AdministrationNotice.FollowUp.RefreshBeforeRepeating,
+                )
+            is NanoKvmDeviceControlMutationResult.Rejected -> AdministrationNotice.Error(
+                deviceControlFailure(binding, result.error),
+            )
+            NanoKvmDeviceControlMutationResult.DisruptiveCommandAccepted ->
+                AdministrationNotice.ActionOutcome(
+                    action = action,
+                    outcome = AdministrationNotice.Outcome.DisruptiveCommandAccepted,
+                )
         }
-        publishAdministrationNotice(binding, kind, message)
+        publishAdministrationNotice(binding, notice)
     }
 
     private fun <State> deviceControlMutationState(
@@ -2734,30 +3057,30 @@ class NanoKvmConsoleBackend internal constructor(
         NanoKvmDeviceControlMutationResult.DisruptiveCommandAccepted -> null
     }
 
-    private fun deviceControlErrorMessage(
+    private fun deviceControlFailure(
         binding: NanoKvmSessionBinding,
         error: NanoKvmDeviceControlError,
-    ): String {
+    ): AdministrationNotice.Failure {
         if (error.kind == NanoKvmDeviceControlError.Kind.AUTHENTICATION_EXPIRED) {
             expireAuthenticatedSession(binding)
         }
         return when (error.kind) {
             NanoKvmDeviceControlError.Kind.SESSION_CHANGED ->
-                "The authenticated destination changed. Reopen administration and try again."
+                AdministrationNotice.Failure.SessionChanged
             NanoKvmDeviceControlError.Kind.INVALID_REQUEST ->
-                "That value is not a writable NanoKVM 2.4.3 preset. Refresh before trying again."
+                AdministrationNotice.Failure.InvalidPreset
             NanoKvmDeviceControlError.Kind.UNSUPPORTED ->
-                "This control is not available on the connected NanoKVM."
+                AdministrationNotice.Failure.Unsupported
             NanoKvmDeviceControlError.Kind.AUTHENTICATION_EXPIRED ->
-                "The NanoKVM login expired. Reconnect before trying again."
+                AdministrationNotice.Failure.AuthenticationExpired
             NanoKvmDeviceControlError.Kind.CONNECTION ->
-                "The response was not established. Nothing was replayed; refresh to verify state."
+                AdministrationNotice.Failure.Connection
             NanoKvmDeviceControlError.Kind.SERVER_REJECTED ->
-                "NanoKVM rejected the request. Refresh before choosing another value."
+                AdministrationNotice.Failure.ServerRejected
             NanoKvmDeviceControlError.Kind.INVALID_RESPONSE ->
-                "NanoKVM returned an unexpected response. This control is unavailable until refresh succeeds."
+                AdministrationNotice.Failure.ControlInvalidResponse
             NanoKvmDeviceControlError.Kind.UNEXPECTED ->
-                "The operation could not be established. It was not retried."
+                AdministrationNotice.Failure.Unexpected
         }
     }
 
@@ -2773,10 +3096,12 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun beginAdministrationAction(
         destination: ApprovedAdministrationDestination,
+        action: AdministrationNotice.Action,
         onCompletion: () -> Unit = {},
         block: suspend (
             NanoKvmAdministrationGateway,
             NanoKvmSessionBinding,
+            AdministrationNotice.Action,
         ) -> AdministrationReconnectMode?,
     ) {
         val binding = currentAdministrationBinding()
@@ -2784,7 +3109,9 @@ class NanoKvmConsoleBackend internal constructor(
         if (binding == null || gateway == null || !destination.matches(binding)) {
             onCompletion()
             rejectAdministrationUiCommand(
-                "The authenticated NanoKVM destination changed. Review this action again.",
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.DestinationChangedReviewAction,
+                ),
             )
             return
         }
@@ -2802,19 +3129,25 @@ class NanoKvmConsoleBackend internal constructor(
                         if (currentAdministrationBinding() != binding) {
                             publishAdministrationNotice(
                                 binding,
-                                AdministrationNoticeKind.Rejected,
-                                "The authenticated destination changed before the action was sent.",
+                                AdministrationNotice.Guidance(
+                                    AdministrationNotice.GuidanceReason
+                                        .DestinationChangedBeforeSend,
+                                ),
                             )
                             return@launch
                         }
-                        reconnectMode = block(gateway, binding)
+                        reconnectMode = block(gateway, binding, action)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Throwable) {
                         publishAdministrationNotice(
                             binding,
-                            AdministrationNoticeKind.Indeterminate,
-                            "The final state is unknown. The action was not retried; reconnect and verify before repeating it.",
+                            AdministrationNotice.ActionOutcome(
+                                action = action,
+                                outcome = AdministrationNotice.Outcome.Indeterminate,
+                                followUp = AdministrationNotice.FollowUp
+                                    .ReconnectAndVerifyBeforeRepeating,
+                            ),
                         )
                     } finally {
                         synchronized(stateLock) {
@@ -2845,7 +3178,11 @@ class NanoKvmConsoleBackend internal constructor(
         }
         if (!accepted) {
             onCompletion()
-            rejectAdministrationUiCommand("Another administration operation is still running.")
+            rejectAdministrationUiCommand(
+                AdministrationNotice.Guidance(
+                    AdministrationNotice.GuidanceReason.AnotherOperationRunning,
+                ),
+            )
             return
         }
         updateAdministrationIfCurrent(binding) {
@@ -2857,6 +3194,7 @@ class NanoKvmConsoleBackend internal constructor(
     private fun <State> publishAdministrationMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmAdministrationMutationResult<State>,
+        action: AdministrationNotice.Action,
         publishState: (AdministrationUiState, State) -> AdministrationUiState,
     ): AdministrationReconnectMode? {
         administrationMutationState(result)?.let { state ->
@@ -2864,8 +3202,7 @@ class NanoKvmConsoleBackend internal constructor(
         }
         publishAdministrationNotice(
             binding,
-            result.toNoticeKind(),
-            administrationMutationMessage(binding, result),
+            administrationMutationNotice(binding, result, action),
         )
         return result.reconnectMode()
     }
@@ -2883,62 +3220,81 @@ class NanoKvmConsoleBackend internal constructor(
         is NanoKvmAdministrationMutationResult.DisruptiveCommandAccepted -> null
     }
 
-    private fun NanoKvmAdministrationMutationResult<*>.toNoticeKind():
-        AdministrationNoticeKind = when (this) {
-        is NanoKvmAdministrationMutationResult.Applied,
-        is NanoKvmAdministrationMutationResult.AlreadySatisfied,
-        is NanoKvmAdministrationMutationResult.DisruptiveCommandAccepted,
-        NanoKvmAdministrationMutationResult.CredentialsChanged -> AdministrationNoticeKind.Applied
-        is NanoKvmAdministrationMutationResult.Accepted -> AdministrationNoticeKind.Indeterminate
-        is NanoKvmAdministrationMutationResult.Reconciled -> AdministrationNoticeKind.Reconciled
-        is NanoKvmAdministrationMutationResult.Indeterminate ->
-            AdministrationNoticeKind.Indeterminate
-        is NanoKvmAdministrationMutationResult.Rejected -> AdministrationNoticeKind.Rejected
-    }
-
-    private fun administrationMutationMessage(
+    private fun administrationMutationNotice(
         binding: NanoKvmSessionBinding,
         result: NanoKvmAdministrationMutationResult<*>,
-    ): String = when (result) {
+        action: AdministrationNotice.Action,
+    ): AdministrationNotice = when (result) {
         is NanoKvmAdministrationMutationResult.Applied ->
-            "Applied and confirmed by authoritative readback.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.Applied,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
         is NanoKvmAdministrationMutationResult.AlreadySatisfied ->
-            "The appliance already reported the requested value; no mutation was sent."
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.AlreadySatisfied,
+            )
         is NanoKvmAdministrationMutationResult.Accepted ->
-            "The appliance acknowledged the request, but readback did not confirm the requested value. The action was not retried.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.AcceptedWithoutConfirmation,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
         is NanoKvmAdministrationMutationResult.Reconciled -> if (
             result.observation == NanoKvmAdministrationObservation.DESIRED_STATE
         ) {
-            "The response was lost, but authoritative readback shows the requested value. The action was not replayed.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.ReconciledToRequestedState,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
         } else {
-            "The response was ambiguous and readback shows another value. The action was not replayed.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.ReconciledToDifferentState,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
         }
         is NanoKvmAdministrationMutationResult.Indeterminate ->
-            "The final state is unknown. The action was not retried.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.Indeterminate,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
         is NanoKvmAdministrationMutationResult.Rejected ->
-            administrationErrorMessage(binding, result.error)
+            AdministrationNotice.Error(administrationFailure(binding, result.error))
         NanoKvmAdministrationMutationResult.CredentialsChanged ->
-            "Credentials changed. The saved credential must be replaced and this session ended."
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.CredentialsChanged,
+            )
         is NanoKvmAdministrationMutationResult.DisruptiveCommandAccepted ->
-            "The appliance acknowledged the one-shot command.${result.guidance.suffix()}"
+            AdministrationNotice.ActionOutcome(
+                action = action,
+                outcome = AdministrationNotice.Outcome.DisruptiveCommandAccepted,
+                followUp = result.guidance.toNoticeFollowUp(),
+            )
     }
 
-    private fun NanoKvmAdministrationGuidance.suffix(): String = when (this) {
-        NanoKvmAdministrationGuidance.NONE -> ""
+    private fun NanoKvmAdministrationGuidance.toNoticeFollowUp():
+        AdministrationNotice.FollowUp = when (this) {
+        NanoKvmAdministrationGuidance.NONE -> AdministrationNotice.FollowUp.None
         NanoKvmAdministrationGuidance.REFRESH_AUTHORITATIVE_STATE ->
-            " Refresh authoritative state before another change."
+            AdministrationNotice.FollowUp.RefreshAuthoritativeState
         NanoKvmAdministrationGuidance.REVIEW_AUTHORITATIVE_STATE ->
-            " Review the authoritative state before another change."
+            AdministrationNotice.FollowUp.ReviewAuthoritativeState
         NanoKvmAdministrationGuidance.RECONNECT_AND_REFRESH ->
-            " The app will reconnect and refresh."
+            AdministrationNotice.FollowUp.ReconnectAndRefresh
         NanoKvmAdministrationGuidance.REDISCOVER_AND_RECONNECT ->
-            " The app will reconnect; rediscover the appliance if its address changed."
+            AdministrationNotice.FollowUp.RediscoverAndReconnect
         NanoKvmAdministrationGuidance.WAIT_FOR_REBOOT_AND_RECONNECT ->
-            " The app will wait for the appliance and reconnect."
+            AdministrationNotice.FollowUp.WaitForRebootAndReconnect
         NanoKvmAdministrationGuidance.CLEAR_SAVED_CREDENTIAL_AND_END_SESSION ->
-            " Remove any stale saved credential and end this session."
+            AdministrationNotice.FollowUp.ClearSavedCredentialAndEndSession
         NanoKvmAdministrationGuidance.VERIFY_NEW_CREDENTIALS_AFTER_RECONNECT ->
-            " Reconnect manually and verify which credentials are active."
+            AdministrationNotice.FollowUp.VerifyNewCredentialsAfterReconnect
     }
 
     private fun NanoKvmAdministrationMutationResult<*>.reconnectMode():
@@ -2958,30 +3314,30 @@ class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    private fun administrationErrorMessage(
+    private fun administrationFailure(
         binding: NanoKvmSessionBinding,
         error: NanoKvmAdministrationError,
-    ): String {
+    ): AdministrationNotice.Failure {
         if (error.kind == NanoKvmAdministrationError.Kind.AUTHENTICATION_EXPIRED) {
             expireAuthenticatedSession(binding)
         }
         return when (error.kind) {
             NanoKvmAdministrationError.Kind.SESSION_CHANGED ->
-                "The authenticated destination changed. Reopen administration and try again."
+                AdministrationNotice.Failure.SessionChanged
             NanoKvmAdministrationError.Kind.INVALID_REQUEST ->
-                "The requested value is invalid. Check it and review the action again."
+                AdministrationNotice.Failure.InvalidRequest
             NanoKvmAdministrationError.Kind.UNSUPPORTED ->
-                "This setting is not supported by the connected NanoKVM hardware."
+                AdministrationNotice.Failure.Unsupported
             NanoKvmAdministrationError.Kind.AUTHENTICATION_EXPIRED ->
-                "The NanoKVM login expired. Reconnect before trying again."
+                AdministrationNotice.Failure.AuthenticationExpired
             NanoKvmAdministrationError.Kind.CONNECTION ->
-                "The response was not established. No request was replayed; refresh to verify state."
+                AdministrationNotice.Failure.Connection
             NanoKvmAdministrationError.Kind.SERVER_REJECTED ->
-                "NanoKVM rejected the request. Refresh before choosing another value."
+                AdministrationNotice.Failure.ServerRejected
             NanoKvmAdministrationError.Kind.INVALID_RESPONSE ->
-                "NanoKVM returned an unexpected response. Refresh to verify state."
+                AdministrationNotice.Failure.InvalidResponse
             NanoKvmAdministrationError.Kind.UNEXPECTED ->
-                "The operation could not be established. It was not retried."
+                AdministrationNotice.Failure.Unexpected
         }
     }
 
@@ -2997,23 +3353,39 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun publishAdministrationNotice(
         binding: NanoKvmSessionBinding,
-        kind: AdministrationNoticeKind,
-        message: String,
+        notice: AdministrationNotice,
     ) {
         updateAdministrationIfCurrent(binding) {
-            it.copy(notice = AdministrationNoticeUiState(kind, message))
+            it.copy(notice = notice)
         }
     }
 
-    private fun rejectAdministrationUiCommand(message: String) {
+    private fun newAdministrationHttpsNavigationRequest(
+        binding: NanoKvmSessionBinding,
+        value: String,
+    ): PendingAdministrationHttpsNavigationRequest {
+        val requestId = synchronized(stateLock) {
+            administrationNavigationRequestCounter =
+                if (administrationNavigationRequestCounter == Long.MAX_VALUE) {
+                    1L
+                } else {
+                    administrationNavigationRequestCounter + 1L
+                }
+            administrationNavigationRequestCounter
+        }
+        return PendingAdministrationHttpsNavigationRequest(
+            requestId = requestId,
+            profileId = binding.profileId,
+            authority = binding.authority,
+            sessionGeneration = binding.sessionGeneration,
+            value = value,
+        )
+    }
+
+    private fun rejectAdministrationUiCommand(notice: AdministrationNotice) {
         mutableSession.update { current ->
             current.copy(
-                administration = current.administration.copy(
-                    notice = AdministrationNoticeUiState(
-                        AdministrationNoticeKind.Rejected,
-                        message,
-                    ),
-                ),
+                administration = current.administration.copy(notice = notice),
             )
         }
     }
@@ -3090,7 +3462,11 @@ class NanoKvmConsoleBackend internal constructor(
         val gateway = if (canLoad) binding?.let(operatorLifecycle::resolve) else null
         if (!canLoad || binding == null || gateway == null) {
             if (operatorSurfaceVisible) {
-                rejectOperatorUiCommand("Connect to NanoKVM before opening operator tools.")
+                rejectOperatorUiCommand(
+                    OperatorNotice.Guidance(
+                        OperatorNotice.GuidanceReason.ConnectBeforeOpeningTools,
+                    ),
+                )
             }
             return
         }
@@ -3127,9 +3503,8 @@ class NanoKvmConsoleBackend internal constructor(
                                 is NanoKvmOperatorTerminalState.Failed -> current.copy(
                                     terminalPhase = OperatorTerminalUiPhase.Failed,
                                     serialActive = false,
-                                    notice = OperatorNoticeUiState(
-                                        OperatorNoticeKind.Rejected,
-                                        operatorErrorMessage(binding, terminalState.error),
+                                    notice = OperatorNotice.Error(
+                                        operatorFailure(binding, terminalState.error),
                                     ),
                                 )
                             }
@@ -3161,7 +3536,11 @@ class NanoKvmConsoleBackend internal constructor(
         val gateway = binding?.let(operatorLifecycle::resolve)
         if (binding == null || gateway == null) {
             if (operatorSurfaceVisible) {
-                rejectOperatorUiCommand("The operator session is no longer current.")
+                rejectOperatorUiCommand(
+                    OperatorNotice.Guidance(
+                        OperatorNotice.GuidanceReason.SessionNoLongerCurrent,
+                    ),
+                )
             }
             return
         }
@@ -3178,8 +3557,9 @@ class NanoKvmConsoleBackend internal constructor(
                             is NanoKvmOperatorScriptReadResult.Failure ->
                                 publishOperatorNotice(
                                     binding,
-                                    OperatorNoticeKind.Rejected,
-                                    operatorErrorMessage(binding, result.error),
+                                    OperatorNotice.Error(
+                                        operatorFailure(binding, result.error),
+                                    ),
                                 )
                         }
                     } finally {
@@ -3202,8 +3582,13 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun beginOperatorAction(
         destination: ApprovedOperatorDestination,
+        action: OperatorNotice.Action,
         onCompletion: () -> Unit = {},
-        block: suspend (NanoKvmOperatorGateway, NanoKvmSessionBinding) -> Unit,
+        block: suspend (
+            NanoKvmOperatorGateway,
+            NanoKvmSessionBinding,
+            OperatorNotice.Action,
+        ) -> Unit,
     ): Boolean {
         val selection = resolveOperatorGateway(destination) ?: return false
         val gateway = selection.first
@@ -3220,19 +3605,22 @@ class NanoKvmConsoleBackend internal constructor(
                         if (currentOperatorBinding() != binding) {
                             publishOperatorNotice(
                                 binding,
-                                OperatorNoticeKind.Rejected,
-                                "The authenticated destination changed before the action was sent.",
+                                OperatorNotice.Guidance(
+                                    OperatorNotice.GuidanceReason.DestinationChangedBeforeSend,
+                                ),
                             )
                             return@launch
                         }
-                        block(gateway, binding)
+                        block(gateway, binding, action)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Throwable) {
                         publishOperatorNotice(
                             binding,
-                            OperatorNoticeKind.Indeterminate,
-                            "The final state is unknown. The action was not retried; refresh before repeating it.",
+                            OperatorNotice.ActionOutcome(
+                                action = action,
+                                outcome = OperatorNotice.Outcome.Indeterminate,
+                            ),
                         )
                     } finally {
                         synchronized(stateLock) {
@@ -3249,7 +3637,9 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!accepted) {
-            rejectOperatorUiCommand("Another operator action is still running.")
+            rejectOperatorUiCommand(
+                OperatorNotice.Guidance(OperatorNotice.GuidanceReason.AnotherActionRunning),
+            )
             return false
         }
         updateOperatorIfCurrent(binding) {
@@ -3266,7 +3656,9 @@ class NanoKvmConsoleBackend internal constructor(
         val gateway = binding?.let(operatorLifecycle::resolve)
         if (binding == null || gateway == null || !destination.matches(binding)) {
             rejectOperatorUiCommand(
-                "The authenticated NanoKVM destination changed. Review this action again.",
+                OperatorNotice.Guidance(
+                    OperatorNotice.GuidanceReason.DestinationChangedReviewAction,
+                ),
             )
             return null
         }
@@ -3328,17 +3720,22 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishOperatorTerminalResult(
         binding: NanoKvmSessionBinding,
         result: NanoKvmOperatorActionResult,
-        successMessage: String,
+        action: OperatorNotice.Action,
         publishSuccessNotice: Boolean = true,
     ) {
         when (result) {
             NanoKvmOperatorActionResult.Dispatched -> if (publishSuccessNotice) {
-                publishOperatorNotice(binding, OperatorNoticeKind.Information, successMessage)
+                publishOperatorNotice(
+                    binding,
+                    OperatorNotice.ActionOutcome(
+                        action = action,
+                        outcome = OperatorNotice.Outcome.Dispatched,
+                    ),
+                )
             }
             is NanoKvmOperatorActionResult.Rejected -> publishOperatorNotice(
                 binding,
-                OperatorNoticeKind.Rejected,
-                operatorErrorMessage(binding, result.error),
+                OperatorNotice.Error(operatorFailure(binding, result.error)),
             )
         }
     }
@@ -3346,88 +3743,93 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishOperatorScriptResult(
         binding: NanoKvmSessionBinding,
         result: NanoKvmOperatorScriptCommandResult<*>,
-        operation: String,
+        action: OperatorNotice.Action,
     ) {
-        val warning = result.warnings.operatorWarningSuffix()
-        val (kind, message) = when (result) {
+        val warnings = result.warnings.toNoticeWarnings()
+        val notice = when (result) {
             is NanoKvmOperatorScriptCommandResult.Completed ->
-                OperatorNoticeKind.Applied to
-                    "Script $operation completed without replay.$warning"
+                OperatorNotice.ActionOutcome(
+                    action = action,
+                    outcome = OperatorNotice.Outcome.Completed,
+                    warnings = warnings,
+                )
             is NanoKvmOperatorScriptCommandResult.Reconciled -> if (
                 result.observation == NanoKvmScriptDeleteObservation.ABSENT
             ) {
-                OperatorNoticeKind.Reconciled to
-                    "The delete response was lost, but refresh shows the script absent. The action was not replayed.$warning"
+                OperatorNotice.ActionOutcome(
+                    action = action,
+                    outcome = OperatorNotice.Outcome.ReconciledAbsent,
+                    warnings = warnings,
+                )
             } else {
-                OperatorNoticeKind.Indeterminate to
-                    "The delete response was ambiguous and refresh still shows the script. The action was not replayed.$warning"
+                OperatorNotice.ActionOutcome(
+                    action = action,
+                    outcome = OperatorNotice.Outcome.ReconciledPresent,
+                    warnings = warnings,
+                )
             }
             is NanoKvmOperatorScriptCommandResult.Indeterminate ->
-                OperatorNoticeKind.Indeterminate to
-                    "The script $operation outcome is unknown. It was not retried; verify appliance state before repeating it.$warning"
-            is NanoKvmOperatorScriptCommandResult.Rejected ->
-                OperatorNoticeKind.Rejected to operatorErrorMessage(binding, result.error) + warning
+                OperatorNotice.ActionOutcome(
+                    action = action,
+                    outcome = OperatorNotice.Outcome.Indeterminate,
+                    warnings = warnings,
+                )
+            is NanoKvmOperatorScriptCommandResult.Rejected -> OperatorNotice.Error(
+                failure = operatorFailure(binding, result.error),
+                warnings = warnings,
+            )
         }
-        publishOperatorNotice(binding, kind, message)
+        publishOperatorNotice(binding, notice)
     }
 
-    private fun Set<NanoKvmScriptRunWarning>.operatorWarningSuffix(): String = buildString {
-        if (NanoKvmScriptRunWarning.FOREGROUND_REQUEST_CANCELLATION_DOES_NOT_STOP_PROCESS in this@operatorWarningSuffix) {
-            append(" Cancelling the request does not stop the process on NanoKVM 2.4.3.")
+    private fun Set<NanoKvmScriptRunWarning>.toNoticeWarnings(): Set<OperatorNotice.Warning> =
+        mapTo(mutableSetOf()) { warning ->
+            when (warning) {
+                NanoKvmScriptRunWarning.FOREGROUND_REQUEST_CANCELLATION_DOES_NOT_STOP_PROCESS ->
+                    OperatorNotice.Warning.ForegroundCancellationDoesNotStopProcess
+                NanoKvmScriptRunWarning.BACKGROUND_HAS_NO_STATUS_OR_CANCELLATION ->
+                    OperatorNotice.Warning.BackgroundHasNoStatusOrCancellation
+            }
         }
-        if (NanoKvmScriptRunWarning.BACKGROUND_HAS_NO_STATUS_OR_CANCELLATION in this@operatorWarningSuffix) {
-            append(" Background execution provides no PID, status, output stream, or cancellation handle.")
-        }
-    }
 
-    private fun operatorErrorMessage(
+    private fun operatorFailure(
         binding: NanoKvmSessionBinding,
         error: NanoKvmOperatorError,
-    ): String {
+    ): OperatorNotice.Failure {
         if (error.kind == NanoKvmOperatorError.Kind.AUTHENTICATION_EXPIRED) {
             expireAuthenticatedSession(binding)
         }
         return when (error.kind) {
-        NanoKvmOperatorError.Kind.SESSION_CHANGED ->
-            "The authenticated destination changed. Reopen operator tools and review the action."
-        NanoKvmOperatorError.Kind.NOT_FOREGROUND ->
-            "Operator tools are available only while this app is in the foreground."
-        NanoKvmOperatorError.Kind.ELEVATED_APPROVAL_REQUIRED ->
-            "A fresh explicit root-shell confirmation is required."
-        NanoKvmOperatorError.Kind.ALREADY_ACTIVE ->
-            "An operator action or terminal is already active."
-        NanoKvmOperatorError.Kind.NOT_CONNECTED ->
-            "The root terminal is not connected."
-        NanoKvmOperatorError.Kind.FOREIGN_OR_STALE_STATE ->
-            "The script catalog changed. Refresh it before choosing an action again."
-        NanoKvmOperatorError.Kind.INVALID_REQUEST ->
-            "The operator request is invalid. Review its typed values and limits."
-        NanoKvmOperatorError.Kind.AUTHENTICATION_EXPIRED ->
-            "The NanoKVM login expired. Reconnect before using operator tools."
-        NanoKvmOperatorError.Kind.CONNECTION ->
-            "The appliance response was not established. The action was not replayed."
-        NanoKvmOperatorError.Kind.SERVER_REJECTED ->
-            "NanoKVM rejected the operator action."
-        NanoKvmOperatorError.Kind.INVALID_RESPONSE ->
-            "NanoKVM returned an invalid operator response. The action was not replayed."
-        NanoKvmOperatorError.Kind.UNEXPECTED ->
-            "The operator outcome could not be established. The action was not replayed."
+            NanoKvmOperatorError.Kind.SESSION_CHANGED -> OperatorNotice.Failure.SessionChanged
+            NanoKvmOperatorError.Kind.NOT_FOREGROUND -> OperatorNotice.Failure.NotForeground
+            NanoKvmOperatorError.Kind.ELEVATED_APPROVAL_REQUIRED ->
+                OperatorNotice.Failure.ElevatedApprovalRequired
+            NanoKvmOperatorError.Kind.ALREADY_ACTIVE -> OperatorNotice.Failure.AlreadyActive
+            NanoKvmOperatorError.Kind.NOT_CONNECTED -> OperatorNotice.Failure.NotConnected
+            NanoKvmOperatorError.Kind.FOREIGN_OR_STALE_STATE ->
+                OperatorNotice.Failure.ForeignOrStaleState
+            NanoKvmOperatorError.Kind.INVALID_REQUEST -> OperatorNotice.Failure.InvalidRequest
+            NanoKvmOperatorError.Kind.AUTHENTICATION_EXPIRED ->
+                OperatorNotice.Failure.AuthenticationExpired
+            NanoKvmOperatorError.Kind.CONNECTION -> OperatorNotice.Failure.Connection
+            NanoKvmOperatorError.Kind.SERVER_REJECTED -> OperatorNotice.Failure.ServerRejected
+            NanoKvmOperatorError.Kind.INVALID_RESPONSE -> OperatorNotice.Failure.InvalidResponse
+            NanoKvmOperatorError.Kind.UNEXPECTED -> OperatorNotice.Failure.Unexpected
         }
     }
 
     private fun publishOperatorNotice(
         binding: NanoKvmSessionBinding,
-        kind: OperatorNoticeKind,
-        message: String,
+        notice: OperatorNotice,
     ) {
         updateOperatorIfCurrent(binding) {
-            it.copy(notice = OperatorNoticeUiState(kind, message))
+            it.copy(notice = notice)
         }
     }
 
-    private fun rejectOperatorUiCommand(message: String) {
+    private fun rejectOperatorUiCommand(notice: OperatorNotice) {
         mutableOperatorState.update {
-            it.copy(notice = OperatorNoticeUiState(OperatorNoticeKind.Rejected, message))
+            it.copy(notice = notice)
         }
     }
 
@@ -3626,7 +4028,11 @@ class NanoKvmConsoleBackend internal constructor(
                 picoClawSurfaceVisible &&
                 mutablePicoClawState.value.support != PicoClawSupport.Unsupported
             ) {
-                rejectPicoClawUiCommand("Connect to NanoKVM before opening PicoClaw.")
+                rejectPicoClawUiCommand(
+                    PicoClawNotice.Guidance(
+                        PicoClawNotice.GuidanceReason.ConnectBeforeOpeningFeature,
+                    ),
+                )
             }
             return
         }
@@ -3695,30 +4101,34 @@ class NanoKvmConsoleBackend internal constructor(
                                 appendPicoClawChatMessage(
                                     binding,
                                     PicoClawMessageUiState(
-                                        PicoClawMessageRole.Assistant,
-                                        event.text,
+                                        PicoClawMessageContent.ApplianceText(
+                                            PicoClawMessageRole.Assistant,
+                                            event.text,
+                                        ),
                                     ),
                                 )
                             is NanoKvmPicoClawChatEvent.Observation ->
                                 appendPicoClawChatMessage(
                                     binding,
                                     PicoClawMessageUiState(
-                                        PicoClawMessageRole.Observation,
-                                        event.text ?: "Screen observation captured.",
+                                        event.text?.let { text ->
+                                            PicoClawMessageContent.ApplianceText(
+                                                PicoClawMessageRole.Observation,
+                                                text,
+                                            )
+                                        } ?: PicoClawMessageContent.ScreenObservationCaptured,
                                     ),
                                 )
                             is NanoKvmPicoClawChatEvent.ToolAction ->
                                 appendPicoClawChatMessage(
                                     binding,
                                     PicoClawMessageUiState(
-                                        PicoClawMessageRole.Tool,
-                                        "Action: ${event.action}",
+                                        PicoClawMessageContent.ToolAction(event.action),
                                     ),
                                 )
                             NanoKvmPicoClawChatEvent.RemoteError -> publishPicoClawNotice(
                                 binding,
-                                PicoClawNoticeKind.Rejected,
-                                "PicoClaw reported a provider or runtime error.",
+                                PicoClawNotice.Error(PicoClawNotice.Failure.ProviderOrRuntime),
                             )
                             NanoKvmPicoClawChatEvent.TypingStarted,
                             NanoKvmPicoClawChatEvent.TypingStopped,
@@ -3732,6 +4142,7 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun beginPicoClawAction(
         destination: ApprovedPicoClawDestination,
+        action: PicoClawNotice.Action,
         onCompletion: () -> Unit = {},
         block: suspend (NanoKvmPicoClawFeatureGateway, NanoKvmSessionBinding) -> Unit,
     ): Boolean {
@@ -3747,7 +4158,9 @@ class NanoKvmConsoleBackend internal constructor(
                         releaseAllInputNow()
                         if (currentPicoClawBinding() != selection.second) {
                             rejectPicoClawUiCommand(
-                                "The authenticated destination changed before the PicoClaw action.",
+                                PicoClawNotice.Guidance(
+                                    PicoClawNotice.GuidanceReason.DestinationChangedBeforeAction,
+                                ),
                             )
                             return@launch
                         }
@@ -3757,8 +4170,10 @@ class NanoKvmConsoleBackend internal constructor(
                     } catch (_: Throwable) {
                         publishPicoClawNotice(
                             selection.second,
-                            PicoClawNoticeKind.Indeterminate,
-                            "The PicoClaw outcome is unknown. The action was not replayed.",
+                            PicoClawNotice.ActionOutcome(
+                                action = action,
+                                outcome = PicoClawNotice.Outcome.Indeterminate,
+                            ),
                         )
                     } finally {
                         synchronized(stateLock) {
@@ -3775,7 +4190,9 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!accepted) {
-            rejectPicoClawUiCommand("Another PicoClaw action is still running.")
+            rejectPicoClawUiCommand(
+                PicoClawNotice.Guidance(PicoClawNotice.GuidanceReason.AnotherActionRunning),
+            )
             return false
         }
         updatePicoClawIfCurrent(selection.second) {
@@ -3793,9 +4210,13 @@ class NanoKvmConsoleBackend internal constructor(
         if (binding == null || gateway == null || !destination.matches(binding)) {
             rejectPicoClawUiCommand(
                 if (mutablePicoClawState.value.support == PicoClawSupport.Unsupported) {
-                    "PicoClaw requires NanoKVM application 2.4.0 or newer."
+                    PicoClawNotice.Guidance(
+                        PicoClawNotice.GuidanceReason.UnsupportedApplicationVersion,
+                    )
                 } else {
-                    "The authenticated NanoKVM destination changed. Review this action again."
+                    PicoClawNotice.Guidance(
+                        PicoClawNotice.GuidanceReason.DestinationChangedReviewAction,
+                    )
                 },
             )
             return null
@@ -3845,47 +4266,58 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishPicoClawMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPicoClawMutationResult<NanoKvmPicoClawRuntimeSnapshot>,
-        appliedMessage: String,
+        action: PicoClawNotice.Action,
     ) {
         when (result) {
             is NanoKvmPicoClawMutationResult.Applied -> {
                 publishPicoClawRuntime(binding, result.state)
-                publishPicoClawNotice(binding, PicoClawNoticeKind.Applied, appliedMessage)
+                publishPicoClawNotice(
+                    binding,
+                    PicoClawNotice.ActionOutcome(action, PicoClawNotice.Outcome.Applied),
+                )
             }
             is NanoKvmPicoClawMutationResult.AlreadySatisfied -> {
                 publishPicoClawRuntime(binding, result.state)
                 publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Information,
-                    "PicoClaw already matched the requested state; nothing was sent.",
+                    PicoClawNotice.ActionOutcome(
+                        action,
+                        PicoClawNotice.Outcome.AlreadySatisfied,
+                    ),
                 )
             }
             is NanoKvmPicoClawMutationResult.Accepted -> {
                 result.state?.let { publishPicoClawRuntime(binding, it) }
                 publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "NanoKVM accepted the action, but final status is not confirmed.",
+                    PicoClawNotice.ActionOutcome(
+                        action,
+                        PicoClawNotice.Outcome.AcceptedWithoutConfirmation,
+                    ),
                 )
             }
             is NanoKvmPicoClawMutationResult.Reconciled -> {
                 publishPicoClawRuntime(binding, result.state)
                 publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Reconciled,
-                    if (result.observation == NanoKvmPicoClawRuntimeObservation.DESIRED_STATE) {
-                        "The response was lost, but authoritative status confirmed the requested state."
-                    } else {
-                        "The response was lost and status differs. The action was not replayed."
-                    },
+                    PicoClawNotice.ActionOutcome(
+                        action = action,
+                        outcome = if (
+                            result.observation ==
+                            NanoKvmPicoClawRuntimeObservation.DESIRED_STATE
+                        ) {
+                            PicoClawNotice.Outcome.ReconciledToRequestedState
+                        } else {
+                            PicoClawNotice.Outcome.ReconciledToDifferentState
+                        },
+                    ),
                 )
             }
             is NanoKvmPicoClawMutationResult.Indeterminate -> {
                 result.state?.let { publishPicoClawRuntime(binding, it) }
                 publishPicoClawNotice(
                     binding,
-                    PicoClawNoticeKind.Indeterminate,
-                    "The final PicoClaw state is unknown. The action was sent once and not replayed.",
+                    PicoClawNotice.ActionOutcome(action, PicoClawNotice.Outcome.Indeterminate),
                 )
             }
             is NanoKvmPicoClawMutationResult.Rejected ->
@@ -3920,13 +4352,13 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishPicoClawChatAction(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPicoClawChatActionResult,
-        successMessage: String,
+        action: PicoClawNotice.Action,
     ) {
         when (result) {
-            NanoKvmPicoClawChatActionResult.Dispatched -> publishPicoClawNotice(
+            NanoKvmPicoClawChatActionResult.Dispatched,
+            is NanoKvmPicoClawChatActionResult.MessageDispatched -> publishPicoClawNotice(
                 binding,
-                PicoClawNoticeKind.Information,
-                successMessage,
+                PicoClawNotice.ActionOutcome(action, PicoClawNotice.Outcome.Dispatched),
             )
             is NanoKvmPicoClawChatActionResult.Rejected ->
                 publishPicoClawError(binding, result.error)
@@ -3942,45 +4374,42 @@ class NanoKvmConsoleBackend internal constructor(
         }
         publishPicoClawNotice(
             binding,
-            PicoClawNoticeKind.Rejected,
-            when (error.kind) {
-            NanoKvmPicoClawError.Kind.SESSION_CHANGED ->
-                "The authenticated destination changed. Review the action again."
-            NanoKvmPicoClawError.Kind.FEATURE_ENTRY_REQUIRED ->
-                "Review and accept the PicoClaw control warning before using this feature."
-            NanoKvmPicoClawError.Kind.APPROVAL_REQUIRED ->
-                "This PicoClaw action requires a new explicit confirmation."
-            NanoKvmPicoClawError.Kind.ALREADY_ACTIVE -> "A PicoClaw chat is already active."
-            NanoKvmPicoClawError.Kind.NOT_CONNECTED -> "PicoClaw chat is not connected."
-            NanoKvmPicoClawError.Kind.FOREIGN_OR_STALE_STATE ->
-                "Refresh PicoClaw before using this stale item."
-            NanoKvmPicoClawError.Kind.INVALID_REQUEST -> "The PicoClaw request is invalid."
-            NanoKvmPicoClawError.Kind.AUTHENTICATION_EXPIRED ->
-                "NanoKVM authentication expired. Reconnect before using PicoClaw."
-            NanoKvmPicoClawError.Kind.CONNECTION ->
-                "The PicoClaw response was lost. No mutation was replayed."
-            NanoKvmPicoClawError.Kind.SERVER_REJECTED -> "NanoKVM rejected the PicoClaw action."
-            NanoKvmPicoClawError.Kind.INVALID_RESPONSE ->
-                "NanoKVM returned an invalid PicoClaw response. Nothing was replayed."
-            NanoKvmPicoClawError.Kind.UNEXPECTED ->
-                "The PicoClaw outcome could not be established. Nothing was replayed."
-            },
+            PicoClawNotice.Error(picoClawFailure(error)),
         )
     }
 
+    private fun picoClawFailure(error: NanoKvmPicoClawError): PicoClawNotice.Failure =
+        when (error.kind) {
+            NanoKvmPicoClawError.Kind.SESSION_CHANGED -> PicoClawNotice.Failure.SessionChanged
+            NanoKvmPicoClawError.Kind.FEATURE_ENTRY_REQUIRED ->
+                PicoClawNotice.Failure.FeatureEntryRequired
+            NanoKvmPicoClawError.Kind.APPROVAL_REQUIRED ->
+                PicoClawNotice.Failure.ApprovalRequired
+            NanoKvmPicoClawError.Kind.ALREADY_ACTIVE -> PicoClawNotice.Failure.AlreadyActive
+            NanoKvmPicoClawError.Kind.NOT_CONNECTED -> PicoClawNotice.Failure.NotConnected
+            NanoKvmPicoClawError.Kind.FOREIGN_OR_STALE_STATE ->
+                PicoClawNotice.Failure.ForeignOrStaleState
+            NanoKvmPicoClawError.Kind.INVALID_REQUEST -> PicoClawNotice.Failure.InvalidRequest
+            NanoKvmPicoClawError.Kind.AUTHENTICATION_EXPIRED ->
+                PicoClawNotice.Failure.AuthenticationExpired
+            NanoKvmPicoClawError.Kind.CONNECTION -> PicoClawNotice.Failure.Connection
+            NanoKvmPicoClawError.Kind.SERVER_REJECTED -> PicoClawNotice.Failure.ServerRejected
+            NanoKvmPicoClawError.Kind.INVALID_RESPONSE -> PicoClawNotice.Failure.InvalidResponse
+            NanoKvmPicoClawError.Kind.UNEXPECTED -> PicoClawNotice.Failure.Unexpected
+        }
+
     private fun publishPicoClawNotice(
         binding: NanoKvmSessionBinding,
-        kind: PicoClawNoticeKind,
-        message: String,
+        notice: PicoClawNotice,
     ) {
         updatePicoClawIfCurrent(binding) {
-            it.copy(notice = PicoClawNoticeUiState(kind, message.take(512)))
+            it.copy(notice = notice)
         }
     }
 
-    private fun rejectPicoClawUiCommand(message: String) {
+    private fun rejectPicoClawUiCommand(notice: PicoClawNotice) {
         mutablePicoClawState.update {
-            it.copy(notice = PicoClawNoticeUiState(PicoClawNoticeKind.Rejected, message.take(512)))
+            it.copy(notice = notice)
         }
     }
 
@@ -4020,7 +4449,11 @@ class NanoKvmConsoleBackend internal constructor(
         val gateway = binding?.let(phase3Lifecycle::resolve)
         if (!phase3SurfaceVisible || binding == null || gateway == null) {
             if (phase3SurfaceVisible) {
-                rejectPhase3UiCommand("Connect to NanoKVM before opening appliance features.")
+                rejectPhase3UiCommand(
+                    Phase3Notice.Guidance(
+                        Phase3Notice.GuidanceReason.ConnectBeforeOpeningFeatures,
+                    ),
+                )
             }
             return
         }
@@ -4111,6 +4544,7 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun beginPhase3Action(
         destination: ApprovedPhase3Destination,
+        action: Phase3Notice.Action,
         releaseInput: Boolean,
         noticeScope: Phase3NoticeScope,
         block: suspend (NanoKvmPhase3FeatureGateway, NanoKvmSessionBinding) -> Unit,
@@ -4121,7 +4555,7 @@ class NanoKvmConsoleBackend internal constructor(
             Phase3TransferPhase.InProgress
         ) {
             rejectPhase3UiCommand(
-                "Wait for the current image transfer to finish before changing virtual media.",
+                Phase3Notice.Guidance(Phase3Notice.GuidanceReason.WaitForImageTransfer),
                 noticeScope,
             )
             return
@@ -4130,7 +4564,9 @@ class NanoKvmConsoleBackend internal constructor(
         val gateway = binding?.let(phase3Lifecycle::resolve)
         if (binding == null || gateway == null || !destination.matches(binding)) {
             rejectPhase3UiCommand(
-                "The NanoKVM session changed. Review this action again.",
+                Phase3Notice.Guidance(
+                    Phase3Notice.GuidanceReason.ReviewActionAfterSessionChange,
+                ),
                 noticeScope,
             )
             return
@@ -4148,7 +4584,9 @@ class NanoKvmConsoleBackend internal constructor(
                         if (currentPhase3Binding() != binding) {
                             publishPhase3Notice(
                                 binding,
-                                "The NanoKVM session changed before the action was sent.",
+                                Phase3Notice.Guidance(
+                                    Phase3Notice.GuidanceReason.SessionChangedBeforeSend,
+                                ),
                                 noticeScope,
                             )
                             return@launch
@@ -4159,7 +4597,10 @@ class NanoKvmConsoleBackend internal constructor(
                     } catch (_: Throwable) {
                         publishPhase3Notice(
                             binding,
-                            "The final state is unknown. The action was not retried; refresh before deciding whether to repeat it.",
+                            Phase3Notice.ActionOutcome(
+                                action = action,
+                                outcome = Phase3Notice.Outcome.Indeterminate,
+                            ),
                             noticeScope,
                         )
                     } finally {
@@ -4174,7 +4615,10 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!accepted) {
-            rejectPhase3UiCommand("Another appliance action is still running.", noticeScope)
+            rejectPhase3UiCommand(
+                Phase3Notice.Guidance(Phase3Notice.GuidanceReason.ActionAlreadyRunning),
+                noticeScope,
+            )
             return
         }
         updatePhase3IfCurrent(binding) {
@@ -4223,7 +4667,10 @@ class NanoKvmConsoleBackend internal constructor(
                                                     publishMedia(binding, media.state)
                                                     publishPhase3Notice(
                                                         binding,
-                                                        "Image transfer is no longer in progress; the media list was refreshed. NanoKVM does not expose final checksum verification.",
+                                                        Phase3Notice.Guidance(
+                                                            Phase3Notice.GuidanceReason
+                                                                .TransferFinishedWithoutChecksum,
+                                                        ),
                                                         Phase3NoticeScope.VirtualMedia,
                                                     )
                                                 }
@@ -4237,7 +4684,10 @@ class NanoKvmConsoleBackend internal constructor(
                                         } else {
                                             publishPhase3Notice(
                                                 binding,
-                                                "NanoKVM reported an unexpected image-transfer state. The request was not repeated; refresh before taking another action.",
+                                                Phase3Notice.Guidance(
+                                                    Phase3Notice.GuidanceReason
+                                                        .UnexpectedTransferState,
+                                                ),
                                                 Phase3NoticeScope.VirtualMedia,
                                             )
                                         }
@@ -4374,13 +4824,13 @@ class NanoKvmConsoleBackend internal constructor(
     private suspend fun publishUsbMediaResult(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmMediaCatalog>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         if (!result.requiresInputRecycleAfterUsbMutation()) {
-            publishMediaMutation(binding, result, appliedMessage)
+            publishMediaMutation(binding, result, action)
             return
         }
-        val message = phase3MutationMessage(binding, result, appliedMessage)
+        val notice = phase3MutationNotice(binding, result, action)
         val rebound = recyclePhase3InputAfterUsbMutation(binding) ?: return
         var readbackConfirmed = true
         when (val refreshed = rebound.gateway.refreshMedia()) {
@@ -4407,11 +4857,13 @@ class NanoKvmConsoleBackend internal constructor(
         }
         publishPhase3Notice(
             rebound.binding,
-            if (readbackConfirmed) {
-                "$message Input control reconnected."
-            } else {
-                "$message Input control reconnected, but post-reset state could not be fully read. Refresh before repeating the action."
-            },
+            notice.withInputRecovery(
+                if (readbackConfirmed) {
+                    Phase3Notice.InputRecovery.Reconnected
+                } else {
+                    Phase3Notice.InputRecovery.ReconnectedWithPartialReadback
+                },
+            ),
             Phase3NoticeScope.VirtualMedia,
         )
         updatePhase3IfCurrent(rebound.binding) { it.copy(operationInProgress = false) }
@@ -4420,13 +4872,13 @@ class NanoKvmConsoleBackend internal constructor(
     private suspend fun publishUsbHidModeResult(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmHidModeSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         if (!result.requiresInputRecycleAfterUsbMutation()) {
-            publishHidModeMutation(binding, result, appliedMessage)
+            publishHidModeMutation(binding, result, action)
             return
         }
-        val message = phase3MutationMessage(binding, result, appliedMessage)
+        val notice = phase3MutationNotice(binding, result, action)
         val rebound = recyclePhase3InputAfterUsbMutation(binding) ?: return
         var readbackConfirmed = true
         when (val hidMode = rebound.gateway.refreshHidMode()) {
@@ -4453,11 +4905,13 @@ class NanoKvmConsoleBackend internal constructor(
         }
         publishPhase3Notice(
             rebound.binding,
-            if (readbackConfirmed) {
-                "$message Input control reconnected."
-            } else {
-                "$message Input control reconnected, but post-reset state could not be fully read. Refresh before repeating the action."
-            },
+            notice.withInputRecovery(
+                if (readbackConfirmed) {
+                    Phase3Notice.InputRecovery.Reconnected
+                } else {
+                    Phase3Notice.InputRecovery.ReconnectedWithPartialReadback
+                },
+            ),
             Phase3NoticeScope.VirtualMedia,
         )
         updatePhase3IfCurrent(rebound.binding) { it.copy(operationInProgress = false) }
@@ -4466,13 +4920,13 @@ class NanoKvmConsoleBackend internal constructor(
     private suspend fun publishUsbDeviceResult(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmVirtualDeviceSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         if (!result.requiresInputRecycleAfterUsbMutation()) {
-            publishVirtualDeviceMutation(binding, result, appliedMessage)
+            publishVirtualDeviceMutation(binding, result, action)
             return
         }
-        val message = phase3MutationMessage(binding, result, appliedMessage)
+        val notice = phase3MutationNotice(binding, result, action)
         val rebound = recyclePhase3InputAfterUsbMutation(binding) ?: return
         var readbackConfirmed = true
         when (val devices = rebound.gateway.refreshVirtualDevices()) {
@@ -4488,14 +4942,24 @@ class NanoKvmConsoleBackend internal constructor(
         }
         publishPhase3Notice(
             rebound.binding,
-            if (readbackConfirmed) {
-                "$message Input control reconnected."
-            } else {
-                "$message Input control reconnected, but post-reset state could not be read. Refresh before repeating the action."
-            },
+            notice.withInputRecovery(
+                if (readbackConfirmed) {
+                    Phase3Notice.InputRecovery.Reconnected
+                } else {
+                    Phase3Notice.InputRecovery.ReconnectedWithoutReadback
+                },
+            ),
             Phase3NoticeScope.VirtualMedia,
         )
         updatePhase3IfCurrent(rebound.binding) { it.copy(operationInProgress = false) }
+    }
+
+    private fun Phase3Notice.withInputRecovery(
+        recovery: Phase3Notice.InputRecovery,
+    ): Phase3Notice = when (this) {
+        is Phase3Notice.ActionOutcome -> copy(inputRecovery = recovery)
+        is Phase3Notice.Error -> copy(inputRecovery = recovery)
+        is Phase3Notice.Guidance -> this
     }
 
     private suspend fun recyclePhase3InputAfterUsbMutation(
@@ -4538,14 +5002,7 @@ class NanoKvmConsoleBackend internal constructor(
                 synchronized(stateLock) {
                     val generation = ++sessionGenerationCounter
                     input = replacement
-                    installPhase3GatewayLocked(activeSession, generation)
-                    installAdministrationGatewayLocked(activeSession, generation)
-                    installDeviceControlGatewayLocked(activeSession, generation)
-                    installOperatorGatewayLocked(activeSession, generation)
-                    installPicoClawGatewayLocked(activeSession, generation)
-                    installAutomationGatewayLocked(activeSession, generation)
-                    installOfflineUpdateGatewayLocked(activeSession, generation)
-                    mjpegFrameDetectionCoordinator.install(activeSession, generation)
+                    installSessionFeatureSetLocked(activeSession, generation)
                     newBinding = checkNotNull(phase3Lifecycle.binding())
                     newGateway = checkNotNull(phase3Lifecycle.resolve(newBinding))
                     mutableSession.update { current ->
@@ -4610,12 +5067,12 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishMediaMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmMediaCatalog>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         phase3MutationState(result)?.let { publishMedia(binding, it) }
         publishPhase3Notice(
             binding,
-            phase3MutationMessage(binding, result, appliedMessage),
+            phase3MutationNotice(binding, result, action),
             Phase3NoticeScope.VirtualMedia,
         )
     }
@@ -4623,12 +5080,12 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishHidModeMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmHidModeSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         phase3MutationState(result)?.let { publishHidMode(binding, it) }
         publishPhase3Notice(
             binding,
-            phase3MutationMessage(binding, result, appliedMessage),
+            phase3MutationNotice(binding, result, action),
             Phase3NoticeScope.VirtualMedia,
         )
     }
@@ -4636,12 +5093,12 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishVirtualDeviceMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmVirtualDeviceSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         phase3MutationState(result)?.let { publishVirtualDevices(binding, it) }
         publishPhase3Notice(
             binding,
-            phase3MutationMessage(binding, result, appliedMessage),
+            phase3MutationNotice(binding, result, action),
             Phase3NoticeScope.VirtualMedia,
         )
     }
@@ -4649,12 +5106,12 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishTransferMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmImageTransferSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         phase3MutationState(result)?.let { publishTransfer(binding, it) }
         publishPhase3Notice(
             binding,
-            phase3MutationMessage(binding, result, appliedMessage),
+            phase3MutationNotice(binding, result, action),
             Phase3NoticeScope.VirtualMedia,
         )
     }
@@ -4662,12 +5119,12 @@ class NanoKvmConsoleBackend internal constructor(
     private fun publishWakeOnLanMutation(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<NanoKvmWakeOnLanSnapshot>,
-        appliedMessage: String,
+        action: Phase3Notice.Action,
     ) {
         phase3MutationState(result)?.let { publishWakeOnLan(binding, it) }
         publishPhase3Notice(
             binding,
-            phase3MutationMessage(binding, result, appliedMessage),
+            phase3MutationNotice(binding, result, action),
             Phase3NoticeScope.WakeOnLan,
         )
     }
@@ -4687,26 +5144,43 @@ class NanoKvmConsoleBackend internal constructor(
         result: NanoKvmPhase3MutationResult<NanoKvmImageTransferSnapshot>,
     ): NanoKvmImageTransferSnapshot? = phase3MutationState(result)
 
-    private fun phase3MutationMessage(
+    private fun phase3MutationNotice(
         binding: NanoKvmSessionBinding,
         result: NanoKvmPhase3MutationResult<*>,
-        appliedMessage: String,
-    ): String = when (result) {
-        is NanoKvmPhase3MutationResult.Applied -> appliedMessage
-        is NanoKvmPhase3MutationResult.AlreadySatisfied ->
-            "The appliance already reported the requested state; nothing was sent."
-        is NanoKvmPhase3MutationResult.Accepted ->
-            "NanoKVM accepted the one-shot request, but final state was not confirmed. Refresh before repeating it."
+        action: Phase3Notice.Action,
+    ): Phase3Notice = when (result) {
+        is NanoKvmPhase3MutationResult.Applied -> Phase3Notice.ActionOutcome(
+            action = action,
+            outcome = Phase3Notice.Outcome.Applied,
+        )
+        is NanoKvmPhase3MutationResult.AlreadySatisfied -> Phase3Notice.ActionOutcome(
+            action = action,
+            outcome = Phase3Notice.Outcome.AlreadySatisfied,
+        )
+        is NanoKvmPhase3MutationResult.Accepted -> Phase3Notice.ActionOutcome(
+            action = action,
+            outcome = Phase3Notice.Outcome.AcceptedWithoutConfirmation,
+        )
         is NanoKvmPhase3MutationResult.Reconciled -> if (
             result.observation == NanoKvmPhase3Observation.DESIRED_STATE
         ) {
-            "The response was lost, but authoritative refresh shows the requested state. The action was not replayed."
+            Phase3Notice.ActionOutcome(
+                action = action,
+                outcome = Phase3Notice.Outcome.ReconciledToRequestedState,
+            )
         } else {
-            "The response was ambiguous and refresh does not show the requested state. The action was not replayed."
+            Phase3Notice.ActionOutcome(
+                action = action,
+                outcome = Phase3Notice.Outcome.ReconciledToDifferentState,
+            )
         }
-        is NanoKvmPhase3MutationResult.Indeterminate ->
-            "The final state is unknown. The action was not retried; refresh before deciding whether to repeat it."
-        is NanoKvmPhase3MutationResult.Rejected -> phase3ErrorMessage(binding, result.error)
+        is NanoKvmPhase3MutationResult.Indeterminate -> Phase3Notice.ActionOutcome(
+            action = action,
+            outcome = Phase3Notice.Outcome.Indeterminate,
+        )
+        is NanoKvmPhase3MutationResult.Rejected -> Phase3Notice.Error(
+            phase3Failure(binding, result.error),
+        )
     }
 
     private fun publishPhase3ReadFailure(
@@ -4715,68 +5189,64 @@ class NanoKvmConsoleBackend internal constructor(
         noticeScope: Phase3NoticeScope = Phase3NoticeScope.General,
     ) {
         if (error.kind == NanoKvmPhase3Error.Kind.UNSUPPORTED) return
-        publishPhase3Notice(binding, phase3ErrorMessage(binding, error), noticeScope)
+        publishPhase3Notice(
+            binding,
+            Phase3Notice.Error(phase3Failure(binding, error)),
+            noticeScope,
+        )
     }
 
-    private fun phase3ErrorMessage(
+    private fun phase3Failure(
         binding: NanoKvmSessionBinding,
         error: NanoKvmPhase3Error,
-    ): String {
+    ): Phase3Notice.Failure {
         if (error.kind == NanoKvmPhase3Error.Kind.AUTHENTICATION_EXPIRED) {
             expireAuthenticatedSession(binding)
         }
         return when (error.kind) {
-        NanoKvmPhase3Error.Kind.SESSION_CHANGED ->
-            "The NanoKVM session changed. Reopen this feature and try again."
-        NanoKvmPhase3Error.Kind.FOREIGN_OR_STALE_STATE ->
-            "The appliance state changed. Refresh before choosing the action again."
-        NanoKvmPhase3Error.Kind.IMAGE_IS_MOUNTED ->
-            "Mounted images cannot be deleted. Restore physical media first."
-        NanoKvmPhase3Error.Kind.IMAGE_TRANSFER_DISABLED ->
-            "Remote image transfer is disabled on this NanoKVM."
-        NanoKvmPhase3Error.Kind.INVALID_REQUEST ->
-            "The request is invalid. Check the entered value and try again."
-        NanoKvmPhase3Error.Kind.UNSUPPORTED ->
-            "This feature is not available on the connected NanoKVM."
-        NanoKvmPhase3Error.Kind.AUTHENTICATION_EXPIRED ->
-            "The NanoKVM login expired. Reconnect before trying again."
-        NanoKvmPhase3Error.Kind.CONNECTION ->
-            "NanoKVM could not be reached. No request was replayed; refresh to reconcile state."
-        NanoKvmPhase3Error.Kind.SERVER_REJECTED ->
-            "NanoKVM rejected the request. Refresh before trying a different action."
-        NanoKvmPhase3Error.Kind.INVALID_RESPONSE ->
-            "NanoKVM returned an unexpected response. Refresh to reconcile state."
-        NanoKvmPhase3Error.Kind.UNEXPECTED ->
-            "The final state could not be established. Refresh before repeating an action."
+            NanoKvmPhase3Error.Kind.SESSION_CHANGED -> Phase3Notice.Failure.SessionChanged
+            NanoKvmPhase3Error.Kind.FOREIGN_OR_STALE_STATE ->
+                Phase3Notice.Failure.ForeignOrStaleState
+            NanoKvmPhase3Error.Kind.IMAGE_IS_MOUNTED -> Phase3Notice.Failure.ImageIsMounted
+            NanoKvmPhase3Error.Kind.IMAGE_TRANSFER_DISABLED ->
+                Phase3Notice.Failure.ImageTransferDisabled
+            NanoKvmPhase3Error.Kind.INVALID_REQUEST -> Phase3Notice.Failure.InvalidRequest
+            NanoKvmPhase3Error.Kind.UNSUPPORTED -> Phase3Notice.Failure.Unsupported
+            NanoKvmPhase3Error.Kind.AUTHENTICATION_EXPIRED ->
+                Phase3Notice.Failure.AuthenticationExpired
+            NanoKvmPhase3Error.Kind.CONNECTION -> Phase3Notice.Failure.Connection
+            NanoKvmPhase3Error.Kind.SERVER_REJECTED -> Phase3Notice.Failure.ServerRejected
+            NanoKvmPhase3Error.Kind.INVALID_RESPONSE -> Phase3Notice.Failure.InvalidResponse
+            NanoKvmPhase3Error.Kind.UNEXPECTED -> Phase3Notice.Failure.Unexpected
         }
     }
 
     private fun publishPhase3Notice(
         binding: NanoKvmSessionBinding,
-        message: String,
+        notice: Phase3Notice,
         noticeScope: Phase3NoticeScope = Phase3NoticeScope.General,
     ) {
         updatePhase3IfCurrent(binding) {
             when (noticeScope) {
-                Phase3NoticeScope.General -> it.copy(notice = message)
-                Phase3NoticeScope.VirtualMedia -> it.copy(virtualMediaNotice = message)
-                Phase3NoticeScope.WakeOnLan -> it.copy(wakeOnLanNotice = message)
+                Phase3NoticeScope.General -> it.copy(notice = notice)
+                Phase3NoticeScope.VirtualMedia -> it.copy(virtualMediaNotice = notice)
+                Phase3NoticeScope.WakeOnLan -> it.copy(wakeOnLanNotice = notice)
             }
         }
     }
 
     private fun rejectPhase3UiCommand(
-        message: String,
+        notice: Phase3Notice,
         noticeScope: Phase3NoticeScope = Phase3NoticeScope.General,
     ) {
         mutableSession.update { current ->
             current.copy(
                 phase3 = when (noticeScope) {
-                    Phase3NoticeScope.General -> current.phase3.copy(notice = message)
+                    Phase3NoticeScope.General -> current.phase3.copy(notice = notice)
                     Phase3NoticeScope.VirtualMedia ->
-                        current.phase3.copy(virtualMediaNotice = message)
+                        current.phase3.copy(virtualMediaNotice = notice)
                     Phase3NoticeScope.WakeOnLan ->
-                        current.phase3.copy(wakeOnLanNotice = message)
+                        current.phase3.copy(wakeOnLanNotice = notice)
                 },
             )
         }
@@ -4796,7 +5266,8 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     private fun installApprovedPaste(request: ApprovedPasteRequest) {
-        var rejectionMessage = "The NanoKVM session changed before clipboard typing could start."
+        var rejectionMessage: ConsoleMessage.ActionFeedback =
+            ConsoleMessage.ClipboardSessionChanged
         val operation = synchronized(stateLock) {
             val activeSession = authenticatedSession
             val activeInput = input
@@ -4821,7 +5292,7 @@ class NanoKvmConsoleBackend internal constructor(
                     request.content.codePointCount(0, request.content.length),
                 )
                 if (ownership == null) {
-                    rejectionMessage = "Clipboard typing is already active or stopping."
+                    rejectionMessage = ConsoleMessage.ClipboardTypingAlreadyActive
                     null
                 } else {
                     val created = ActivePasteOperation(
@@ -4830,7 +5301,7 @@ class NanoKvmConsoleBackend internal constructor(
                         activeSession = activeSession,
                         activeInput = activeInput,
                         commandEpoch = commandAcceptanceEpoch,
-                        previousMessage = current.message,
+                        previousActionFeedback = current.lastActionFeedback,
                         priorKeyboardCommand = queuedKeyboardTail,
                     )
                     val job = scope.launch(start = CoroutineStart.LAZY) {
@@ -4842,15 +5313,14 @@ class NanoKvmConsoleBackend internal constructor(
                     activePaste = created
                     mutableSession.value = current.copy(
                         pasteProgress = ownership.toRemoteProgress(),
-                        message = "Typing approved clipboard text into remote",
-                    )
+                    ).withActionFeedback(ConsoleMessage.TypingApprovedClipboardText)
                     created
                 }
             }
         }
 
         if (operation == null) {
-            mutableSession.update { it.copy(message = rejectionMessage) }
+            mutableSession.update { it.withActionFeedback(rejectionMessage) }
         } else {
             operation.job.start()
         }
@@ -4868,8 +5338,7 @@ class NanoKvmConsoleBackend internal constructor(
             }
         }
         if (!mayStart) {
-            operation.completionMessage =
-                "The NanoKVM session changed before clipboard typing could start."
+            operation.completionMessage = ConsoleMessage.ClipboardSessionChanged
             return
         }
 
@@ -4885,11 +5354,11 @@ class NanoKvmConsoleBackend internal constructor(
                 ?: operation.request.content.codePointCount(0, operation.request.content.length)
         }
         operation.completionMessage = when (result) {
-            is PacedCommittedTextResult.Completed -> "Clipboard text typed into remote"
+            is PacedCommittedTextResult.Completed -> ConsoleMessage.ClipboardTextTyped
             is PacedCommittedTextResult.Unsupported ->
-                "${result.unsupported.size} character(s) are unavailable in the selected target layout; nothing was typed"
+                ConsoleMessage.ClipboardUnsupportedCharacters(result.unsupported.size)
             is PacedCommittedTextResult.ConnectionLost ->
-                "Clipboard typing stopped after ${result.sentKeystrokes} of $total character(s) because the input connection was lost"
+                ConsoleMessage.ClipboardInputConnectionLost(result.sentKeystrokes, total)
         }
     }
 
@@ -4921,14 +5390,27 @@ class NanoKvmConsoleBackend internal constructor(
                 if (current.pasteProgress?.operationToken != operation.token) {
                     current
                 } else {
-                    val message = when {
-                        final.userInitiatedCancellation ->
-                            "Clipboard typing cancelled after ${final.sentKeystrokes} of ${final.totalKeystrokes} character(s)"
-                        final.phase == RemotePastePhase.Cancelling -> operation.previousMessage
-                        operation.completionMessage != null -> operation.completionMessage
-                        else -> operation.previousMessage
+                    when {
+                        final.userInitiatedCancellation -> current.copy(
+                            pasteProgress = null,
+                        ).withActionFeedback(
+                            ConsoleMessage.ClipboardTypingCancelled(
+                                final.sentKeystrokes,
+                                final.totalKeystrokes,
+                            ),
+                        )
+                        final.phase == RemotePastePhase.Cancelling -> current.copy(
+                            pasteProgress = null,
+                            lastActionFeedback = operation.previousActionFeedback,
+                        )
+                        operation.completionMessage != null -> current.copy(
+                            pasteProgress = null,
+                        ).withActionFeedback(checkNotNull(operation.completionMessage))
+                        else -> current.copy(
+                            pasteProgress = null,
+                            lastActionFeedback = operation.previousActionFeedback,
+                        )
                     }
-                    current.copy(pasteProgress = null, message = message)
                 }
             }
         }
@@ -5005,19 +5487,53 @@ class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    private fun closeCommandAcceptanceBarrier() {
-        synchronized(stateLock) {
+    private fun closeCommandAcceptanceBarrier(
+        expectedBinding: NanoKvmSessionBinding? = null,
+    ): Boolean {
+        val claimed = synchronized(stateLock) {
+            if (
+                expectedBinding != null &&
+                !matchesAuthenticatedSessionBindingLocked(expectedBinding)
+            ) {
+                return@synchronized false
+            }
             acceptingCommands = false
             commandAcceptanceEpoch++
+            true
         }
-        mjpegFrameDetectionCoordinator.clear()
-        invalidatePhase3Gateway()
-        invalidateAdministrationGateway()
-        invalidateOperatorGateway()
-        invalidatePicoClawGateway()
-        invalidateAutomationGateway()
-        invalidateOfflineUpdateGateway()
+        if (!claimed) return false
+        if (expectedBinding == null) invalidateSessionFeatureSet()
         requestPasteCancellation(userInitiated = false)
+        return true
+    }
+
+    private fun publishTerminalFailureWhenBindingStillCurrent(
+        expectedBinding: NanoKvmSessionBinding,
+        failure: ReconnectFailure,
+    ) {
+        scope.launch {
+            lifecycleMutex.withLock {
+                val current = synchronized(stateLock) {
+                    matchesAuthenticatedSessionBindingLocked(expectedBinding)
+                }
+                if (!current) return@withLock
+                invalidateSessionFeatureSet()
+                publishTerminalFailure(failure)
+            }
+        }
+    }
+
+    private fun publishTerminalFailure(failure: ReconnectFailure) {
+        controlGate.invalidate()
+        mutableSession.update {
+            it.copy(
+                connection = ConnectionState.Failed,
+                status = ConsoleMessage.ConnectionFailed(failure.toConnectionFailure()),
+                reconnectAttempt = null,
+                reconnectMaximumAttempts = null,
+                nextReconnectDelayMillis = null,
+            )
+        }
     }
 
     /**
@@ -5048,13 +5564,7 @@ class NanoKvmConsoleBackend internal constructor(
         controlGate.invalidate()
         cancelReconnect()
         releaseAllInputNow()
-        mjpegFrameDetectionCoordinator.clear()
-        invalidatePhase3Gateway()
-        invalidateAdministrationGateway()
-        invalidateOperatorGateway()
-        invalidatePicoClawGateway()
-        invalidateAutomationGateway()
-        invalidateOfflineUpdateGateway()
+        invalidateSessionFeatureSet()
         requestPasteCancellation(userInitiated = false)
         // AuthenticatedNanoKvmSession.close clears the in-memory token before returning.
         expiredSession.close()
@@ -5062,7 +5572,7 @@ class NanoKvmConsoleBackend internal constructor(
         mutableSession.value = BackendSession(
             connection = ConnectionState.Failed,
             sessionGeneration = generation,
-            message = AUTHENTICATION_EXPIRED_MESSAGE,
+            status = ConsoleMessage.AuthenticationExpired,
         )
         closeScope.launch {
             lifecycleMutex.withLock {
@@ -5072,7 +5582,7 @@ class NanoKvmConsoleBackend internal constructor(
                         current.sessionGeneration == generation &&
                         current.connection == ConnectionState.Failed
                     ) {
-                        current.copy(message = AUTHENTICATION_EXPIRED_MESSAGE)
+                        current.copy(status = ConsoleMessage.AuthenticationExpired)
                     } else {
                         current
                     }
@@ -5117,7 +5627,7 @@ class NanoKvmConsoleBackend internal constructor(
 
     private fun runControlAfterPaste(
         key: String,
-        successMessage: String,
+        successMessage: ConsoleMessage.ActionFeedback,
         block: suspend (AuthenticatedNanoKvmSession) -> Unit,
     ) {
         val lease = controlGate.claim(key) ?: return
@@ -5129,7 +5639,7 @@ class NanoKvmConsoleBackend internal constructor(
                     val executed = controlGate.executeIfCurrent(lease) { block(activeSession) }
                     if (executed && authenticatedSession === activeSession) mutableSession.update {
                         if (it.connection == ConnectionState.Connected) {
-                            it.copy(message = successMessage)
+                            it.withActionFeedback(successMessage)
                         } else {
                             it
                         }
@@ -5150,7 +5660,11 @@ class NanoKvmConsoleBackend internal constructor(
                     }
                     if (authenticatedSession === activeSession) mutableSession.update {
                         if (it.connection == ConnectionState.Connected) {
-                            it.copy(message = error.toUserMessage())
+                            it.withActionFeedback(
+                                ConsoleMessage.CommandFailed(
+                                    error.toConnectionFailure(),
+                                ),
+                            )
                         } else {
                             it
                         }
@@ -5170,6 +5684,7 @@ class NanoKvmConsoleBackend internal constructor(
 
     private val videoListener = object : NanoKvmVideoListener {
         override fun onStatusChanged(status: NanoKvmVideoStatus) {
+            if (closed) return
             when (status) {
                 is NanoKvmVideoStatus.Connecting -> {
                     if (status.transport == NanoKvmVideoTransport.MJPEG) {
@@ -5177,12 +5692,14 @@ class NanoKvmConsoleBackend internal constructor(
                     } else {
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
-                    mutableSession.update {
+                    updateSessionFromVideo {
                         it.copy(
-                            streamLabel = status.transport.label(),
-                            message = if (it.connection == ConnectionState.Connected) {
-                                "Connecting ${status.transport.label()}"
-                            } else it.message,
+                            streamLabel = status.transport.toVideoStreamDescriptor(),
+                            status = if (it.connection == ConnectionState.Connected) {
+                                ConsoleMessage.ConnectingVideo(
+                                    status.transport.toVideoTransportDescriptor(),
+                                )
+                            } else it.status,
                         )
                     }
                 }
@@ -5192,13 +5709,13 @@ class NanoKvmConsoleBackend internal constructor(
                     } else {
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
-                    mutableSession.update {
+                    updateSessionFromVideo {
                         it.copy(
-                            streamLabel = status.transport.label(),
-                            message = if (it.connection == ConnectionState.Connected) {
+                            streamLabel = status.transport.toVideoStreamDescriptor(),
+                            status = if (it.connection == ConnectionState.Connected) {
                                 null
                             } else {
-                                it.message
+                                it.status
                             },
                         )
                     }
@@ -5209,22 +5726,28 @@ class NanoKvmConsoleBackend internal constructor(
                     } else {
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
-                    mutableSession.update {
+                    updateSessionFromVideo {
                         it.copy(
-                            streamLabel = "${status.to.label()} fallback",
-                            message = if (it.connection == ConnectionState.Connected) {
-                                "${status.from.label()} unavailable; using ${status.to.label()}"
-                            } else it.message,
+                            streamLabel = status.to.toVideoStreamDescriptor(fallback = true),
+                            status = if (it.connection == ConnectionState.Connected) {
+                                ConsoleMessage.VideoFallback(
+                                    from = status.from.toVideoTransportDescriptor(),
+                                    to = status.to.toVideoTransportDescriptor(),
+                                )
+                            } else it.status,
                         )
                     }
                 }
                 is NanoKvmVideoStatus.Error -> {
                     mjpegFrameDetectionCoordinator.onMjpegInactive()
-                    if (mutableSession.value.connection == ConnectionState.Connected) {
+                    val shouldReconnect = synchronized(stateLock) {
+                        !closed && mutableSession.value.connection == ConnectionState.Connected
+                    }
+                    if (shouldReconnect) {
                         scheduleReconnect(
                             ReconnectFailure(
                                 IOException(
-                                    "${status.transport.label()} transport failed",
+                                    "Video transport failed",
                                     status.cause,
                                 ),
                             ),
@@ -5239,7 +5762,8 @@ class NanoKvmConsoleBackend internal constructor(
         }
 
         override fun onVideoSizeChanged(width: Int, height: Int) {
-            if (width > 0 && height > 0) mutableSession.update {
+            if (closed) return
+            if (width > 0 && height > 0) updateSessionFromVideo {
                 it.copy(remoteWidth = width, remoteHeight = height)
             }
         }
@@ -5252,26 +5776,34 @@ class NanoKvmConsoleBackend internal constructor(
             updateFrameRate()
         }
 
-        override fun onMjpegBitmapFrame(bitmap: Bitmap): Boolean = try {
-            val rendered = try {
-                onVideoSizeChanged(bitmap.width, bitmap.height)
-                drawMjpegFrame(bitmap).also { success ->
-                    if (success) updateFrameRate()
-                }
-            } finally {
+        override fun onMjpegBitmapFrame(bitmap: Bitmap): Boolean {
+            if (closed) {
                 bitmap.recycle()
+                return false
             }
-            rendered
-        } catch (_: Throwable) {
-            false
+            return try {
+                val rendered = try {
+                    onVideoSizeChanged(bitmap.width, bitmap.height)
+                    drawMjpegFrame(bitmap).also { success ->
+                        if (success) updateFrameRate()
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+                rendered
+            } catch (_: Throwable) {
+                false
+            }
         }
 
         override fun onFramesDropped(count: Int, reason: H264FrameDropReason) {
-            mutableSession.update { it.recordDroppedFrames(count) }
+            if (closed) return
+            updateSessionFromVideo { it.recordDroppedFrames(count) }
         }
 
         override fun onVideoStalled(transport: NanoKvmVideoTransport) {
-            mutableSession.update { it.recordVideoStall() }
+            if (closed) return
+            updateSessionFromVideo { it.recordVideoStall() }
         }
     }
 
@@ -5301,15 +5833,25 @@ class NanoKvmConsoleBackend internal constructor(
     }
 
     private fun updateFrameRate() {
-        val now = System.nanoTime()
-        if (renderedFrameWindowStartNanos == 0L) renderedFrameWindowStartNanos = now
-        renderedFramesInWindow++
-        val elapsed = now - renderedFrameWindowStartNanos
-        if (elapsed >= 1_000_000_000L) {
-            val fps = (renderedFramesInWindow * 1_000_000_000L / elapsed).toInt()
-            renderedFrameWindowStartNanos = now
-            renderedFramesInWindow = 0
-            mutableSession.update { it.copy(framesPerSecond = fps) }
+        synchronized(stateLock) {
+            if (closed) return
+            val now = System.nanoTime()
+            if (renderedFrameWindowStartNanos == 0L) renderedFrameWindowStartNanos = now
+            renderedFramesInWindow++
+            val elapsed = now - renderedFrameWindowStartNanos
+            if (elapsed >= 1_000_000_000L) {
+                val fps = (renderedFramesInWindow * 1_000_000_000L / elapsed).toInt()
+                renderedFrameWindowStartNanos = now
+                renderedFramesInWindow = 0
+                mutableSession.value = mutableSession.value.copy(framesPerSecond = fps)
+            }
+        }
+    }
+
+    private fun updateSessionFromVideo(update: (BackendSession) -> BackendSession) {
+        synchronized(stateLock) {
+            if (closed) return
+            mutableSession.value = update(mutableSession.value)
         }
     }
 
@@ -5462,7 +6004,9 @@ class NanoKvmConsoleBackend internal constructor(
         RemoteKey.RightControl, RemoteKey.RightShift, RemoteKey.RightAlt, RemoteKey.RightSuper -> null
     }
 
-    private fun CertificateInspection.toCertificateDetails(reason: String): CertificateDetails = CertificateDetails(
+    private fun CertificateInspection.toCertificateDetails(
+        reason: CertificatePresentationReason,
+    ): CertificateDetails = CertificateDetails(
         sha256 = fingerprint.colonSeparated(),
         subject = subject,
         issuer = issuer,
@@ -5470,22 +6014,22 @@ class NanoKvmConsoleBackend internal constructor(
         validFrom = DateTimeFormatter.ISO_INSTANT.format(validFrom),
         validUntil = DateTimeFormatter.ISO_INSTANT.format(validUntil),
         reason = reason,
+        metadataTruncated = metadataTruncated,
     )
 
-    private fun NanoKvmVideoTransport.label(): String = when (this) {
-        NanoKvmVideoTransport.WEBRTC -> "WebRTC"
-        NanoKvmVideoTransport.H264 -> "H.264 direct"
-        NanoKvmVideoTransport.MJPEG -> "MJPEG"
-    }
+    private fun NanoKvmVideoTransport.toVideoStreamDescriptor(
+        fallback: Boolean = false,
+    ): VideoStreamDescriptor = VideoStreamDescriptor(
+        transport = toVideoTransportDescriptor(),
+        isFallback = fallback,
+    )
 
-    private fun Throwable.toUserMessage(): String = when (this) {
-        is ApiResponseException -> serverMessage.ifBlank { "NanoKVM rejected the request (code $code)." }
-        is NanoKvmException -> message ?: "NanoKVM protocol error."
-        is SocketTimeoutException -> "The NanoKVM connection timed out."
-        is IOException -> message ?: "Could not reach the NanoKVM."
-        is kotlinx.coroutines.TimeoutCancellationException -> "The NanoKVM connection timed out."
-        else -> message?.takeIf { it.isNotBlank() } ?: "Unexpected NanoKVM connection error."
-    }
+    private fun NanoKvmVideoTransport.toVideoTransportDescriptor(): VideoTransportDescriptor =
+        when (this) {
+            NanoKvmVideoTransport.WEBRTC -> VideoTransportDescriptor.WebRtc
+            NanoKvmVideoTransport.H264 -> VideoTransportDescriptor.DirectH264
+            NanoKvmVideoTransport.MJPEG -> VideoTransportDescriptor.Mjpeg
+        }
 
     private companion object {
         const val INPUT_CONNECT_TIMEOUT_MS = 15_000L
@@ -5494,9 +6038,95 @@ class NanoKvmConsoleBackend internal constructor(
         const val CONTROL_CTRL_ALT_DELETE = "ctrl-alt-delete"
         const val MAX_PASTE_BYTES = 1_024
         const val PHASE3_TRANSFER_POLL_MILLIS = 2_500L
-        const val AUTHENTICATION_EXPIRED_MESSAGE =
-            "The NanoKVM login expired. Reconnect and authenticate again."
         val MJPEG_PAINT = Paint(Paint.FILTER_BITMAP_FLAG)
+    }
+}
+
+/** Maps transport/protocol failures to a bounded presentation contract without exposing details. */
+internal fun Throwable.toConnectionFailure(responseCode: Int? = null): ConnectionFailure {
+    responseCode?.let { return ConnectionFailure.RequestRejected(it) }
+    findCause<AuthenticationExpiredException>()?.let {
+        return ConnectionFailure.RequestRejected(it.statusCode)
+    }
+    findCause<ApiResponseException>()?.let {
+        return ConnectionFailure.RequestRejected(it.code)
+    }
+    findCause<HttpResponseException>()?.let {
+        return ConnectionFailure.RequestRejected(it.statusCode)
+    }
+    return when {
+        findCause<SocketTimeoutException>() != null ||
+            findCause<kotlinx.coroutines.TimeoutCancellationException>() != null ->
+            ConnectionFailure.TimedOut
+        findCause<CertificateException>() != null ->
+            ConnectionFailure.CertificateInspectionFailed
+        findCause<SSLException>() != null -> ConnectionFailure.ProtocolError
+        findCause<NanoKvmException>() != null || findCause<IllegalArgumentException>() != null ->
+            ConnectionFailure.ProtocolError
+        findCause<IOException>() != null -> ConnectionFailure.Unreachable
+        else -> ConnectionFailure.Unexpected
+    }
+}
+
+private fun ReconnectFailure.toConnectionFailure(): ConnectionFailure =
+    cause.toConnectionFailure(httpStatus)
+
+private inline fun <reified T : Throwable> Throwable.findCause(): T? =
+    generateSequence(this) { it.cause }.filterIsInstance<T>().firstOrNull()
+
+/**
+ * Serializes invalidation with every callback from one concrete video session.
+ *
+ * A decoder or callback executor may already be inside user code when cancellation/close begins.
+ * [invalidate] waits for that callback and prevents every queued or cancellation-ignoring callback
+ * from entering the backend after a replacement session becomes eligible to publish state.
+ */
+internal class SessionBoundVideoListener(
+    private val delegate: NanoKvmVideoListener,
+) : NanoKvmVideoListener {
+    private val lock = Any()
+    private var active = true
+
+    fun invalidate() {
+        synchronized(lock) { active = false }
+    }
+
+    override fun onStatusChanged(status: NanoKvmVideoStatus) = ifActive {
+        delegate.onStatusChanged(status)
+    }
+
+    override fun onVideoSizeChanged(width: Int, height: Int) = ifActive {
+        delegate.onVideoSizeChanged(width, height)
+    }
+
+    override fun onWebRtcFrameRendered(timestampNs: Long) = ifActive {
+        delegate.onWebRtcFrameRendered(timestampNs)
+    }
+
+    override fun onH264FrameRendered(timestampUs: Long) = ifActive {
+        delegate.onH264FrameRendered(timestampUs)
+    }
+
+    override fun onMjpegJpegFrame(jpeg: ByteArray) = ifActive {
+        delegate.onMjpegJpegFrame(jpeg)
+    }
+
+    override fun onMjpegBitmapFrame(bitmap: Bitmap): Boolean = synchronized(lock) {
+        if (active) delegate.onMjpegBitmapFrame(bitmap) else false
+    }
+
+    override fun onFramesDropped(count: Int, reason: H264FrameDropReason) = ifActive {
+        delegate.onFramesDropped(count, reason)
+    }
+
+    override fun onVideoStalled(transport: NanoKvmVideoTransport) = ifActive {
+        delegate.onVideoStalled(transport)
+    }
+
+    private inline fun ifActive(block: () -> Unit) {
+        synchronized(lock) {
+            if (active) block()
+        }
     }
 }
 
@@ -5722,13 +6352,13 @@ private class ActivePasteOperation(
     val activeSession: AuthenticatedNanoKvmSession,
     val activeInput: NanoKvmInputSocket,
     val commandEpoch: Long,
-    val previousMessage: String?,
+    val previousActionFeedback: SequencedConsoleActionFeedback?,
     val priorKeyboardCommand: Job?,
 ) {
     lateinit var job: Job
 
     @Volatile
-    var completionMessage: String? = null
+    var completionMessage: ConsoleMessage.ActionFeedback? = null
 }
 
 private suspend fun CompletableFuture<Unit>.awaitCompletion() {
@@ -5771,4 +6401,3 @@ internal fun isSupportedNanoKvmApplication(value: String): Boolean {
 
 private val MINIMUM_NANO_KVM_VERSION = checkNotNull(NanoKvmApplicationVersion.parse("2.3.2"))
 private val MINIMUM_PICOCLAW_VERSION = checkNotNull(NanoKvmApplicationVersion.parse("2.4.0"))
-private const val MAX_PICOCLAW_UI_TEXT_CHARS = 32 * 1_024

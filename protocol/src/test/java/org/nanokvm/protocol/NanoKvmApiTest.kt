@@ -1,18 +1,29 @@
 package org.nanokvm.protocol
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.OkHttpClient
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okio.Buffer
+import okio.BufferedSource
+import okio.ForwardingSource
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -23,8 +34,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class NanoKvmApiTest {
     private lateinit var server: MockWebServer
@@ -79,6 +93,41 @@ class NanoKvmApiTest {
 
         val infoRequest = server.takeRequest()
         assertEquals("nano-kvm-token=jwt.value", infoRequest.getHeader("Cookie"))
+    }
+
+    @Test
+    fun `token length boundary is stored and an oversized login token cannot replace it`() {
+        val boundaryToken = "a".repeat(MAX_SESSION_TOKEN_LENGTH)
+        server.enqueue(
+            jsonResponse("""{"code":0,"msg":"success","data":{"token":"$boundaryToken"}}"""),
+        )
+
+        val accepted = runBlocking {
+            client.api.login("admin", "boundary password".toCharArray())
+        }
+
+        assertEquals(boundaryToken, accepted.token)
+        assertEquals(boundaryToken, tokenStore.read())
+
+        val oversizedToken = "b".repeat(MAX_SESSION_TOKEN_LENGTH + 1)
+        server.enqueue(
+            jsonResponse("""{"code":0,"msg":"success","data":{"token":"$oversizedToken"}}"""),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { client.api.login("admin", "oversized password".toCharArray()) }
+        }
+        assertEquals(boundaryToken, tokenStore.read())
+    }
+
+    @Test
+    fun `oversized token from an external store is rejected before cookie use`() {
+        tokenStore.write("x".repeat(MAX_SESSION_TOKEN_LENGTH + 1))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            client.webSocketRequest("/api/ws")
+        }
+        assertEquals(0, server.requestCount)
     }
 
     @Test
@@ -138,28 +187,53 @@ class NanoKvmApiTest {
     }
 
     @Test
-    fun `cookie is never forwarded across a redirect to another origin`() = runBlocking {
+    fun `all redirect statuses are surfaced without contacting the foreign origin`() {
         val foreign = MockWebServer()
         foreign.start()
         try {
             tokenStore.write("host-scoped-token")
+            listOf(301, 302, 303, 307, 308).forEach { statusCode ->
+                server.enqueue(
+                    MockResponse()
+                        .setResponseCode(statusCode)
+                        .addHeader("Location", foreign.url("/redirected/$statusCode")),
+                )
+
+                val error = assertThrows(HttpResponseException::class.java) {
+                    runBlocking { client.api.vmInfo() }
+                }
+
+                assertEquals(statusCode, error.statusCode)
+                assertEquals(
+                    "nano-kvm-token=host-scoped-token",
+                    server.takeRequest().getHeader("Cookie"),
+                )
+            }
+            assertEquals(0, foreign.requestCount)
+        } finally {
+            foreign.shutdown()
+        }
+    }
+
+    @Test
+    fun `login credentials are never replayed through a redirect`() {
+        val foreign = MockWebServer()
+        foreign.start()
+        try {
             server.enqueue(
                 MockResponse()
-                    .setResponseCode(302)
-                    .addHeader("Location", foreign.url("/api/vm/info")),
-            )
-            foreign.enqueue(
-                jsonResponse(
-                    """{"code":0,"msg":"success","data":{"application":"2.3.4"}}""",
-                ),
+                    .setResponseCode(307)
+                    .addHeader("Location", foreign.url("/capture-login")),
             )
 
-            assertEquals("2.3.4", client.api.vmInfo().application)
-            assertEquals(
-                "nano-kvm-token=host-scoped-token",
-                server.takeRequest().getHeader("Cookie"),
-            )
-            assertNull(foreign.takeRequest().getHeader("Cookie"))
+            val error = assertThrows(HttpResponseException::class.java) {
+                runBlocking { client.api.login("admin", "do-not-forward".toCharArray()) }
+            }
+
+            assertEquals(307, error.statusCode)
+            assertEquals("/api/auth/login", server.takeRequest().path)
+            assertEquals(0, foreign.requestCount)
+            assertNull(tokenStore.read())
         } finally {
             foreign.shutdown()
         }
@@ -282,6 +356,92 @@ class NanoKvmApiTest {
     }
 
     @Test
+    fun `response bodies are read away from the caller dispatcher`() {
+        server.enqueue(
+            jsonResponse("""{"code":0,"msg":"ok","data":{"application":"2.3.4"}}"""),
+        )
+        val readThread = AtomicReference<String>()
+        val supplied = OkHttpClient.Builder()
+            .addNetworkInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val body = requireNotNull(response.body)
+                response.newBuilder()
+                    .body(object : ResponseBody() {
+                        override fun contentType() = body.contentType()
+
+                        override fun contentLength(): Long = body.contentLength()
+
+                        override fun source(): BufferedSource = object : ForwardingSource(
+                            body.source(),
+                        ) {
+                            override fun read(sink: Buffer, byteCount: Long): Long {
+                                readThread.compareAndSet(null, Thread.currentThread().name)
+                                return super.read(sink, byteCount)
+                            }
+                        }.buffer()
+                    })
+                    .build()
+            }
+            .build()
+        val scoped = NanoKvmClient.using(
+            endpoint = NanoKvmEndpoint.parse(server.url("/").toString()),
+            httpClient = supplied,
+        )
+        val callerExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "api-caller-dispatcher")
+        }
+        val callerDispatcher = callerExecutor.asCoroutineDispatcher()
+
+        try {
+            val info = runBlocking {
+                withContext(callerDispatcher) { scoped.api.vmInfo() }
+            }
+
+            assertEquals("2.3.4", info.application)
+            assertFalse(readThread.get().orEmpty().contains("api-caller-dispatcher"))
+        } finally {
+            callerDispatcher.close()
+            callerExecutor.shutdownNow()
+            scoped.close()
+            supplied.dispatcher.executorService.shutdown()
+            supplied.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `cancelling while reading a REST body cancels the OkHttp call`() {
+        val canceled = CountDownLatch(1)
+        val supplied = OkHttpClient.Builder()
+            .eventListener(object : EventListener() {
+                override fun canceled(call: Call) {
+                    canceled.countDown()
+                }
+            })
+            .build()
+        val scoped = NanoKvmClient.using(
+            endpoint = NanoKvmEndpoint.parse(server.url("/").toString()),
+            httpClient = supplied,
+        )
+        server.enqueue(
+            jsonResponse("""{"code":0,"msg":"ok","data":{"application":"2.3.4"}}""")
+                .throttleBody(1, 1, TimeUnit.SECONDS),
+        )
+
+        try {
+            assertThrows(TimeoutCancellationException::class.java) {
+                runBlocking {
+                    withTimeout(150) { scoped.api.vmInfo() }
+                }
+            }
+            assertTrue(canceled.await(2, TimeUnit.SECONDS))
+        } finally {
+            scoped.close()
+            supplied.dispatcher.executorService.shutdown()
+            supplied.connectionPool.evictAll()
+        }
+    }
+
+    @Test
     fun `input WebSocket handshake carries cookie and disconnect sends safe releases`() {
         val opened = CountDownLatch(1)
         val frames = LinkedBlockingQueue<ByteArray>()
@@ -314,6 +474,7 @@ class NanoKvmApiTest {
             val handshake = server.takeRequest(5, TimeUnit.SECONDS)
             assertEquals("/api/ws", handshake?.path)
             assertEquals("nano-kvm-token=websocket-token", handshake?.getHeader("Cookie"))
+            assertNull(handshake?.getHeader("Sec-WebSocket-Extensions"))
 
             assertTrue(input.sendKeyboard(HidKeyboardReport.create(keys = listOf(HidUsage.A))))
             assertArrayEquals(
@@ -390,6 +551,65 @@ class NanoKvmApiTest {
                 RelativeMouseReport.create().toWireFrame(),
                 frames.poll(5, TimeUnit.SECONDS),
             )
+        } finally {
+            input.close()
+        }
+    }
+
+    @Test
+    fun `oversized input message stops commands releases HID and uses bounded close policy`() {
+        val opened = CountDownLatch(1)
+        val closeReceived = CountDownLatch(1)
+        val closeCode = AtomicInteger(-1)
+        val peer = AtomicReference<WebSocket?>()
+        val clientFrames = LinkedBlockingQueue<ByteArray>()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    peer.set(webSocket)
+                    opened.countDown()
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    clientFrames.offer(bytes.toByteArray())
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    closeCode.set(code)
+                    closeReceived.countDown()
+                    webSocket.close(code, reason)
+                }
+
+            }),
+        )
+        tokenStore.write("websocket-token")
+        val input = client.newInputSocket(heartbeatIntervalMillis = 10_000)
+
+        try {
+            assertEquals(2_000, client.transport.webSocketCloseTimeout)
+            assertTrue(input.connect())
+            assertTrue(opened.await(2, TimeUnit.SECONDS))
+            runBlocking {
+                withTimeout(2_000) { input.state.first { it is InputConnectionState.Connected } }
+            }
+
+            assertTrue(
+                requireNotNull(peer.get()).send(
+                    ByteArray(MAX_INPUT_SERVER_MESSAGE_BYTES + 1).toByteString(),
+                ),
+            )
+            assertTrue(closeReceived.await(2, TimeUnit.SECONDS))
+            assertFalse(input.sendKeyboard(HidKeyboardReport.create(keys = listOf(HidUsage.A))))
+            assertArrayEquals(
+                HidKeyboardReport.released().toWireFrame(),
+                clientFrames.poll(2, TimeUnit.SECONDS),
+            )
+            assertArrayEquals(
+                RelativeMouseReport.create().toWireFrame(),
+                clientFrames.poll(2, TimeUnit.SECONDS),
+            )
+            assertEquals(1009, closeCode.get())
+            runBlocking { withTimeout(2_000) { input.state.first { it is InputConnectionState.Disconnected } } }
         } finally {
             input.close()
         }

@@ -1,24 +1,23 @@
 package org.nanokvm.protocol
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /** Suspend-based client for the console-first NanoKVM REST surface (application >= 2.3.2). */
 class NanoKvmApi internal constructor(
@@ -33,7 +32,6 @@ class NanoKvmApi internal constructor(
     private var latestHidShortcutCatalog: NanoKvmSavedHidShortcutCatalog? = null
     private val autostartCatalogLock = Any()
     private var latestAutostartCatalog: NanoKvmAutostartCatalog? = null
-    private val wifiAccessPointAuthorizationOwner = Any()
     private val tailscaleStatusLock = Any()
     private var latestTailscaleStatus: NanoKvmTailscaleStatus? = null
     private var tailscaleStatusEpoch: Long = 0L
@@ -305,65 +303,6 @@ class NanoKvmApi internal constructor(
     suspend fun disconnectWifi() {
         wifiOperation(NanoKvmWifiOperation.DISCONNECT_AUTHENTICATED) {
             postWithoutData("/api/network/wifi/disconnect")
-        }
-    }
-
-    /**
-     * Verifies the AP-mode password without sending an account session cookie.
-     *
-     * Ownership of [apPassword] transfers to the returned authorization (or is cleared on
-     * failure). Verification succeeds only while the appliance reports its physical AP mode.
-     */
-    suspend fun verifyWifiAccessPointPassword(
-        apPassword: CharArray,
-    ): NanoKvmWifiAccessPointAuthorization {
-        try {
-            validateWifiApPassword(apPassword)
-        } catch (error: IllegalArgumentException) {
-            apPassword.fill('\u0000')
-            throw error
-        }
-        val authorization = NanoKvmWifiAccessPointAuthorization(
-            owner = wifiAccessPointAuthorizationOwner,
-            mutableApPassword = apPassword,
-        )
-        try {
-            wifiOperation(NanoKvmWifiOperation.VERIFY_ACCESS_POINT_PASSWORD) {
-                val request = requestBuilder("/api/network/wifi/verify")
-                    .tag(SessionCookiePolicy::class.java, SessionCookiePolicy.OMIT)
-                    .header(
-                        WIFI_AP_KEY_HEADER,
-                        authorization.verificationHeader(wifiAccessPointAuthorizationOwner),
-                    )
-                    .post(EMPTY_JSON_BODY)
-                    .build()
-                executeEnvelope<Unit>(request, responseSerializer = null)
-            }
-        } catch (error: Throwable) {
-            authorization.close()
-            throw error
-        }
-        return authorization
-    }
-
-    /**
-     * Performs one public AP-mode connection using a same-client verified authorization. Neither
-     * the account cookie nor reusable credential material is sent or retained. Both mutable
-     * objects are consumed before dispatch and a lost response must be reconciled out of band.
-     */
-    suspend fun connectWifiInAccessPointMode(
-        credentials: NanoKvmWifiCredentials,
-        authorization: NanoKvmWifiAccessPointAuthorization,
-    ) {
-        wifiOperation(NanoKvmWifiOperation.CONNECT_IN_ACCESS_POINT_MODE) {
-            val body = credentials.consumeJson(json)
-            val apKey = authorization.consumeHeader(wifiAccessPointAuthorizationOwner)
-            val request = requestBuilder("/api/network/wifi")
-                .tag(SessionCookiePolicy::class.java, SessionCookiePolicy.OMIT)
-                .header(WIFI_AP_KEY_HEADER, apKey)
-                .post(body.toRequestBody(JSON_MEDIA_TYPE))
-                .build()
-            executeEnvelope<Unit>(request, responseSerializer = null)
         }
     }
 
@@ -1269,34 +1208,53 @@ class NanoKvmApi internal constructor(
     ): T? {
         val call = transport.newCall(request)
         callTimeoutMillis?.let { call.timeout().timeout(it, TimeUnit.MILLISECONDS) }
-        val response = call.await()
-        response.use {
-            if (it.code == 401) {
-                invalidateSessionScopedHandles()
-                tokenStore.write(null)
-                throw AuthenticationExpiredException()
+        return try {
+            runInterruptible(API_IO_DISPATCHER) {
+                call.execute().use {
+                    if (it.code == 401) {
+                        invalidateSessionScopedHandles()
+                        tokenStore.write(null)
+                        throw AuthenticationExpiredException()
+                    }
+                    if (!it.isSuccessful) {
+                        throw HttpResponseException(it.code)
+                    }
+                    val body = it.body.readUtf8WithinLimit()
+                    val envelope = try {
+                        json.decodeFromString<RawApiEnvelope>(body)
+                    } catch (error: SerializationException) {
+                        throw InvalidApiResponseException(
+                            "NanoKVM returned an invalid API envelope",
+                            error,
+                        )
+                    }
+                    if (envelope.code != 0) {
+                        throw ApiResponseException(envelope.code, envelope.msg)
+                    }
+                    if (responseSerializer == null) return@runInterruptible null
+                    val data = envelope.data ?: throw InvalidApiResponseException(
+                        "Successful NanoKVM response contained no data",
+                    )
+                    try {
+                        json.decodeFromJsonElement(responseSerializer, data)
+                    } catch (error: SerializationException) {
+                        throw InvalidApiResponseException(
+                            "NanoKVM returned invalid response data",
+                            error,
+                        )
+                    }
+                }
             }
-            val body = it.body.readUtf8WithinLimit()
-            if (!it.isSuccessful) {
-                throw HttpResponseException(it.code)
+        } catch (error: CancellationException) {
+            call.cancel()
+            throw error
+        } catch (error: IOException) {
+            val context = currentCoroutineContext()
+            if (!context.isActive) {
+                call.cancel()
+                context.ensureActive()
             }
-
-            val envelope = try {
-                json.decodeFromString<RawApiEnvelope>(body)
-            } catch (error: SerializationException) {
-                throw InvalidApiResponseException("NanoKVM returned an invalid API envelope", error)
-            }
-            if (envelope.code != 0) {
-                throw ApiResponseException(envelope.code, envelope.msg)
-            }
-            if (responseSerializer == null) return null
-            val data = envelope.data
-                ?: throw InvalidApiResponseException("Successful NanoKVM response contained no data")
-            return try {
-                json.decodeFromJsonElement(responseSerializer, data)
-            } catch (error: SerializationException) {
-                throw InvalidApiResponseException("NanoKVM returned invalid response data", error)
-            }
+            throw error
         }
     }
 
@@ -1311,20 +1269,8 @@ class NanoKvmApi internal constructor(
         require(valid) { "Unsupported ${setting.wireName} value: $value" }
     }
 
-    private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { cancel() }
-        enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) continuation.resumeWithException(e)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) continuation.resume(response) else response.close()
-            }
-        })
-    }
-
     companion object {
+        private val API_IO_DISPATCHER = Dispatchers.IO
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OCTET_STREAM_MEDIA_TYPE = "application/octet-stream".toMediaType()
         private val OFFLINE_UPDATE_MEDIA_TYPE = "application/gzip".toMediaType()
@@ -1332,7 +1278,6 @@ class NanoKvmApi internal constructor(
         private const val ONLINE_UPDATE_CALL_TIMEOUT_MILLIS = 15L * 60L * 1_000L
         private const val OFFLINE_UPDATE_CALL_TIMEOUT_MILLIS = 30L * 60L * 1_000L
         private const val MISSING_WEB_TITLE_CODE = -1
-        private const val WIFI_AP_KEY_HEADER = "X-AP-Key"
     }
 }
 
@@ -1486,6 +1431,13 @@ private val LEGACY_EMPTY_WOL_LAST_VERSION = NanoKvmApplicationVersion(2, 4, 1)
 
 internal const val MAX_REST_RESPONSE_BYTES = 1024 * 1024
 
+/**
+ * NanoKVM tokens are printable ASCII cookie values. A 2 KiB ceiling comfortably accommodates
+ * normal session tokens while keeping the complete Cookie header below common 4 KiB limits and
+ * bounding the credential retained in memory and repeated on every authenticated request.
+ */
+internal const val MAX_SESSION_TOKEN_LENGTH = 2_048
+
 /** Reads at most one byte beyond the accepted limit, never buffering an unbounded response. */
 private fun ResponseBody.readUtf8WithinLimit(): String {
     val declaredLength = contentLength()
@@ -1506,6 +1458,9 @@ private fun ResponseBody.readUtf8WithinLimit(): String {
 
 internal fun validateCookieValue(token: String) {
     require(token.isNotEmpty()) { "NanoKVM returned an empty token" }
+    require(token.length <= MAX_SESSION_TOKEN_LENGTH) {
+        "NanoKVM returned a token longer than the $MAX_SESSION_TOKEN_LENGTH-character limit"
+    }
     require(token.none { it.code < 0x21 || it.code > 0x7e || it == ';' || it == ',' }) {
         "NanoKVM returned a token that is unsafe for a Cookie header"
     }

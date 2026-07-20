@@ -22,6 +22,22 @@ plugins {
     alias(libs.plugins.cyclonedx.bom)
 }
 
+val developmentKeystorePath = providers
+    .gradleProperty("nanokvm.developmentKeystore")
+    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEYSTORE"))
+val developmentStorePassword = providers
+    .gradleProperty("nanokvm.developmentStorePassword")
+    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_STORE_PASSWORD"))
+    .orElse("android")
+val developmentKeyAlias = providers
+    .gradleProperty("nanokvm.developmentKeyAlias")
+    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEY_ALIAS"))
+    .orElse("androiddebugkey")
+val developmentKeyPassword = providers
+    .gradleProperty("nanokvm.developmentKeyPassword")
+    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEY_PASSWORD"))
+    .orElse("android")
+
 @CacheableTask
 abstract class NormalizeCycloneDxSbom : DefaultTask() {
     @get:InputFile
@@ -160,11 +176,24 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
+        versionCode = 9
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    signingConfigs.named("debug") {
+        developmentKeystorePath.orNull?.let { configuredPath ->
+            val configuredKeystore = rootProject.file(configuredPath)
+            require(configuredKeystore.isFile) {
+                "The configured NanoKVM development keystore does not exist: $configuredKeystore"
+            }
+            storeFile = configuredKeystore
+            storePassword = developmentStorePassword.get()
+            keyAlias = developmentKeyAlias.get()
+            keyPassword = developmentKeyPassword.get()
+        }
     }
 
     buildTypes {
@@ -208,7 +237,6 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.biometric)
@@ -229,7 +257,6 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive)
     implementation(libs.androidx.compose.material3.adaptive.layout)
     implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

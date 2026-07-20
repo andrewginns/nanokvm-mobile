@@ -1,13 +1,17 @@
 package org.nanokvm.video
 
 import okhttp3.HttpUrl
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import java.io.IOException
+import java.net.ProtocolException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.TimeUnit
 
 interface DirectH264SourceListener {
     fun onConnecting() = Unit
@@ -28,6 +32,12 @@ class DirectH264WebSocketSource(
 ) : AutoCloseable {
     private val generation = AtomicLong(0)
     private val lock = Any()
+    private val webSocketClient = client.newBuilder()
+        // Bound teardown after rejecting a complete oversized message. This does not claim a
+        // pre-allocation bound: OkHttp has already materialized the ByteString at this point.
+        .webSocketCloseTimeout(WEBSOCKET_CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .addInterceptor(UncompressedDirectWebSocketInterceptor)
+        .build()
     private var socket: WebSocket? = null
 
     init {
@@ -49,7 +59,7 @@ class DirectH264WebSocketSource(
             .header("Cookie", nanoKvmCookie(token))
             .build()
         val callback = Callback(run)
-        val created = client.newWebSocket(request, callback)
+        val created = webSocketClient.newWebSocket(request, callback)
         synchronized(lock) {
             if (generation.get() == run) {
                 socket = created
@@ -86,6 +96,10 @@ class DirectH264WebSocketSource(
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             if (!isCurrent(run)) return
+            if (bytes.size.toLong() > maxAccessUnitBytes.toLong() + NanoKvmH264FrameParser.HEADER_SIZE) {
+                rejectOversizedMessage(webSocket, run)
+                return
+            }
             try {
                 listener.onFrame(NanoKvmH264FrameParser.parse(bytes, maxAccessUnitBytes))
             } catch (error: IllegalArgumentException) {
@@ -110,7 +124,47 @@ class DirectH264WebSocketSource(
         }
     }
 
+    private fun rejectOversizedMessage(webSocket: WebSocket, run: Long) {
+        val claimed = synchronized(lock) {
+            if (generation.get() != run) return@synchronized false
+            generation.incrementAndGet()
+            if (socket === webSocket) socket = null
+            true
+        }
+        if (!claimed) return
+
+        // Unlike a corrupt in-range packet, an oversize packet is a transport-level availability
+        // violation. Cancel immediately so the peer cannot force another complete allocation while
+        // a graceful close is pending, then let the session's normal failure policy choose fallback.
+        webSocket.cancel()
+        listener.onMalformedFrame(
+            IllegalArgumentException(
+                "NanoKVM H.264 access unit exceeds the $maxAccessUnitBytes-byte limit",
+            ),
+        )
+        listener.onFailure(IOException("H.264 WebSocket message exceeded its configured limit"), null)
+    }
+
     private companion object {
         const val NORMAL_CLOSE_CODE = 1000
+        const val WEBSOCKET_CLOSE_TIMEOUT_SECONDS = 2L
+    }
+}
+
+/** See the protocol transport's equivalent policy; direct video is also safe when used alone. */
+private object UncompressedDirectWebSocketInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        if (!request.header("Upgrade").equals("websocket", ignoreCase = true)) {
+            return chain.proceed(request)
+        }
+        val response = chain.proceed(
+            request.newBuilder().removeHeader("Sec-WebSocket-Extensions").build(),
+        )
+        if (response.header("Sec-WebSocket-Extensions") != null) {
+            response.close()
+            throw ProtocolException("WebSocket compression negotiation is not permitted")
+        }
+        return response
     }
 }
