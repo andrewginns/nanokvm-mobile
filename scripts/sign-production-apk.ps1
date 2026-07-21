@@ -619,7 +619,7 @@ Assert-ProtectedAcl -Path $resolvedKeystore
 
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-release.apk"
+        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode.apk"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {
