@@ -11,7 +11,7 @@ Thank you for helping improve NanoKVM Mobile.
 3. Keep secrets and appliance data out of source, fixtures, screenshots, traces,
    and build logs. Never commit passwords, JWTs, private keys, signing keys,
    private network inventories, or another person's console capture.
-4. Treat `main` as the 0.3.5 development milestone until a named, signed release
+4. Treat `main` as the 0.3.6 development milestone until a named, signed release
    is approved. Changed distributable bytes require a new Android version code;
    do not rename an old-version APK and present it as an update.
 

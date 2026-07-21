@@ -37,12 +37,143 @@ recoverable compatibility promise. Before the first binary release, freeze the
 application ID and establish one protected, recoverable production signing
 lineage.
 
-## Build and verify
+### Practical signing setup for direct GitHub APKs
 
-Use a clean checkout, JDK 21, and strict dependency verification:
+Android application signing does not require a public certificate authority.
+For direct GitHub distribution, use one long-lived self-signed application key
+whose private material stays outside this repository. Before the first release,
+place encrypted backups in two separately controlled locations and record who
+can sign, recover, rotate, or revoke the key.
+
+Create an account-only NTFS directory once. This example retains access for the
+signing account, local administrators, and Windows itself while removing
+inherited access such as `Users` or `Authenticated Users`:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
+$signingDirectory = Join-Path $env:LOCALAPPDATA 'NanoKVM Signing'
+New-Item -ItemType Directory -Path $signingDirectory
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$acl = Get-Acl -LiteralPath $signingDirectory
+$acl.SetOwner($identity.User)
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+$propagation = [Security.AccessControl.PropagationFlags]::None
+$allow = [Security.AccessControl.AccessControlType]::Allow
+foreach ($sid in @(
+    $identity.User,
+    [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+    [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+)) {
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        $propagation,
+        $allow
+    ))
+}
+Set-Acl -LiteralPath $signingDirectory -AclObject $acl
+```
+
+Create the key interactively with Android Studio's **Generate Signed Bundle or
+APK** flow, or with the guarded JDK 21 helper. The helper deliberately accepts
+no password argument; `keytool` prompts instead of exposing a secret in shell
+history, a process listing, Gradle state, or build output. Generate at least a
+20-character random password in a password manager; do not reuse an account
+password.
+
+```powershell
+.\scripts\new-production-keystore.ps1 `
+    -Keytool 'C:\path\to\jdk-21\bin\keytool.exe' `
+    -KeystorePath "$env:LOCALAPPDATA\NanoKVM Signing\NanoKVM-Mobile-production.keystore" `
+    -KeyAlias nanokvm-release
+```
+
+Record the public certificate SHA-256 reported by the helper in the tracked
+`release/production-signing-lineage.json` file. The first version name/code in
+that record is a one-time bootstrap boundary; later signing requires the actual
+preceding production APK as well as the same certificate.
+
+```json
+{
+  "schemaVersion": 1,
+  "package": "org.nanokvm.mobile",
+  "keyAlias": "nanokvm-release",
+  "signingCertificateSha256": "<64-hex-public-certificate-digest>",
+  "firstProductionVersionName": "0.3.6",
+  "firstProductionVersionCode": 13,
+  "previousProduction": null
+}
+```
+
+For a later release, replace `previousProduction: null` in that release's
+tagged record with the exact preceding release identity:
+
+```json
+"previousProduction": {
+  "versionName": "0.3.6",
+  "versionCode": 13,
+  "apkSha256": "<64-hex-preceding-production-apk-digest>"
+}
+```
+
+The signing helper compares all three fields before it touches the private key.
+
+Commit that public record, then freeze the release source under an annotated or
+signed tag. Generate and review an unsigned evidence manifest before exposing
+the private key. The helper itself runs the authoritative clean strict build
+with the supplied JDK 21 runtime:
+
+```powershell
+.\scripts\write-unsigned-release-evidence.ps1 `
+    -SourceTag 'v0.3.6' `
+    -JavaPath 'C:\path\to\jdk-21\bin\java.exe' `
+    -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0'
+```
+
+The evidence command verifies and hashes the exact unsigned APK, release AAB,
+SBOM, R8 mapping, Baseline and Startup Profiles, test/lint reports, strict-build
+log, Gradle wrapper, JDK, and Android signing tools. Review the reported evidence
+and unsigned APK SHA-256 values, then sign only those reviewed bytes:
+
+```powershell
+.\scripts\sign-production-apk.ps1 `
+    -SourceTag 'v0.3.6' `
+    -UnsignedEvidencePath '.\dist\NanoKVM-Mobile-0.3.6-v13-unsigned-evidence.json' `
+    -ExpectedEvidenceSha256 '<64-hex-reviewed-evidence-digest>' `
+    -JavaPath 'C:\path\to\jdk-21\bin\java.exe' `
+    -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0' `
+    -KeystorePath "$env:LOCALAPPDATA\NanoKVM Signing\NanoKVM-Mobile-production.keystore" `
+    -KeyAlias nanokvm-release `
+    -FirstProductionRelease
+```
+
+For every later release, replace `-FirstProductionRelease` with
+`-PreviousProductionApk` and the actual preceding production APK. The signer
+rejects repository-local keys, dirty or untagged source, signed or debuggable
+inputs, source/APK version mismatches, changed unsigned bytes or toolchain, an
+unexpected or development certificate, missing v2/v3 signatures, failed
+alignment, and existing output paths. It prompts through `apksigner`; neither
+the keystore password nor key password is accepted on the command line.
+
+The helper emits the signed APK, its checksum manifest, the public signing
+certificate digest, and machine-readable release metadata under ignored
+`dist/`, including the retained verbose `apksigner` verification. These files
+are inputs to the wider evidence and publication process; the helper does not
+close any checklist item by itself. Complete and verify two encrypted,
+separately controlled backups before the first signing operation. Losing the
+private key prevents in-place updates on this distribution channel.
+Development APKs signed with the retained debug identity cannot update into
+this first production lineage. Uninstalling one removes its profiles,
+certificate pins, and protected credentials.
+
+## Build and verify
+
+The evidence helper invokes this clean build gate with JDK 21 and strict
+dependency verification:
+
+```powershell
+.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
 ```
 
 The repository build produces:

@@ -5,10 +5,24 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
-## [0.3.5] - Unreleased
+## [0.3.6] - Unreleased
 
-Android version code: **12**. This is the current development milestone and has
-not yet passed the signed-production-candidate gate.
+Android version code: **13**. This source milestone prepares a minified,
+non-debuggable release candidate. Public distribution remains gated on the
+protected production signing identity and the retained evidence in
+`docs/RELEASE_CHECKLIST.md`.
+
+### Changed
+
+- Advanced the version name and Android version code so the release-candidate
+  bytes do not reuse the already shared 0.3.5/code-12 development identity.
+- Added guarded production-key creation, clean-build evidence, signing-lineage,
+  and APK signing helpers for a traceable direct-GitHub distribution path.
+
+## [0.3.5] - Development snapshot
+
+Android version code: **12**. This development snapshot did not pass the
+signed-production-candidate gate.
 
 ### Fixed
 

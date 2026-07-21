@@ -32,7 +32,7 @@ if ($resolvedKeystore.StartsWith($repositoryPrefix, [StringComparison]::OrdinalI
 }
 $builtApk = Join-Path $repository "app\build\outputs\apk\debug\app-debug.apk"
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $repository "dist\NanoKVM-Mobile-0.3.5-update-compatible-debug.apk"
+    $OutputPath = Join-Path $repository "dist\NanoKVM-Mobile-0.3.6-update-compatible-debug.apk"
 }
 $absoluteOutput = [IO.Path]::GetFullPath($OutputPath)
 

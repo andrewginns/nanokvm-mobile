@@ -17,13 +17,14 @@ keyboard, and controls that remain reachable in portrait and landscape.
 <sub>NanoKVM Mobile 0.3.5 UI captured on an API 37 emulator. The remote desktop,
 device frame, and desk backdrop are illustrative generated layers.</sub>
 
-## 0.3.5 development milestone
+## 0.3.6 release-candidate milestone
 
-The current source milestone is **0.3.5** (Android version code **12**). It is a
-development candidate, not an approved, production-signed public release. The
-feature list below describes implemented source; capability-gated features
-still need the device, appliance, and signed-candidate evidence recorded in the
-parity ledger before they can be described as release-verified.
+The current source milestone is **0.3.6** (Android version code **13**). It
+prepares a minified, non-debuggable candidate, but is not yet an approved,
+production-signed public release. The feature list below describes implemented
+source; capability-gated features still need the device, appliance, and
+signed-candidate evidence recorded in the parity ledger before they can be
+described as release-verified.
 
 - Saved NanoKVM connections with HTTPS certificate review and pinning.
 - NanoKVM login and cookie authentication for application versions 2.3.2+.

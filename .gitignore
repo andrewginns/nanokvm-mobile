@@ -11,6 +11,8 @@ captures/
 **/build/
 *.jks
 *.keystore
+*.p12
+*.pfx
 release.properties
 qa-artifacts/
 .tooling/
