@@ -77,7 +77,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import org.nanokvm.mobile.BuildConfig
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.data.ProfileInputPolicy
@@ -481,36 +480,6 @@ private fun ProfileStorageRecoveryState(
             }
         }
     }
-}
-
-@Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Info, contentDescription = null) },
-        title = {
-            Text(stringResource(R.string.about_title, BuildConfig.VERSION_NAME))
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.about_description))
-                Text(stringResource(R.string.about_copyright))
-                Text(
-                    stringResource(R.string.about_license),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    stringResource(R.string.about_independence),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-        },
-    )
 }
 
 @Composable

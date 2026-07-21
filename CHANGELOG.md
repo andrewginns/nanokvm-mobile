@@ -20,6 +20,12 @@ protected production signing identity and the retained evidence in
   and APK signing helpers for a traceable direct-GitHub distribution path.
 - Completed the strict dependency-verification manifest for fresh-cache release
   builds so missing Maven metadata cannot be hidden by a warm developer cache.
+- Expanded the fail-closed evidence set to retain the exact source archive,
+  manifest and network policy, dependency graph, benchmark, profiles, SBOM,
+  tests, lint, and complete R8 outputs before signing.
+- The in-app About surface now exposes the exact version/code/source and actual
+  installed signing certificate, with offline GPL, privacy, security, project,
+  wrapper, and complete pinned WebRTC notice material.
 
 ## [0.3.5] - Development snapshot
 

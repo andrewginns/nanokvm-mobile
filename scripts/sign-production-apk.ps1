@@ -458,7 +458,7 @@ if ($evidenceHash -ne $normalizedExpectedEvidence) {
 }
 $evidence = Get-Content -Raw -LiteralPath $resolvedEvidence | ConvertFrom-Json
 if (
-    $evidence.schemaVersion -ne 1 -or
+    $evidence.schemaVersion -ne 2 -or
     $evidence.sourceTag -cne $SourceTag -or
     $evidence.sourceCommit -ne $headCommit -or
     $evidence.package -ne "org.nanokvm.mobile" -or
@@ -499,10 +499,19 @@ if (
 }
 
 $requiredEvidenceRecords = @(
+    "sourceArchive",
     "unsignedApk",
     "releaseBundle",
+    "benchmarkApk",
     "sbom",
+    "mergedReleaseManifest",
+    "networkSecurityConfig",
+    "releaseDependencyGraph",
     "mapping",
+    "seeds",
+    "usage",
+    "configuration",
+    "resources",
     "baselineProfile",
     "startupProfile",
     "strictBuildLog"

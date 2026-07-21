@@ -6,6 +6,11 @@ Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:144.7559.09`
 
 Source: <https://github.com/webrtc-sdk/android/tree/v144.7559.09>
 
+The exact upstream wrapper licence is bundled at
+`app/src/main/assets/open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt`;
+its SHA-256 is
+`e6b282fe6c0fb353928923470457f31b44cbab203effd60c0cde4a5bb96c8aec`.
+
 Copyright (c) 2023 WebRTC SDKs
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -54,8 +59,12 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-WebRTC incorporates further third-party components. The authoritative notice
-bundle for the exact wrapper release is maintained upstream at
-<https://github.com/webrtc-sdk/android/blob/v144.7559.09/Licenses/WEBRTC.md>.
-Before distributing a binary, preserve that complete bundle with the release
-materials and review any licence changes when updating the pinned artifact.
+WebRTC incorporates further third-party components. The complete notice bundle
+for the exact pinned wrapper release is preserved byte-for-byte at
+`app/src/main/assets/open_source_licenses/WEBRTC.md` and is included in the
+application for offline review. Its provenance is the upstream
+[`v144.7559.09` notice file](https://github.com/webrtc-sdk/android/blob/v144.7559.09/Licenses/WEBRTC.md),
+and its SHA-256 is
+`d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e`.
+Review and replace both the pinned dependency and this bundle together when
+updating WebRTC.

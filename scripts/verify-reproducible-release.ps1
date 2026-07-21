@@ -23,7 +23,7 @@ $artifacts = @(
 function Invoke-ReleaseBuild {
     & $Gradle --no-daemon --no-parallel --no-build-cache --no-configuration-cache --no-problems-report `
         "-Dkotlin.compiler.execution.strategy=in-process" --dependency-verification=strict `
-        clean :app:verifyReleaseProfiles bundleRelease :app:reproducibleSbom
+        clean :app:verifyReleaseProfiles bundleRelease :app:verifyReproducibleSbomMetadata
     if ($LASTEXITCODE -ne 0) {
         throw "Release build failed with exit code $LASTEXITCODE."
     }

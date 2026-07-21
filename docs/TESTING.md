@@ -37,7 +37,7 @@ Use JDK 21 and Android SDK platform 37. Java/Kotlin bytecode targets version 17.
 Run all Gradle commands with strict dependency verification:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
+.\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
 ```
 
 This verifies repository tests and unsigned release-like artifacts. It does not

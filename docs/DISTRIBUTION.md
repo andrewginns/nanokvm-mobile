@@ -131,10 +131,17 @@ with the supplied JDK 21 runtime:
     -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0'
 ```
 
-The evidence command verifies and hashes the exact unsigned APK, release AAB,
-SBOM, R8 mapping, Baseline and Startup Profiles, test/lint reports, strict-build
-log, Gradle wrapper, JDK, and Android signing tools. Review the reported evidence
-and unsigned APK SHA-256 values, then sign only those reviewed bytes:
+The evidence command verifies, copies, and hashes the exact unsigned APK,
+release AAB, benchmark APK, canonical SBOM, merged release manifest, packaged
+Network Security Config, resolved `releaseRuntimeClasspath` dependency graph,
+all five required R8 outputs (`mapping`, `seeds`, `usage`, `configuration`, and
+`resources`), Baseline and Startup Profiles, test/lint reports, strict-build
+log, Gradle wrapper, JDK, and Android signing tools. It also creates and hashes a
+source ZIP directly from the annotated release tag. Except for the separately
+named strict-build log, retained copies are staged and then published together
+under the ignored `dist/*-unsigned-evidence-artifacts/` directory; an existing
+evidence path is never overwritten. Review the reported evidence, source
+archive, and unsigned APK SHA-256 values, then sign only those reviewed bytes:
 
 ```powershell
 .\scripts\sign-production-apk.ps1 `
@@ -173,7 +180,7 @@ The evidence helper invokes this clean build gate with JDK 21 and strict
 dependency verification:
 
 ```powershell
-.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --refresh-dependencies --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
+.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --refresh-dependencies --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
 ```
 
 The repository build produces:
@@ -190,16 +197,22 @@ The repository build produces:
 GitHub-hosted build/test workflows and public artifact uploads are intentionally
 disabled during active development. Maintainers run the strict gate locally and
 retain its command output and artifacts privately against the exact commit.
-Before a production candidate is approved, create an exact-source archive and a
-reviewed unsigned evidence manifest from the frozen release commit. Generate a
-separate checksum manifest after production signing; no development-output hash
-can identify the final published bytes.
+Before a production candidate is approved, run the evidence helper to create its
+exact tagged-source archive, durable build-artifact directory, and reviewed
+unsigned evidence manifest from the frozen release commit. Preserve the JSON,
+its companion artifact directory, and the strict-build log as one evidence set.
+Generate a separate checksum manifest after production signing; no
+development-output hash can identify the final published bytes.
 
-Retain the complete test/lint output, merged release manifest and Network
-Security Config, resolved dependency graph, SBOM, vulnerability/licence review,
-R8 outputs, profile verification result, and device/manual evidence. Local-only
-storage is acceptable during development; production evidence needs named
-custody, integrity hashes, backup, and a durable release-record location.
+The helper retains and hashes its complete JVM test/release-lint output, merged
+release manifest and packaged Network Security Config, resolved release runtime
+dependency graph, canonical SBOM, all required R8 outputs, generated profiles,
+benchmark APK, unsigned APK, and release AAB. Retain the separate
+vulnerability/licence review, profile-verification interpretation, and
+device/manual evidence alongside that machine-produced set. Local-only storage
+is acceptable during development; production evidence needs named custody,
+integrity hashes, backup, and a durable release-record location. The benchmark
+APK and R8/test details are private evidence, not public release assets.
 
 ## Signing and candidate identity
 

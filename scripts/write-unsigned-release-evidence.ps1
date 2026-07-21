@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 $publishedEvidencePaths = [System.Collections.Generic.List[string]]::new()
 $inProgressEvidence = $null
 $inProgressBuildLog = $null
+$inProgressArtifactDirectory = $null
 
 function Invoke-NativeCapture {
     param(
@@ -115,6 +116,63 @@ function Get-ArtifactRecord {
         length = $item.Length
         lastWriteTimeUtc = $item.LastWriteTimeUtc.ToString("o")
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    }
+}
+
+function Copy-RetainedArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RelativeDestination,
+
+        [Parameter(Mandatory = $true)]
+        [string]$StagingDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Repository
+    )
+
+    $sourceRecord = Get-ArtifactRecord -Path $Source -Repository $Repository
+    $resolvedSource = (Resolve-Path -LiteralPath (
+        Join-Path $Repository $sourceRecord.path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+    )).Path
+    $stagingPrefix = [IO.Path]::GetFullPath($StagingDirectory).TrimEnd('\', '/') +
+        [IO.Path]::DirectorySeparatorChar
+    $destination = [IO.Path]::GetFullPath((Join-Path $StagingDirectory $RelativeDestination))
+    if (-not $destination.StartsWith($stagingPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "A retained artifact destination escapes its staging directory: $RelativeDestination"
+    }
+    if (Test-Path -LiteralPath $destination) {
+        throw "Refusing to overwrite a staged release evidence artifact: $destination"
+    }
+    $destinationDirectory = Split-Path -Parent $destination
+    if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+        New-Item -ItemType Directory -Path $destinationDirectory | Out-Null
+    }
+    Copy-Item -LiteralPath $resolvedSource -Destination $destination
+    $destinationItem = Get-Item -LiteralPath $destination
+    $destinationHash = (
+        Get-FileHash -Algorithm SHA256 -LiteralPath $destination
+    ).Hash.ToLowerInvariant()
+    if ($destinationItem.Length -ne $sourceRecord.length -or $destinationHash -ne $sourceRecord.sha256) {
+        throw "A retained release evidence copy does not match its build output: $RelativeDestination"
+    }
+}
+
+function Remove-EvidencePath {
+    param(
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    if (Test-Path -LiteralPath $Path -PathType Container) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    } else {
+        Remove-Item -LiteralPath $Path -Force
     }
 }
 
@@ -234,6 +292,11 @@ if ([IO.Path]::IsPathRooted($BuildLogPath)) {
 if ($absoluteOutput -eq $absoluteBuildLog) {
     throw "The unsigned evidence manifest and strict build log require different paths."
 }
+$evidenceOutputDirectoryCandidate = Split-Path -Parent $absoluteOutput
+$artifactDirectoryName = [IO.Path]::GetFileNameWithoutExtension($absoluteOutput) + "-artifacts"
+$absoluteArtifactDirectory = [IO.Path]::GetFullPath((
+    Join-Path $evidenceOutputDirectoryCandidate $artifactDirectoryName
+))
 foreach ($newEvidencePath in @($absoluteOutput, $absoluteBuildLog)) {
     if (Test-Path -LiteralPath $newEvidencePath) {
         throw "Refusing to overwrite existing release evidence: $newEvidencePath"
@@ -243,25 +306,32 @@ foreach ($newEvidencePath in @($absoluteOutput, $absoluteBuildLog)) {
         New-Item -ItemType Directory -Path $newEvidenceDirectory | Out-Null
     }
 }
+if (Test-Path -LiteralPath $absoluteArtifactDirectory) {
+    throw "Refusing to overwrite existing retained release evidence: $absoluteArtifactDirectory"
+}
 $evidenceOutputDirectory = (Resolve-Path -LiteralPath (Split-Path -Parent $absoluteOutput)).Path
 $buildLogDirectory = (Resolve-Path -LiteralPath (Split-Path -Parent $absoluteBuildLog)).Path
+$repositoryPrefix = $repository.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+foreach ($retainedPath in @($absoluteOutput, $absoluteBuildLog, $absoluteArtifactDirectory)) {
+    if (-not $retainedPath.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Release evidence must remain under the tagged repository: $retainedPath"
+    }
+}
 $stagingId = [guid]::NewGuid().ToString("N")
 $inProgressEvidence = Join-Path $evidenceOutputDirectory ".nanokvm-evidence-$stagingId.json"
 $inProgressBuildLog = Join-Path $buildLogDirectory ".nanokvm-build-$stagingId.log"
+$inProgressArtifactDirectory = Join-Path $evidenceOutputDirectory ".nanokvm-artifacts-$stagingId"
 trap {
     $failure = $_
     foreach ($publishedPath in $publishedEvidencePaths) {
-        if (Test-Path -LiteralPath $publishedPath -PathType Leaf) {
-            Remove-Item -LiteralPath $publishedPath -Force
-        }
+        Remove-EvidencePath -Path $publishedPath
     }
-    foreach ($temporaryPath in @($inProgressEvidence, $inProgressBuildLog)) {
-        if (
-            -not [string]::IsNullOrWhiteSpace($temporaryPath) -and
-            (Test-Path -LiteralPath $temporaryPath -PathType Leaf)
-        ) {
-            Remove-Item -LiteralPath $temporaryPath -Force
-        }
+    foreach ($temporaryPath in @(
+        $inProgressEvidence,
+        $inProgressBuildLog,
+        $inProgressArtifactDirectory
+    )) {
+        Remove-EvidencePath -Path $temporaryPath
     }
     throw $failure
 }
@@ -281,7 +351,7 @@ $strictBuildArguments = @(
     "assembleBenchmark",
     ":app:verifyReleaseProfiles",
     ":macrobenchmark:assembleBenchmark",
-    ":app:reproducibleSbom"
+    ":app:verifyReproducibleSbomMetadata"
 )
 $gradleWrapper = Join-Path $repository "gradlew.bat"
 $jdkHome = Split-Path -Parent (Split-Path -Parent $resolvedJava)
@@ -326,6 +396,59 @@ if ($strictBuildExitCode -ne 0) {
 Move-Item -LiteralPath $inProgressBuildLog -Destination $absoluteBuildLog
 $publishedEvidencePaths.Add($absoluteBuildLog)
 
+$dependencyGraphArguments = @(
+    "--no-problems-report",
+    "--no-daemon",
+    "--no-parallel",
+    "--no-configuration-cache",
+    "--refresh-dependencies",
+    "--dependency-verification=strict",
+    "--console=plain",
+    ":app:dependencies",
+    "--configuration",
+    "releaseRuntimeClasspath"
+)
+New-Item -ItemType Directory -Path $inProgressArtifactDirectory | Out-Null
+$inProgressDependencyDirectory = Join-Path $inProgressArtifactDirectory "dependencies"
+New-Item -ItemType Directory -Path $inProgressDependencyDirectory | Out-Null
+$inProgressDependencyGraph = Join-Path (
+    $inProgressDependencyDirectory
+) "releaseRuntimeClasspath.txt"
+$dependencyGraphExitCode = 1
+Push-Location $repository
+try {
+    $env:JAVA_HOME = $jdkHome
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $gradleWrapper @dependencyGraphArguments 2>&1 |
+            Tee-Object -FilePath $inProgressDependencyGraph
+        $dependencyGraphExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+} finally {
+    Pop-Location
+    if ($null -eq $previousJavaHome) {
+        Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue
+    } else {
+        $env:JAVA_HOME = $previousJavaHome
+    }
+}
+if ($dependencyGraphExitCode -ne 0) {
+    throw "The strict release dependency graph failed with exit code $dependencyGraphExitCode."
+}
+if ((Get-Item -LiteralPath $inProgressDependencyGraph).Length -le 0) {
+    throw "The retained release dependency graph is empty."
+}
+$dependencyGraphText = Get-Content -Raw -LiteralPath $inProgressDependencyGraph
+if (
+    $dependencyGraphText -notmatch '(?m)^releaseRuntimeClasspath\s+-\s+' -or
+    $dependencyGraphText -match '(?m)\bFAILED\b'
+) {
+    throw "The retained release dependency graph is incomplete or unresolved."
+}
+
 $postBuildGitResult = Invoke-NativeCapture `
     -FilePath "git.exe" `
     -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
@@ -347,6 +470,21 @@ $unsignedApkRecord = Get-ArtifactRecord -Path $UnsignedApk -Repository $reposito
 $releaseBundleRecord = Get-ArtifactRecord -Path $ReleaseBundle -Repository $repository
 $sbomRecord = Get-ArtifactRecord -Path $Sbom -Repository $repository
 $strictBuildLogRecord = Get-ArtifactRecord -Path $absoluteBuildLog -Repository $repository
+
+$benchmarkApk = Join-Path $repository "app\build\outputs\apk\benchmark\app-benchmark.apk"
+$mergedReleaseManifest = Join-Path $repository (
+    "app\build\intermediates\merged_manifests\release\processReleaseManifest\AndroidManifest.xml"
+)
+$networkSecurityConfig = Join-Path $repository (
+    "app\build\intermediates\packaged_res\release\packageReleaseResources\xml\network_security_config.xml"
+)
+$r8Outputs = [ordered]@{
+    mapping = Join-Path $repository "app\build\outputs\mapping\release\mapping.txt"
+    seeds = Join-Path $repository "app\build\outputs\mapping\release\seeds.txt"
+    usage = Join-Path $repository "app\build\outputs\mapping\release\usage.txt"
+    configuration = Join-Path $repository "app\build\outputs\mapping\release\configuration.txt"
+    resources = Join-Path $repository "app\build\outputs\mapping\release\resources.txt"
+}
 
 $resolvedUnsignedApk = (Resolve-Path -LiteralPath (Join-Path $repository $unsignedApkRecord.path)).Path
 $apkMetadata = Get-ApkMetadata -Apk $resolvedUnsignedApk -Aapt2 $aapt2
@@ -374,10 +512,14 @@ if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
     throw "The unsigned APK failed signature inspection for an unexpected reason."
 }
 
-$testFiles = Get-ChildItem -LiteralPath $repository -Recurse -File -Filter "TEST-*.xml" |
-    Where-Object { $_.FullName -match '\\build\\test-results\\testDebugUnitTest\\' }
+$testFiles = @()
+foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
+    $testResultDirectory = Join-Path $repository "$module\build\test-results\testDebugUnitTest"
+    if (Test-Path -LiteralPath $testResultDirectory -PathType Container) {
+        $testFiles += Get-ChildItem -LiteralPath $testResultDirectory -File -Filter "TEST-*.xml"
+    }
+}
 $testTotals = [ordered]@{ suites = $testFiles.Count; tests = 0; failures = 0; errors = 0; skipped = 0 }
-$testReportRecords = @()
 foreach ($testFile in $testFiles) {
     [xml]$testDocument = Get-Content -LiteralPath $testFile.FullName
     $suite = $testDocument.testsuite
@@ -385,51 +527,163 @@ foreach ($testFile in $testFiles) {
     $testTotals.failures += [int]$suite.failures
     $testTotals.errors += [int]$suite.errors
     $testTotals.skipped += [int]$suite.skipped
-    $testReportRecords += Get-ArtifactRecord `
-        -Path $testFile.FullName `
-        -Repository $repository
 }
 if ($testTotals.tests -le 0 -or $testTotals.failures -ne 0 -or $testTotals.errors -ne 0) {
     throw "The retained JVM test results are missing or contain failures."
 }
-$testTotals["reports"] = $testReportRecords
 
-$lintFiles = Get-ChildItem -LiteralPath $repository -Recurse -File -Filter "lint-results-release.xml"
-$lintResults = foreach ($lintFile in $lintFiles) {
+$lintFiles = @()
+foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
+    $lintFile = Join-Path $repository "$module\build\reports\lint-results-release.xml"
+    if (Test-Path -LiteralPath $lintFile -PathType Leaf) {
+        $lintFiles += Get-Item -LiteralPath $lintFile
+    }
+}
+$lintSourceResults = foreach ($lintFile in $lintFiles) {
     [xml]$lintDocument = Get-Content -LiteralPath $lintFile.FullName
-    $lintRecord = Get-ArtifactRecord -Path $lintFile.FullName -Repository $repository
     [pscustomobject]@{
-        path = $lintRecord.path
-        length = $lintRecord.length
-        lastWriteTimeUtc = $lintRecord.lastWriteTimeUtc
-        sha256 = $lintRecord.sha256
+        source = $lintFile.FullName
         issues = $lintDocument.SelectNodes("/issues/issue").Count
     }
 }
-if ($lintResults.Count -lt 3 -or ($lintResults | Where-Object { $_.issues -ne 0 })) {
+if ($lintSourceResults.Count -lt 3 -or ($lintSourceResults | Where-Object { $_.issues -ne 0 })) {
     throw "The retained release lint reports are missing or contain issues."
 }
 
-$mappingRecord = Get-ArtifactRecord -Repository $repository -Path (
-    Join-Path $repository "app\build\outputs\mapping\release\mapping.txt"
-)
-$baselineProfileRecord = Get-ArtifactRecord -Repository $repository -Path (
-    Join-Path $repository "app\src\main\generated\baselineProfiles\baseline-prof.txt"
-)
-$startupProfileRecord = Get-ArtifactRecord -Repository $repository -Path (
-    Join-Path $repository "app\src\main\generated\baselineProfiles\startup-prof.txt"
-)
-foreach ($record in @(
+foreach ($requiredArtifact in @(
     $unsignedApkRecord,
     $releaseBundleRecord,
     $sbomRecord,
     $strictBuildLogRecord,
-    $mappingRecord,
-    $baselineProfileRecord,
-    $startupProfileRecord
+    (Get-ArtifactRecord -Repository $repository -Path $benchmarkApk),
+    (Get-ArtifactRecord -Repository $repository -Path $mergedReleaseManifest),
+    (Get-ArtifactRecord -Repository $repository -Path $networkSecurityConfig),
+    (Get-ArtifactRecord -Repository $repository -Path $r8Outputs.mapping),
+    (Get-ArtifactRecord -Repository $repository -Path $r8Outputs.seeds),
+    (Get-ArtifactRecord -Repository $repository -Path $r8Outputs.usage),
+    (Get-ArtifactRecord -Repository $repository -Path $r8Outputs.configuration),
+    (Get-ArtifactRecord -Repository $repository -Path $r8Outputs.resources),
+    (Get-ArtifactRecord -Repository $repository -Path (
+        Join-Path $repository "app\src\main\generated\baselineProfiles\baseline-prof.txt"
+    )),
+    (Get-ArtifactRecord -Repository $repository -Path (
+        Join-Path $repository "app\src\main\generated\baselineProfiles\startup-prof.txt"
+    ))
 )) {
-    if ($record.length -le 0) {
-        throw "A required release evidence artifact is empty: $($record.path)"
+    if ($requiredArtifact.length -le 0) {
+        throw "A required release evidence artifact is empty: $($requiredArtifact.path)"
+    }
+}
+
+$sourceArchiveRelative = "source\NanoKVM-Mobile-$sourceVersionName-source.zip"
+$sourceArchiveStaging = Join-Path $inProgressArtifactDirectory $sourceArchiveRelative
+$sourceArchiveDirectory = Split-Path -Parent $sourceArchiveStaging
+New-Item -ItemType Directory -Path $sourceArchiveDirectory | Out-Null
+$sourceArchiveResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @(
+        "-C",
+        $repository,
+        "archive",
+        "--format=zip",
+        "--prefix=NanoKVM-Mobile-$sourceVersionName/",
+        "--output=$sourceArchiveStaging",
+        $tagReference
+    )
+if ($sourceArchiveResult.ExitCode -ne 0) {
+    throw "Git could not create the exact tagged source archive: $($sourceArchiveResult.Output)"
+}
+if ((Get-Item -LiteralPath $sourceArchiveStaging).Length -le 0) {
+    throw "The exact tagged source archive is empty."
+}
+
+$retainedSources = [ordered]@{
+    unsignedApk = [pscustomobject]@{ source = $UnsignedApk; destination = "artifacts\app-release-unsigned.apk" }
+    releaseBundle = [pscustomobject]@{ source = $ReleaseBundle; destination = "artifacts\app-release.aab" }
+    benchmarkApk = [pscustomobject]@{ source = $benchmarkApk; destination = "artifacts\app-benchmark.apk" }
+    sbom = [pscustomobject]@{ source = $Sbom; destination = "reports\nanokvm-mobile.cdx.json" }
+    mergedReleaseManifest = [pscustomobject]@{ source = $mergedReleaseManifest; destination = "manifest\AndroidManifest.xml" }
+    networkSecurityConfig = [pscustomobject]@{ source = $networkSecurityConfig; destination = "manifest\network_security_config.xml" }
+    mapping = [pscustomobject]@{ source = $r8Outputs.mapping; destination = "r8\mapping.txt" }
+    seeds = [pscustomobject]@{ source = $r8Outputs.seeds; destination = "r8\seeds.txt" }
+    usage = [pscustomobject]@{ source = $r8Outputs.usage; destination = "r8\usage.txt" }
+    configuration = [pscustomobject]@{ source = $r8Outputs.configuration; destination = "r8\configuration.txt" }
+    resources = [pscustomobject]@{ source = $r8Outputs.resources; destination = "r8\resources.txt" }
+    baselineProfile = [pscustomobject]@{
+        source = Join-Path $repository "app\src\main\generated\baselineProfiles\baseline-prof.txt"
+        destination = "profiles\baseline-prof.txt"
+    }
+    startupProfile = [pscustomobject]@{
+        source = Join-Path $repository "app\src\main\generated\baselineProfiles\startup-prof.txt"
+        destination = "profiles\startup-prof.txt"
+    }
+}
+foreach ($retainedSource in $retainedSources.GetEnumerator()) {
+    Copy-RetainedArtifact `
+        -Source $retainedSource.Value.source `
+        -RelativeDestination $retainedSource.Value.destination `
+        -StagingDirectory $inProgressArtifactDirectory `
+        -Repository $repository
+}
+
+foreach ($testFile in $testFiles) {
+    $testRecord = Get-ArtifactRecord -Path $testFile.FullName -Repository $repository
+    Copy-RetainedArtifact `
+        -Source $testFile.FullName `
+        -RelativeDestination (Join-Path "tests" $testRecord.path.Replace('/', '\')) `
+        -StagingDirectory $inProgressArtifactDirectory `
+        -Repository $repository
+}
+foreach ($lintSourceResult in $lintSourceResults) {
+    $lintSourceRecord = Get-ArtifactRecord -Path $lintSourceResult.source -Repository $repository
+    Copy-RetainedArtifact `
+        -Source $lintSourceResult.source `
+        -RelativeDestination (Join-Path "lint" $lintSourceRecord.path.Replace('/', '\')) `
+        -StagingDirectory $inProgressArtifactDirectory `
+        -Repository $repository
+}
+
+[IO.Directory]::Move($inProgressArtifactDirectory, $absoluteArtifactDirectory)
+$publishedEvidencePaths.Add($absoluteArtifactDirectory)
+
+$retainedRecords = @{}
+foreach ($retainedSource in $retainedSources.GetEnumerator()) {
+    $retainedRecords[$retainedSource.Key] = Get-ArtifactRecord `
+        -Path (Join-Path $absoluteArtifactDirectory $retainedSource.Value.destination) `
+        -Repository $repository
+}
+$sourceArchiveRecord = Get-ArtifactRecord `
+    -Path (Join-Path $absoluteArtifactDirectory $sourceArchiveRelative) `
+    -Repository $repository
+$dependencyGraphRecord = Get-ArtifactRecord `
+    -Path (Join-Path $absoluteArtifactDirectory "dependencies\releaseRuntimeClasspath.txt") `
+    -Repository $repository
+
+$testReportRecords = @()
+foreach ($testFile in $testFiles) {
+    $testSourceRecord = Get-ArtifactRecord -Path $testFile.FullName -Repository $repository
+    $testReportRecords += Get-ArtifactRecord `
+        -Path (Join-Path $absoluteArtifactDirectory (
+            Join-Path "tests" $testSourceRecord.path.Replace('/', '\')
+        )) `
+        -Repository $repository
+}
+$testTotals["reports"] = $testReportRecords
+
+$lintResults = @()
+foreach ($lintSourceResult in $lintSourceResults) {
+    $lintSourceRecord = Get-ArtifactRecord -Path $lintSourceResult.source -Repository $repository
+    $lintRecord = Get-ArtifactRecord `
+        -Path (Join-Path $absoluteArtifactDirectory (
+            Join-Path "lint" $lintSourceRecord.path.Replace('/', '\')
+        )) `
+        -Repository $repository
+    $lintResults += [pscustomobject]@{
+        path = $lintRecord.path
+        length = $lintRecord.length
+        lastWriteTimeUtc = $lintRecord.lastWriteTimeUtc
+        sha256 = $lintRecord.sha256
+        issues = $lintSourceResult.issues
     }
 }
 
@@ -446,7 +700,7 @@ if (-not $gradleVersionMatch.Success -or -not $gradleDistributionHashMatch.Succe
 }
 
 [pscustomobject]@{
-    schemaVersion = 1
+    schemaVersion = 2
     createdUtc = [DateTime]::UtcNow.ToString("o")
     sourceTag = $SourceTag
     sourceCommit = $headCommit
@@ -459,15 +713,25 @@ if (-not $gradleVersionMatch.Success -or -not $gradleDistributionHashMatch.Succe
     profileable = $apkMetadata.profileable
     testOnly = $apkMetadata.testOnly
     strictBuildCommand = ".\gradlew.bat " + ($strictBuildArguments -join " ")
+    releaseDependencyGraphCommand = ".\gradlew.bat " + ($dependencyGraphArguments -join " ")
     strictBuildLog = $strictBuildLogRecord
     tests = [pscustomobject]$testTotals
     lint = $lintResults
-    unsignedApk = $unsignedApkRecord
-    releaseBundle = $releaseBundleRecord
-    sbom = $sbomRecord
-    mapping = $mappingRecord
-    baselineProfile = $baselineProfileRecord
-    startupProfile = $startupProfileRecord
+    sourceArchive = $sourceArchiveRecord
+    unsignedApk = $retainedRecords.unsignedApk
+    releaseBundle = $retainedRecords.releaseBundle
+    benchmarkApk = $retainedRecords.benchmarkApk
+    sbom = $retainedRecords.sbom
+    mergedReleaseManifest = $retainedRecords.mergedReleaseManifest
+    networkSecurityConfig = $retainedRecords.networkSecurityConfig
+    releaseDependencyGraph = $dependencyGraphRecord
+    mapping = $retainedRecords.mapping
+    seeds = $retainedRecords.seeds
+    usage = $retainedRecords.usage
+    configuration = $retainedRecords.configuration
+    resources = $retainedRecords.resources
+    baselineProfile = $retainedRecords.baselineProfile
+    startupProfile = $retainedRecords.startupProfile
     toolchain = [pscustomobject]@{
         javaVersion = $javaVersion
         javaSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedJava).Hash.ToLowerInvariant()
@@ -493,4 +757,6 @@ $publishedEvidencePaths.Add($absoluteOutput)
 $evidenceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $absoluteOutput).Hash.ToLowerInvariant()
 Write-Output "Unsigned release evidence: $absoluteOutput"
 Write-Output "Evidence SHA-256: $evidenceHash"
-Write-Output "Unsigned APK SHA-256: $($unsignedApkRecord.sha256)"
+Write-Output "Retained evidence artifacts: $absoluteArtifactDirectory"
+Write-Output "Source archive SHA-256: $($sourceArchiveRecord.sha256)"
+Write-Output "Unsigned APK SHA-256: $($retainedRecords.unsignedApk.sha256)"

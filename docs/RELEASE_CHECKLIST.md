@@ -30,9 +30,9 @@ debug/emulator result does not close a signed-candidate or manual gate.
 - [ ] The strict command in `BUILD_VERIFICATION.md` passes from a clean checkout.
 - [ ] JVM results, `lintRelease`, unsigned APK/AAB, benchmark APK, profile
   verification, normalized SBOM, merged manifest/NSC, dependency graph, and R8
-  mapping/seeds/usage/configuration are retained from the exact commit in the
-  candidate record. An exact-source archive and unsigned SHA-256 evidence
-  manifest are generated and independently checked before signing.
+  mapping/seeds/usage/configuration/resources are retained from the exact
+  commit in the candidate record. An exact-source archive and unsigned SHA-256
+  evidence manifest are generated and independently checked before signing.
 - [ ] Dependency verification metadata, build scripts, dependency inventory,
   licences, and vulnerability-review dispositions are reviewed. If hosted
   automation is introduced for release preparation, every third-party action is
