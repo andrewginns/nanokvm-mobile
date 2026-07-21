@@ -11,3 +11,6 @@
 
 app/src/main/generated/baselineProfiles/** linguist-generated=true
 gradle/verification-metadata.xml linguist-generated=true
+
+# Vendored byte-for-byte; the build verifies the reviewed upstream SHA-256.
+app/src/main/assets/open_source_licenses/WEBRTC.md -whitespace
