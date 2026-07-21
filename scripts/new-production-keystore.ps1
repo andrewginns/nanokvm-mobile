@@ -11,6 +11,47 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $rawOutput = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($rawOutput | ForEach-Object { $_.ToString() }) -join "`n"
+    }
+}
+
+function Invoke-NativeInteractive {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments | Out-Host
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return $exitCode
+}
+
 function Assert-NoReparsePointInPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -40,10 +81,13 @@ function Assert-SingleHardLink {
     )
 
     $fsutil = (Get-Command "fsutil.exe" -ErrorAction Stop).Source
-    $hardLinks = @(& $fsutil hardlink list $Path 2>&1 | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_.ToString())
+    $hardLinkResult = Invoke-NativeCapture `
+        -FilePath $fsutil `
+        -Arguments @("hardlink", "list", $Path)
+    $hardLinks = @($hardLinkResult.Output -split "`r?`n" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
     })
-    if ($LASTEXITCODE -ne 0 -or $hardLinks.Count -ne 1) {
+    if ($hardLinkResult.ExitCode -ne 0 -or $hardLinks.Count -ne 1) {
         throw "The production keystore must have exactly one filesystem link."
     }
 }
@@ -128,36 +172,44 @@ $java = Join-Path (Split-Path -Parent $resolvedKeytool) "java.exe"
 if (-not (Test-Path -LiteralPath $java -PathType Leaf)) {
     throw "Could not find the Java runtime beside keytool: $java"
 }
-$javaVersion = (& $java -version 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $javaVersion -notmatch 'version "21\.') {
+$javaResult = Invoke-NativeCapture -FilePath $java -Arguments @("-version")
+$javaVersion = $javaResult.Output
+if ($javaResult.ExitCode -ne 0 -or $javaVersion -notmatch 'version "21\.') {
     throw "Production keys must be generated with the recorded JDK 21 toolchain. Found: $javaVersion"
 }
 
 Write-Output "keytool will prompt for a strong password; no password is accepted as a script argument."
-& $resolvedKeytool -genkeypair -v `
-    -storetype PKCS12 `
-    -keystore $absoluteKeystore `
-    -alias $KeyAlias `
-    -keyalg RSA `
-    -keysize 4096 `
-    -sigalg SHA256withRSA `
-    -validity 10000 `
-    -dname $DistinguishedName
-if ($LASTEXITCODE -ne 0) {
+$generateArguments = @(
+    "-genkeypair",
+    "-v",
+    "-storetype", "PKCS12",
+    "-keystore", $absoluteKeystore,
+    "-alias", $KeyAlias,
+    "-keyalg", "RSA",
+    "-keysize", "4096",
+    "-sigalg", "SHA256withRSA",
+    "-validity", "10000",
+    "-dname", $DistinguishedName
+)
+$generateExitCode = Invoke-NativeInteractive `
+    -FilePath $resolvedKeytool `
+    -Arguments $generateArguments
+if ($generateExitCode -ne 0) {
     if (Test-Path -LiteralPath $absoluteKeystore) {
         Remove-Item -LiteralPath $absoluteKeystore -Force
     }
-    throw "Production keystore generation failed with exit code $LASTEXITCODE."
+    throw "Production keystore generation failed with exit code $generateExitCode."
 }
 Assert-NoReparsePointInPath -Path $absoluteKeystore
 Assert-SingleHardLink -Path $absoluteKeystore
 Assert-ProtectedAcl -Path $absoluteKeystore
 
 Write-Output "Re-enter the password once so keytool can report the public certificate identity."
-$certificateOutput = (& $resolvedKeytool -list -v `
-    -keystore $absoluteKeystore `
-    -alias $KeyAlias 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) {
+$certificateResult = Invoke-NativeCapture `
+    -FilePath $resolvedKeytool `
+    -Arguments @("-list", "-v", "-keystore", $absoluteKeystore, "-alias", $KeyAlias)
+$certificateOutput = $certificateResult.Output
+if ($certificateResult.ExitCode -ne 0) {
     throw (
         "The keystore was created, but its public certificate could not be inspected. " +
         "Do not delete it; rerun keytool -list -v manually."

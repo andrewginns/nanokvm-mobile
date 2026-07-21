@@ -30,6 +30,47 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $rawOutput = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($rawOutput | ForEach-Object { $_.ToString() }) -join "`n"
+    }
+}
+
+function Invoke-NativeInteractive {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments | Out-Host
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return $exitCode
+}
+
 function Get-ApkMetadata {
     param(
         [Parameter(Mandatory = $true)]
@@ -39,8 +80,11 @@ function Get-ApkMetadata {
         [string]$Aapt2
     )
 
-    $badging = (& $Aapt2 dump badging $Apk 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
+    $badgingResult = Invoke-NativeCapture `
+        -FilePath $Aapt2 `
+        -Arguments @("dump", "badging", $Apk)
+    $badging = $badgingResult.Output
+    if ($badgingResult.ExitCode -ne 0) {
         throw "aapt2 could not inspect $Apk."
     }
     $packageMatch = [regex]::Match(
@@ -53,8 +97,11 @@ function Get-ApkMetadata {
         throw "Could not read package/version/SDK metadata from $Apk."
     }
 
-    $manifest = (& $Aapt2 dump xmltree $Apk --file AndroidManifest.xml 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
+    $manifestResult = Invoke-NativeCapture `
+        -FilePath $Aapt2 `
+        -Arguments @("dump", "xmltree", $Apk, "--file", "AndroidManifest.xml")
+    $manifest = $manifestResult.Output
+    if ($manifestResult.ExitCode -ne 0) {
         throw "aapt2 could not inspect the manifest in $Apk."
     }
 
@@ -82,8 +129,13 @@ function Get-VerifiedSigner {
         [string]$ApkSignerJar
     )
 
-    $signatureOutput = (& $Java -jar $ApkSignerJar verify --verbose --print-certs $Apk 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
+    $signatureResult = Invoke-NativeCapture `
+        -FilePath $Java `
+        -Arguments @(
+            "-jar", $ApkSignerJar, "verify", "--verbose", "--print-certs", $Apk
+        )
+    $signatureOutput = $signatureResult.Output
+    if ($signatureResult.ExitCode -ne 0) {
         throw "APK signature verification failed for $Apk`: $signatureOutput"
     }
     if (
@@ -168,10 +220,13 @@ function Assert-SingleHardLink {
     )
 
     $fsutil = (Get-Command "fsutil.exe" -ErrorAction Stop).Source
-    $hardLinks = @(& $fsutil hardlink list $Path 2>&1 | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_.ToString())
+    $hardLinkResult = Invoke-NativeCapture `
+        -FilePath $fsutil `
+        -Arguments @("hardlink", "list", $Path)
+    $hardLinks = @($hardLinkResult.Output -split "`r?`n" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
     })
-    if ($LASTEXITCODE -ne 0 -or $hardLinks.Count -ne 1) {
+    if ($hardLinkResult.ExitCode -ne 0 -or $hardLinks.Count -ne 1) {
         throw "The production keystore must have exactly one filesystem link."
     }
 }
@@ -246,8 +301,11 @@ if ($FirstProductionRelease.IsPresent -eq [bool]$PreviousProductionApk) {
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $repositoryPrefix = $repository.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-$gitStatus = (& git -C $repository status --porcelain --untracked-files=all 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) {
+$gitStatusResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
+$gitStatus = $gitStatusResult.Output
+if ($gitStatusResult.ExitCode -ne 0) {
     throw "Git could not inspect the release worktree."
 }
 if ($gitStatus) {
@@ -268,17 +326,32 @@ if ($SourceTag -cne $canonicalTag) {
     throw "The canonical release tag for source version $sourceVersionName is $canonicalTag."
 }
 $tagReference = "refs/tags/$SourceTag"
-& git -C $repository show-ref --verify --quiet $tagReference
-if ($LASTEXITCODE -ne 0) {
+$tagLookup = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "show-ref", "--verify", "--quiet", $tagReference)
+if ($tagLookup.ExitCode -ne 0) {
     throw "The canonical source tag does not exist: $tagReference"
 }
-$tagType = ((& git -C $repository cat-file -t $tagReference 2>&1) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag") {
+$tagTypeResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "cat-file", "-t", $tagReference)
+$tagType = $tagTypeResult.Output.Trim()
+if ($tagTypeResult.ExitCode -ne 0 -or $tagType -ne "tag") {
     throw "The source tag must be annotated or cryptographically signed: $SourceTag"
 }
-$headCommit = ((& git -C $repository rev-parse HEAD 2>&1) -join "`n").Trim()
-$tagCommit = ((& git -C $repository rev-list -n 1 $tagReference 2>&1) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $headCommit) {
+$headResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "rev-parse", "HEAD")
+$tagCommitResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "rev-list", "-n", "1", $tagReference)
+$headCommit = $headResult.Output.Trim()
+$tagCommit = $tagCommitResult.Output.Trim()
+if (
+    $headResult.ExitCode -ne 0 -or
+    $tagCommitResult.ExitCode -ne 0 -or
+    $tagCommit -ne $headCommit
+) {
     throw "Source tag $SourceTag does not identify the checked-out commit $headCommit."
 }
 
@@ -290,8 +363,10 @@ if (-not $resolvedLineage.StartsWith($repositoryPrefix, [StringComparison]::Ordi
     throw "The production signing lineage record must be stored in the tagged repository."
 }
 $relativeLineage = $resolvedLineage.Substring($repositoryPrefix.Length).Replace('\', '/')
-& git -C $repository ls-files --error-unmatch -- $relativeLineage 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
+$lineageTrackingResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "ls-files", "--error-unmatch", "--", $relativeLineage)
+if ($lineageTrackingResult.ExitCode -ne 0) {
     throw "The production signing lineage record must be tracked by the tagged source."
 }
 $lineage = Get-Content -Raw -LiteralPath $resolvedLineage | ConvertFrom-Json
@@ -343,8 +418,9 @@ $resolvedJava = Resolve-ReleaseInputPath -Path $JavaPath -Repository $repository
 if (-not (Test-Path -LiteralPath $resolvedJava -PathType Leaf)) {
     throw "The explicit JDK 21 java executable does not exist: $resolvedJava"
 }
-$javaVersion = (& $resolvedJava -version 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $javaVersion -notmatch 'version "21\.') {
+$javaResult = Invoke-NativeCapture -FilePath $resolvedJava -Arguments @("-version")
+$javaVersion = $javaResult.Output
+if ($javaResult.ExitCode -ne 0 -or $javaVersion -notmatch 'version "21\.') {
     throw "Production signing must use JDK 21. Found: $javaVersion"
 }
 $javaHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedJava).Hash.ToLowerInvariant()
@@ -462,8 +538,11 @@ if (
 ) {
     throw "The unsigned APK no longer matches its reviewed package/manifest evidence."
 }
-$unsignedVerification = (& $resolvedJava -jar $apkSignerJar verify $resolvedUnsignedApk 2>&1) -join "`n"
-if ($LASTEXITCODE -eq 0) {
+$unsignedVerificationResult = Invoke-NativeCapture `
+    -FilePath $resolvedJava `
+    -Arguments @("-jar", $apkSignerJar, "verify", $resolvedUnsignedApk)
+$unsignedVerification = $unsignedVerificationResult.Output
+if ($unsignedVerificationResult.ExitCode -eq 0) {
     throw "The reviewed production signing input is already signed."
 }
 if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
@@ -589,21 +668,29 @@ try {
     $stagedVerification = Join-Path $resolvedStaging (Split-Path -Leaf $verificationPath)
     $stagedMetadata = Join-Path $resolvedStaging (Split-Path -Leaf $metadataPath)
 
-    & $zipAlign -f -P 16 4 $resolvedUnsignedApk $stagedAligned
-    if ($LASTEXITCODE -ne 0) {
-        throw "zipalign failed with exit code $LASTEXITCODE."
+    $alignmentExitCode = Invoke-NativeInteractive `
+        -FilePath $zipAlign `
+        -Arguments @("-f", "-P", "16", "4", $resolvedUnsignedApk, $stagedAligned)
+    if ($alignmentExitCode -ne 0) {
+        throw "zipalign failed with exit code $alignmentExitCode."
     }
 
     Write-Output "apksigner will prompt for the keystore/key password; it is not accepted as a script argument."
-    & $resolvedJava -jar $apkSignerJar sign `
-        --debuggable-apk-permitted false `
-        --ks $resolvedKeystore `
-        --ks-key-alias $KeyAlias `
-        --v4-signing-enabled false `
-        --out $stagedSigned `
+    $signingArguments = @(
+        "-jar", $apkSignerJar,
+        "sign",
+        "--debuggable-apk-permitted", "false",
+        "--ks", $resolvedKeystore,
+        "--ks-key-alias", $KeyAlias,
+        "--v4-signing-enabled", "false",
+        "--out", $stagedSigned,
         $stagedAligned
-    if ($LASTEXITCODE -ne 0) {
-        throw "APK signing failed with exit code $LASTEXITCODE."
+    )
+    $signingExitCode = Invoke-NativeInteractive `
+        -FilePath $resolvedJava `
+        -Arguments $signingArguments
+    if ($signingExitCode -ne 0) {
+        throw "APK signing failed with exit code $signingExitCode."
     }
 
     $actualSigner = Get-VerifiedSigner `
@@ -620,8 +707,10 @@ try {
         throw "The signed APK uses a forbidden development/debug certificate."
     }
 
-    & $zipAlign -c -P 16 4 $stagedSigned
-    if ($LASTEXITCODE -ne 0) {
+    $alignmentCheckExitCode = Invoke-NativeInteractive `
+        -FilePath $zipAlign `
+        -Arguments @("-c", "-P", "16", "4", $stagedSigned)
+    if ($alignmentCheckExitCode -ne 0) {
         throw "The signed APK failed final zipalign verification."
     }
 

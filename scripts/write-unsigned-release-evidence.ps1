@@ -22,6 +22,28 @@ $publishedEvidencePaths = [System.Collections.Generic.List[string]]::new()
 $inProgressEvidence = $null
 $inProgressBuildLog = $null
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $rawOutput = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($rawOutput | ForEach-Object { $_.ToString() }) -join "`n"
+    }
+}
+
 function Get-ApkMetadata {
     param(
         [Parameter(Mandatory = $true)]
@@ -31,8 +53,11 @@ function Get-ApkMetadata {
         [string]$Aapt2
     )
 
-    $badging = (& $Aapt2 dump badging $Apk 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
+    $badgingResult = Invoke-NativeCapture `
+        -FilePath $Aapt2 `
+        -Arguments @("dump", "badging", $Apk)
+    $badging = $badgingResult.Output
+    if ($badgingResult.ExitCode -ne 0) {
         throw "aapt2 could not inspect $Apk."
     }
     $packageMatch = [regex]::Match(
@@ -45,8 +70,11 @@ function Get-ApkMetadata {
         throw "Could not read package/version/SDK metadata from $Apk."
     }
 
-    $manifest = (& $Aapt2 dump xmltree $Apk --file AndroidManifest.xml 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) {
+    $manifestResult = Invoke-NativeCapture `
+        -FilePath $Aapt2 `
+        -Arguments @("dump", "xmltree", $Apk, "--file", "AndroidManifest.xml")
+    $manifest = $manifestResult.Output
+    if ($manifestResult.ExitCode -ne 0) {
         throw "aapt2 could not inspect the manifest in $Apk."
     }
 
@@ -91,8 +119,11 @@ function Get-ArtifactRecord {
 }
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$gitStatus = (& git -C $repository status --porcelain --untracked-files=all 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) {
+$gitStatusResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
+$gitStatus = $gitStatusResult.Output
+if ($gitStatusResult.ExitCode -ne 0) {
     throw "Git could not inspect the release worktree."
 }
 if ($gitStatus) {
@@ -113,17 +144,32 @@ if ($SourceTag -cne $canonicalTag) {
     throw "The canonical release tag for source version $sourceVersionName is $canonicalTag."
 }
 $tagReference = "refs/tags/$SourceTag"
-& git -C $repository show-ref --verify --quiet $tagReference
-if ($LASTEXITCODE -ne 0) {
+$tagLookup = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "show-ref", "--verify", "--quiet", $tagReference)
+if ($tagLookup.ExitCode -ne 0) {
     throw "The canonical source tag does not exist: $tagReference"
 }
-$tagType = ((& git -C $repository cat-file -t $tagReference 2>&1) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag") {
+$tagTypeResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "cat-file", "-t", $tagReference)
+$tagType = $tagTypeResult.Output.Trim()
+if ($tagTypeResult.ExitCode -ne 0 -or $tagType -ne "tag") {
     throw "The source tag must be annotated or cryptographically signed: $SourceTag"
 }
-$headCommit = ((& git -C $repository rev-parse HEAD 2>&1) -join "`n").Trim()
-$tagCommit = ((& git -C $repository rev-list -n 1 $tagReference 2>&1) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $headCommit) {
+$headResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "rev-parse", "HEAD")
+$tagCommitResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "rev-list", "-n", "1", $tagReference)
+$headCommit = $headResult.Output.Trim()
+$tagCommit = $tagCommitResult.Output.Trim()
+if (
+    $headResult.ExitCode -ne 0 -or
+    $tagCommitResult.ExitCode -ne 0 -or
+    $tagCommit -ne $headCommit
+) {
     throw "Source tag $SourceTag does not identify the checked-out commit $headCommit."
 }
 
@@ -136,8 +182,9 @@ $resolvedJava = (Resolve-Path -LiteralPath $javaCandidate).Path
 if (-not (Test-Path -LiteralPath $resolvedJava -PathType Leaf)) {
     throw "The explicit JDK 21 java executable does not exist: $resolvedJava"
 }
-$javaVersion = (& $resolvedJava -version 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $javaVersion -notmatch 'version "21\.') {
+$javaResult = Invoke-NativeCapture -FilePath $resolvedJava -Arguments @("-version")
+$javaVersion = $javaResult.Output
+if ($javaResult.ExitCode -ne 0 -or $javaVersion -notmatch 'version "21\.') {
     throw "The unsigned evidence toolchain must use JDK 21. Found: $javaVersion"
 }
 
@@ -242,9 +289,15 @@ $strictBuildExitCode = 1
 Push-Location $repository
 try {
     $env:JAVA_HOME = $jdkHome
-    & $gradleWrapper @strictBuildArguments 2>&1 |
-        Tee-Object -FilePath $inProgressBuildLog
-    $strictBuildExitCode = $LASTEXITCODE
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $gradleWrapper @strictBuildArguments 2>&1 |
+            Tee-Object -FilePath $inProgressBuildLog
+        $strictBuildExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
 } finally {
     Pop-Location
     if ($null -eq $previousJavaHome) {
@@ -272,8 +325,11 @@ if ($strictBuildExitCode -ne 0) {
 Move-Item -LiteralPath $inProgressBuildLog -Destination $absoluteBuildLog
 $publishedEvidencePaths.Add($absoluteBuildLog)
 
-$postBuildGitStatus = (& git -C $repository status --porcelain --untracked-files=all 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $postBuildGitStatus) {
+$postBuildGitResult = Invoke-NativeCapture `
+    -FilePath "git.exe" `
+    -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
+$postBuildGitStatus = $postBuildGitResult.Output
+if ($postBuildGitResult.ExitCode -ne 0 -or $postBuildGitStatus) {
     throw "The strict build changed the tagged source worktree; release evidence was not created."
 }
 
@@ -306,8 +362,11 @@ if ($apkMetadata.debuggable -or $apkMetadata.profileable -or $apkMetadata.testOn
     throw "The unsigned production candidate must not be debuggable, profileable, or test-only."
 }
 
-$unsignedVerification = (& $resolvedJava -jar $apkSignerJar verify $resolvedUnsignedApk 2>&1) -join "`n"
-if ($LASTEXITCODE -eq 0) {
+$unsignedVerificationResult = Invoke-NativeCapture `
+    -FilePath $resolvedJava `
+    -Arguments @("-jar", $apkSignerJar, "verify", $resolvedUnsignedApk)
+$unsignedVerification = $unsignedVerificationResult.Output
+if ($unsignedVerificationResult.ExitCode -eq 0) {
     throw "The unsigned evidence input is already signed."
 }
 if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
