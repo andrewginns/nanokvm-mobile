@@ -11,5 +11,5 @@ plugins {
 
 allprojects {
     group = "org.nanokvm"
-    version = "0.3.2"
+    version = "0.3.5"
 }

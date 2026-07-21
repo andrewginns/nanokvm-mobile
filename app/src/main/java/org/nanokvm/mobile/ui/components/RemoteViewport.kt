@@ -8,6 +8,7 @@ import android.graphics.SurfaceTexture
 import android.os.SystemClock
 import android.view.Surface
 import android.view.TextureView
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -32,7 +33,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -42,11 +42,13 @@ import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +93,9 @@ import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.ui.input.ExternalAbsolutePosition
 import org.nanokvm.mobile.ui.input.ExternalPointerInputRouter
 import org.nanokvm.mobile.ui.input.ExternalPointerRoutingMode
+import org.nanokvm.mobile.ui.input.PointerCaptureController
+import org.nanokvm.mobile.ui.input.PointerCaptureHost
+import org.nanokvm.mobile.ui.input.PointerCaptureReleaseReason
 import org.nanokvm.mobile.ui.input.dispatchTo
 import org.nanokvm.mobile.ui.input.routeExternalMouseInput
 import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
@@ -99,13 +104,14 @@ import org.nanokvm.mobile.ui.viewport.FloatRect
 import org.nanokvm.mobile.ui.viewport.FloatSize
 import org.nanokvm.mobile.ui.viewport.RemotePoint
 import org.nanokvm.mobile.ui.viewport.ViewportTransform
+import org.nanokvm.mobile.ui.viewport.ViewportScaleMode
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
-enum class PointerMode { Direct, Trackpad }
+enum class PointerMode { Direct, Trackpad, Captured }
 
-enum class ViewportAction { FocusTop, Center, FocusBottom, ZoomOut, ZoomIn }
+enum class ViewportAction { FocusTop, Center, FocusBottom, ZoomOut, ZoomIn, Fit, ActualSize }
 
 data class ViewportCommand(
     val sequence: Int,
@@ -127,7 +133,9 @@ fun RemoteViewport(
     keyboardVisible: Boolean = false,
     viewportCommand: ViewportCommand? = null,
     scrollSensitivity: Float = DEFAULT_SCROLL_SENSITIVITY,
+    pointerCaptureController: PointerCaptureController? = null,
     onZoomChanged: (Float) -> Unit = {},
+    onViewportScaleChanged: (ViewportScaleMode, Float) -> Unit = { _, _ -> },
     navigationActions: @Composable () -> Unit = {},
 ) {
     val consoleColors = LocalConsoleColorScheme.current
@@ -148,6 +156,10 @@ fun RemoteViewport(
     }
     LaunchedEffect(remoteWidth, remoteHeight) {
         onZoomChanged(transformState.value.zoom)
+        onViewportScaleChanged(
+            transformState.value.scaleMode,
+            transformState.value.contentScale,
+        )
     }
     val transform = transformState.value
     var lastDirectAnchor by remember(remoteWidth, remoteHeight) {
@@ -169,6 +181,23 @@ fun RemoteViewport(
             keyboardFramingActive = false
             transformState.value = transformState.value.fit()
             onZoomChanged(transformState.value.zoom)
+            onViewportScaleChanged(
+                transformState.value.scaleMode,
+                transformState.value.contentScale,
+            )
+        }
+    }
+    LaunchedEffect(inputGeneration, pointerCaptureController) {
+        pointerCaptureController?.release(PointerCaptureReleaseReason.SessionChanged)
+    }
+    LaunchedEffect(pointerMode, pointerCaptureController) {
+        if (pointerMode != PointerMode.Captured) {
+            pointerCaptureController?.release(PointerCaptureReleaseReason.PointerModeChanged)
+        }
+    }
+    LaunchedEffect(keyboardVisible, pointerCaptureController) {
+        if (keyboardVisible) {
+            pointerCaptureController?.release(PointerCaptureReleaseReason.KeyboardOpened)
         }
     }
     LaunchedEffect(keyboardVisible) {
@@ -208,7 +237,7 @@ fun RemoteViewport(
     }
 
     fun movePointerForAccessibility(deltaX: Int, deltaY: Int): Boolean {
-        if (pointerMode == PointerMode.Trackpad) {
+        if (pointerMode != PointerMode.Direct) {
             input.moveRelative(deltaX, deltaY)
             return true
         }
@@ -245,12 +274,30 @@ fun RemoteViewport(
             focalPoint = FloatPoint(viewport.width / 2f, viewport.height / 2f),
         )
         onZoomChanged(transformState.value.zoom)
+        onViewportScaleChanged(
+            transformState.value.scaleMode,
+            transformState.value.contentScale,
+        )
     }
 
     fun fitView() {
         keyboardFramingActive = false
         transformState.value = transformState.value.fit()
         onZoomChanged(transformState.value.zoom)
+        onViewportScaleChanged(
+            transformState.value.scaleMode,
+            transformState.value.contentScale,
+        )
+    }
+
+    fun actualSizeView() {
+        keyboardFramingActive = false
+        transformState.value = transformState.value.actualSize()
+        onZoomChanged(transformState.value.zoom)
+        onViewportScaleChanged(
+            transformState.value.scaleMode,
+            transformState.value.contentScale,
+        )
     }
 
     LaunchedEffect(viewportCommand) {
@@ -262,13 +309,31 @@ fun RemoteViewport(
             ViewportAction.FocusBottom -> transformState.value = transformState.value.focusBottom()
             ViewportAction.ZoomOut -> zoomView(0.8f)
             ViewportAction.ZoomIn -> zoomView(1.25f)
+            ViewportAction.Fit -> fitView()
+            ViewportAction.ActualSize -> actualSizeView()
         }
-        onZoomChanged(transformState.value.zoom)
+        if (
+            action == ViewportAction.FocusTop ||
+            action == ViewportAction.Center ||
+            action == ViewportAction.FocusBottom
+        ) {
+            onZoomChanged(transformState.value.zoom)
+            onViewportScaleChanged(
+                transformState.value.scaleMode,
+                transformState.value.contentScale,
+            )
+        }
     }
 
     // Reset synchronously when the navigation pad is hidden or re-docked. An asynchronous
     // LaunchedEffect can race the first expand tap after re-docking and immediately collapse it.
     var viewControlsVisible by remember(viewNavigationVisible) { mutableStateOf(false) }
+    LaunchedEffect(pointerMode) {
+        if (pointerMode == PointerMode.Captured) viewControlsVisible = false
+    }
+    BackHandler(enabled = viewNavigationVisible && viewControlsVisible) {
+        viewControlsVisible = false
+    }
 
     val remotePointerDescription = stringResource(R.string.console_remote_pointer)
     val movePointerLeftLabel = stringResource(R.string.console_move_pointer_left)
@@ -337,6 +402,8 @@ fun RemoteViewport(
                             }
                         }
                         transformState.value = resized
+                        onZoomChanged(resized.zoom)
+                        onViewportScaleChanged(resized.scaleMode, resized.contentScale)
                     }
                 },
         ) {
@@ -344,9 +411,17 @@ fun RemoteViewport(
                 val rect = transform.contentRect
                 key(videoSurfaceGeneration) {
                     AndroidView(
-                            factory = { context -> BackendTextureView(context, videoSurface) },
+                            factory = { context ->
+                                BackendTextureView(
+                                    context = context,
+                                    videoSurface = videoSurface,
+                                    remoteWidth = remoteWidth,
+                                    remoteHeight = remoteHeight,
+                                )
+                            },
                         update = {
-                                it.videoSurface = videoSurface
+                            it.videoSurface = videoSurface
+                            it.updateRemoteDimensions(remoteWidth, remoteHeight)
                             it.updateContentTransform(rect, localSize)
                         },
                         modifier = Modifier.fillMaxSize(),
@@ -392,7 +467,9 @@ fun RemoteViewport(
                         val router = ExternalPointerInputRouter(
                             mode = when (pointerMode) {
                                 PointerMode.Direct -> ExternalPointerRoutingMode.Absolute
-                                PointerMode.Trackpad -> ExternalPointerRoutingMode.Relative
+                                PointerMode.Trackpad,
+                                PointerMode.Captured,
+                                -> ExternalPointerRoutingMode.Relative
                             },
                             scrollSensitivity = normalizedScrollSensitivity,
                             mapAbsolutePosition = { position ->
@@ -467,7 +544,9 @@ fun RemoteViewport(
                                         change.position,
                                         setOf(MouseButton.Left),
                                     )
-                                    PointerMode.Trackpad -> input.moveRelative(
+                                    PointerMode.Trackpad,
+                                    PointerMode.Captured,
+                                    -> input.moveRelative(
                                         deltaX = dragAmount.x.roundToInt().coerceIn(-127, 127),
                                         deltaY = dragAmount.y.roundToInt().coerceIn(-127, 127),
                                     )
@@ -482,6 +561,18 @@ fun RemoteViewport(
                         )
                     },
             )
+
+            pointerCaptureController?.let { controller ->
+                PointerCaptureHost(
+                    controller = controller,
+                    input = input,
+                    scrollSensitivity = normalizedScrollSensitivity,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .width(1.dp)
+                        .height(1.dp),
+                )
+            }
         }
 
         if (viewNavigationVisible) {
@@ -494,7 +585,8 @@ fun RemoteViewport(
                     .zIndex(2f),
             ) {
                 ViewNavigationPad(
-                    zoom = transform.zoom,
+                    contentScale = transform.contentScale,
+                    scaleMode = transform.scaleMode,
                     remoteWidth = remoteWidth,
                     remoteHeight = remoteHeight,
                     positionFraction = activeViewNavigationPosition.floatValue,
@@ -527,7 +619,7 @@ fun RemoteViewport(
                 )
             }
         }
-        if (viewNavigationVisible) {
+        if (viewNavigationVisible && !viewControlsVisible) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -559,6 +651,7 @@ fun RemoteViewport(
                     onPan = { delta -> panView(delta) },
                     onZoom = { multiplier -> zoomView(multiplier) },
                     onFit = { fitView() },
+                    onActualSize = { actualSizeView() },
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .onSizeChanged { viewNavigationControlsSize = it },
@@ -580,7 +673,8 @@ private fun viewportTransformStateSaver(
 ): Saver<MutableState<ViewportTransform>, FloatArray> = Saver(
     save = { state ->
         floatArrayOf(
-            state.value.zoom,
+            state.value.scaleMode.ordinal.toFloat(),
+            state.value.customScale,
             state.value.pan.x,
             state.value.pan.y,
             state.value.viewport.width,
@@ -588,26 +682,49 @@ private fun viewportTransformStateSaver(
         )
     },
     restore = { values ->
+        val currentFormat = values.size >= VIEWPORT_SAVER_VALUE_COUNT
+        val viewportOffset = if (currentFormat) 4 else 3
         val savedViewport = FloatSize(
-            values.getOrElse(3) { 0f }.positiveFiniteOrZero(),
-            values.getOrElse(4) { 0f }.positiveFiniteOrZero(),
+            values.getOrElse(viewportOffset) { 0f }.positiveFiniteOrZero(),
+            values.getOrElse(viewportOffset + 1) { 0f }.positiveFiniteOrZero(),
         )
-        mutableStateOf(
-            ViewportTransform.fit(
-                remoteWidth = remoteWidth,
-                remoteHeight = remoteHeight,
-                viewport = savedViewport,
-            ).copy(
-                zoom = values.getOrElse(0) { 1f }
-                    .takeIf(Float::isFinite)
-                    ?.coerceIn(ViewportTransform.MIN_ZOOM, ViewportTransform.MAX_ZOOM)
-                    ?: 1f,
+        val fitted = ViewportTransform.fit(
+            remoteWidth = remoteWidth,
+            remoteHeight = remoteHeight,
+            viewport = savedViewport,
+        )
+        val restored = if (currentFormat) {
+            fitted.copy(
+                scaleMode = ViewportScaleMode.entries.getOrElse(
+                    values.getOrElse(0) { 0f }.finiteOrZero().toInt(),
+                ) { ViewportScaleMode.Fit },
+                customScale = values.getOrElse(1) { fitted.fitScale }
+                    .takeIf { it.isFinite() && it > 0f }
+                    ?: fitted.fitScale,
+                pan = FloatPoint(
+                    values.getOrElse(2) { 0f }.finiteOrZero(),
+                    values.getOrElse(3) { 0f }.finiteOrZero(),
+                ),
+            )
+        } else {
+            // Migrate the old fit-relative zoom save shape to an absolute custom scale.
+            val legacyZoom = values.getOrElse(0) { 1f }
+                .takeIf { it.isFinite() && it > 0f }
+                ?: 1f
+            fitted.copy(
+                scaleMode = if (legacyZoom == 1f) {
+                    ViewportScaleMode.Fit
+                } else {
+                    ViewportScaleMode.Custom
+                },
+                customScale = fitted.fitScale * legacyZoom,
                 pan = FloatPoint(
                     values.getOrElse(1) { 0f }.finiteOrZero(),
                     values.getOrElse(2) { 0f }.finiteOrZero(),
                 ),
-            ).withViewport(savedViewport),
-        )
+            )
+        }
+        mutableStateOf(restored.withViewport(savedViewport))
     },
 )
 
@@ -617,7 +734,8 @@ private fun Float.positiveFiniteOrZero(): Float = takeIf { isFinite() && this > 
 
 @Composable
 private fun ViewNavigationPad(
-    zoom: Float,
+    contentScale: Float,
+    scaleMode: ViewportScaleMode,
     remoteWidth: Int,
     remoteHeight: Int,
     positionFraction: Float,
@@ -641,10 +759,14 @@ private fun ViewNavigationPad(
     val movePadBottomLabel = stringResource(R.string.console_move_view_pad_bottom)
     val positionDescription = viewNavigationPositionDescription(positionFraction)
     val panZoomDescription = stringResource(R.string.console_pan_zoom_view)
-    val zoomDescription = stringResource(
-        R.string.console_zoom_state,
-        stringResource(R.string.console_multiplier_format, zoom),
-    )
+    val zoomDescription = when (scaleMode) {
+        ViewportScaleMode.Fit -> stringResource(R.string.console_view_scale_fit)
+        ViewportScaleMode.ActualSize -> stringResource(R.string.console_view_scale_actual_size)
+        ViewportScaleMode.Custom -> stringResource(
+            R.string.console_view_scale_custom,
+            stringResource(R.string.console_multiplier_format, contentScale),
+        )
+    }
     val toggleControlsDescription = stringResource(
         if (controlsVisible) {
             R.string.console_hide_view_controls
@@ -877,6 +999,7 @@ private fun ViewNavigationControls(
     onPan: (FloatPoint) -> Unit,
     onZoom: (Float) -> Unit,
     onFit: () -> Unit,
+    onActualSize: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
@@ -920,10 +1043,17 @@ private fun ViewNavigationControls(
                     stringResource(R.string.console_zoom_out),
                     Icons.Default.ZoomOut,
                 ) { onZoom(0.8f) }
-                NavigationButton(
-                    stringResource(R.string.console_fit_remote_view),
-                    Icons.Default.FitScreen,
-                    onFit,
+                ViewportModeButton(
+                    label = stringResource(R.string.console_fit_remote_view),
+                    visibleLabel = stringResource(R.string.console_view_fit_label),
+                    testTag = "viewport-fit",
+                    onClick = onFit,
+                )
+                ViewportModeButton(
+                    label = stringResource(R.string.console_actual_size_remote_view),
+                    visibleLabel = stringResource(R.string.console_view_actual_size_label),
+                    testTag = "viewport-actual-size",
+                    onClick = onActualSize,
                 )
                 NavigationButton(
                     stringResource(R.string.console_zoom_in),
@@ -931,6 +1061,29 @@ private fun ViewNavigationControls(
                 ) { onZoom(1.25f) }
             }
         }
+    }
+}
+
+@Composable
+private fun ViewportModeButton(
+    label: String,
+    visibleLabel: String,
+    testTag: String,
+    onClick: () -> Unit,
+) {
+    val consoleColors = LocalConsoleColorScheme.current
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = consoleColors.active,
+            disabledContentColor = consoleColors.onSurfaceMuted,
+        ),
+        modifier = Modifier
+            .height(48.dp)
+            .testTag(testTag)
+            .semantics { contentDescription = label },
+    ) {
+        Text(visibleLabel)
     }
 }
 
@@ -988,10 +1141,14 @@ private suspend fun PointerInputScope.detectTwoFingerTransformGestures(
 private class BackendTextureView(
     context: Context,
     videoSurface: VideoSurfaceSink,
+    remoteWidth: Int,
+    remoteHeight: Int,
 ) : TextureView(context), TextureView.SurfaceTextureListener {
     var videoSurface: VideoSurfaceSink = videoSurface
     private var outputSurface: Surface? = null
     private val contentTransform = Matrix()
+    private var remoteWidth = remoteWidth.coerceAtLeast(1)
+    private var remoteHeight = remoteHeight.coerceAtLeast(1)
 
     init {
         isOpaque = true
@@ -999,11 +1156,15 @@ private class BackendTextureView(
     }
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-        outputSurface = Surface(texture).also { videoSurface.attachVideoSurface(it, width, height) }
+        texture.setDefaultBufferSize(remoteWidth, remoteHeight)
+        outputSurface = Surface(texture).also {
+            videoSurface.attachVideoSurface(it, remoteWidth, remoteHeight)
+        }
     }
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
-        videoSurface.resizeVideoSurface(width, height)
+        texture.setDefaultBufferSize(remoteWidth, remoteHeight)
+        videoSurface.resizeVideoSurface(remoteWidth, remoteHeight)
     }
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
@@ -1012,6 +1173,18 @@ private class BackendTextureView(
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+
+    fun updateRemoteDimensions(width: Int, height: Int) {
+        val normalizedWidth = width.coerceAtLeast(1)
+        val normalizedHeight = height.coerceAtLeast(1)
+        if (remoteWidth == normalizedWidth && remoteHeight == normalizedHeight) return
+        remoteWidth = normalizedWidth
+        remoteHeight = normalizedHeight
+        surfaceTexture?.setDefaultBufferSize(remoteWidth, remoteHeight)
+        if (outputSurface != null) {
+            videoSurface.resizeVideoSurface(remoteWidth, remoteHeight)
+        }
+    }
 
     fun updateContentTransform(rect: FloatRect, viewport: IntSize) {
         if (viewport.width <= 0 || viewport.height <= 0) return
@@ -1133,3 +1306,4 @@ private const val VIEW_NAVIGATION_GAP_DP = 8
 private const val VIEW_NAVIGATION_ACCESSIBILITY_STEP = 0.25f
 private const val ACCESSIBILITY_POINTER_STEP = 24
 private const val INPUT_ANCHOR_MAX_AGE_MILLIS = 15_000L
+private const val VIEWPORT_SAVER_VALUE_COUNT = 6

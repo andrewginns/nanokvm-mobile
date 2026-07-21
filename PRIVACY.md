@@ -87,8 +87,12 @@ the app cannot guarantee those external or runtime-managed copies are zeroed.
 The app does not contact a NanoKVM until the user requests a connection. It has
 no developer-operated cloud endpoint. Android and the user's installed keyboard
 or accessibility services may process interaction according to their own
-settings and privacy policies; the app requests that keyboards disable
-personalized learning for its remote-input field.
+settings and privacy policies. The remote-input field does not force the
+keyboard into no-personalized-learning/incognito mode, so keyboard-provided
+voice typing remains available; typing history, personalization, voice audio,
+and transcripts are governed by the selected keyboard's permissions and privacy
+settings. The app itself requests no microphone permission, receives no voice
+audio, and does not persist committed remote-input text.
 
 When the user explicitly selects WebRTC, signaling remains on the authenticated
 NanoKVM origin, but the appliance can supply ICE server URLs and temporary

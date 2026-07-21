@@ -34,6 +34,7 @@ import org.nanokvm.mobile.runtime.NanoKvmAutomationPortLeaderKey
 import org.nanokvm.mobile.runtime.NanoKvmSessionBinding
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.BackendSession
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleCoreControls
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
@@ -374,10 +375,11 @@ private class AutomationConsoleBridge(
         gateway.takeIf { surfaceVisible }
 
     override fun reconnect() = Unit
+    override fun cancelReconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
     override fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton>) = Unit

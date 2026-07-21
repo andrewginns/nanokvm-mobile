@@ -49,6 +49,7 @@ import org.nanokvm.mobile.runtime.AdministrationTailscaleUiState
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.BackendSession
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConnectionFailure
@@ -353,11 +354,12 @@ private class AdministrationReadOnlyBackend : ConsoleBackend {
     override fun resizeVideoSurface(width: Int, height: Int) = Unit
     override fun detachVideoSurface(surface: Surface) = Unit
     override fun reconnect() = Unit
+    override fun cancelReconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
     override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
 

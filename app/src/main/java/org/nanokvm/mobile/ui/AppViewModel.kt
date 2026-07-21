@@ -60,12 +60,44 @@ sealed interface AppScreen {
     data object Profiles : AppScreen
     data class EditProfile(val profile: HostProfile, val isNew: Boolean) : AppScreen
     data class Connecting(val profile: HostProfile) : AppScreen
+    data class ConnectionIssue(
+        val profile: HostProfile,
+        val failure: ConnectionFailure,
+        val primaryRecovery: ConnectionIssueRecovery?,
+    ) : AppScreen
     data class ReviewCertificate(
         val profile: HostProfile,
         val certificate: CertificateDetails,
     ) : AppScreen
     data class Console(val profile: HostProfile) : AppScreen
 }
+
+enum class ConnectionIssueRecovery {
+    Retry,
+    UseAnotherPassword,
+    EditConnection,
+}
+
+internal fun initialConnectionIssue(
+    profile: HostProfile,
+    failure: ConnectionFailure,
+    retryable: Boolean,
+): AppScreen.ConnectionIssue = AppScreen.ConnectionIssue(
+    profile = profile,
+    failure = failure,
+    primaryRecovery = when {
+        failure == ConnectionFailure.InvalidAddress ||
+            failure == ConnectionFailure.HttpsRequired ||
+            failure == ConnectionFailure.InvalidSavedCertificate ||
+            failure is ConnectionFailure.CertificateHostnameMismatch ->
+            ConnectionIssueRecovery.EditConnection
+        failure == ConnectionFailure.AppInBackground -> ConnectionIssueRecovery.Retry
+        retryable -> ConnectionIssueRecovery.Retry
+        failure is ConnectionFailure.RequestRejected && failure.responseCode == 401 ->
+            ConnectionIssueRecovery.UseAnotherPassword
+        else -> null
+    },
+)
 
 data class AppUiState(
     val screen: AppScreen = AppScreen.Profiles,
@@ -509,7 +541,15 @@ class AppViewModel internal constructor(
         if (!profileCatalogIsActionable()) return
         if (mutableState.value.credentialPrompt != null || pendingCredentialAction != null) return
         if (!profile.useHttps) {
-            updateWithNotice(AppNotice.Core(ConnectionFailure.HttpsRequired))
+            mutableState.update {
+                it.copy(
+                    screen = initialConnectionIssue(
+                        profile = profile,
+                        failure = ConnectionFailure.HttpsRequired,
+                        retryable = false,
+                    ),
+                )
+            }
             return
         }
         if (!localNetworkAccess.isGranted()) {
@@ -530,7 +570,43 @@ class AppViewModel internal constructor(
         )
         persistRestorableScreen(AppScreen.Profiles)
         pendingTrustIntent = intent
+        mutableState.update {
+            it.copy(
+                screen = AppScreen.Connecting(profile),
+                passwordEntryProfile = null,
+            )
+        }
         launchTrustPreflight(intent)
+    }
+
+    fun retryConnectionIssue() {
+        val issue = mutableState.value.screen as? AppScreen.ConnectionIssue ?: return
+        if (issue.primaryRecovery != ConnectionIssueRecovery.Retry) return
+        prepareConnection(issue.profile)
+    }
+
+    fun useAnotherPasswordForConnectionIssue() {
+        val issue = mutableState.value.screen as? AppScreen.ConnectionIssue ?: return
+        if (issue.primaryRecovery != ConnectionIssueRecovery.UseAnotherPassword) return
+        persistRestorableScreen(AppScreen.Profiles)
+        mutableState.update { current ->
+            if (current.screen != issue) {
+                current
+            } else {
+                current.copy(
+                    screen = AppScreen.Profiles,
+                    passwordEntryProfile = issue.profile,
+                )
+            }
+        }
+    }
+
+    fun editConnectionIssue() {
+        val issue = mutableState.value.screen as? AppScreen.ConnectionIssue ?: return
+        if (issue.primaryRecovery != ConnectionIssueRecovery.EditConnection) return
+        val currentProfile = mutableState.value.profiles.firstOrNull { it.id == issue.profile.id }
+            ?: issue.profile
+        editProfile(currentProfile)
     }
 
     fun beginLocalNetworkPermissionRequest() {
@@ -721,8 +797,14 @@ class AppViewModel internal constructor(
         if (!profile.useHttps) {
             password.fill('\u0000')
             stagedCredential?.clear()
-            updateWithNotice(AppNotice.Core(ConnectionFailure.HttpsRequired)) {
-                copy(screen = AppScreen.Profiles)
+            mutableState.update {
+                it.copy(
+                    screen = initialConnectionIssue(
+                        profile = profile,
+                        failure = ConnectionFailure.HttpsRequired,
+                        retryable = false,
+                    ),
+                )
             }
             return
         }
@@ -796,6 +878,7 @@ class AppViewModel internal constructor(
 
     fun cancelToProfiles() {
         if (mutableState.value.profileMutation != ProfileMutationUiState.Idle) return
+        val cancellingInitialConnection = mutableState.value.screen is AppScreen.Connecting
         cancelPasswordChange()
         connectJob?.cancel()
         connectJob = null
@@ -812,6 +895,20 @@ class AppViewModel internal constructor(
                 passwordEntryProfile = null,
                 localNetworkPermission = null,
             )
+        }
+        if (cancellingInitialConnection) {
+            // Cancellation is not only a presentation transition. Teardown waits behind any
+            // cancellation-ignoring backend connect work, so a late success cannot leave a hidden
+            // authenticated session after the app has returned to the connection list.
+            viewModelScope.launch {
+                try {
+                    backend.disconnect()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    updateWithNotice(AppNotice.Simple(SimpleNotice.DisconnectCleanupFailed))
+                }
+            }
         }
     }
 
@@ -835,6 +932,49 @@ class AppViewModel internal constructor(
                     copy(screen = AppScreen.Profiles)
                 }
             }
+        }
+    }
+
+    fun reauthenticateConsole() {
+        val console = mutableState.value.screen as? AppScreen.Console ?: return
+        val profile = console.profile
+        cancelPasswordChange()
+        connectJob?.cancel()
+        connectJob = null
+        clearActiveAttempt()
+        clearPendingCredentialAction()
+        pendingTrustIntent = null
+        consoleSessionDraftOwner.clear()
+        persistRestorableScreen(AppScreen.Profiles)
+        runCatching { backend.releaseAllInput() }
+        val connecting = AppScreen.Connecting(profile)
+        mutableState.update {
+            it.copy(
+                screen = connecting,
+                credentialPrompt = null,
+                passwordEntryProfile = null,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                backend.disconnect()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                if (mutableState.value.screen == connecting) {
+                    mutableState.update {
+                        it.copy(
+                            screen = initialConnectionIssue(
+                                profile = profile,
+                                failure = ConnectionFailure.Unexpected,
+                                retryable = true,
+                            ),
+                        )
+                    }
+                }
+                return@launch
+            }
+            if (mutableState.value.screen == connecting) prepareConnection(profile)
         }
     }
 
@@ -1287,8 +1427,14 @@ class AppViewModel internal constructor(
                 throw cancelled
             } catch (_: Throwable) {
                 if (finishAttemptIfOwned(attempt, request)) {
-                    updateWithNotice(AppNotice.Core(ConnectionFailure.Unexpected)) {
-                        copy(screen = AppScreen.Profiles)
+                    mutableState.update {
+                        it.copy(
+                            screen = initialConnectionIssue(
+                                profile = request.profile,
+                                failure = ConnectionFailure.Unexpected,
+                                retryable = true,
+                            ),
+                        )
                     }
                 }
             } finally {
@@ -1324,8 +1470,14 @@ class AppViewModel internal constructor(
                     }
                     is TrustPreflightOutcome.Failed -> {
                         pendingTrustIntent = null
-                        updateWithNotice(AppNotice.Core(outcome.failure)) {
-                            copy(screen = AppScreen.Profiles)
+                        mutableState.update {
+                            it.copy(
+                                screen = initialConnectionIssue(
+                                    profile = intent.profile,
+                                    failure = outcome.failure,
+                                    retryable = outcome.retryable,
+                                ),
+                            )
                         }
                     }
                 }
@@ -1334,10 +1486,14 @@ class AppViewModel internal constructor(
             } catch (_: Throwable) {
                 if (pendingTrustIntent === intent) {
                     pendingTrustIntent = null
-                    updateWithNotice(
-                        AppNotice.Core(ConnectionFailure.CertificateInspectionFailed),
-                    ) {
-                        copy(screen = AppScreen.Profiles)
+                    mutableState.update {
+                        it.copy(
+                            screen = initialConnectionIssue(
+                                profile = intent.profile,
+                                failure = ConnectionFailure.CertificateInspectionFailed,
+                                retryable = true,
+                            ),
+                        )
                     }
                 }
             } finally {
@@ -1404,8 +1560,14 @@ class AppViewModel internal constructor(
             is ConnectOutcome.Failed -> {
                 // A failed replacement never overwrites the last working saved credential.
                 if (!finishAttemptIfOwned(attempt, request)) return
-                updateWithNotice(AppNotice.Core(outcome.failure)) {
-                    copy(screen = AppScreen.Profiles)
+                mutableState.update {
+                    it.copy(
+                        screen = initialConnectionIssue(
+                            profile = request.profile,
+                            failure = outcome.failure,
+                            retryable = outcome.retryable,
+                        ),
+                    )
                 }
             }
         }
@@ -1534,8 +1696,9 @@ internal object RestorableAppScreenState {
                 savedStateHandle[STATE_EDIT_USERNAME] = screen.profile.username
                 savedStateHandle[STATE_EDIT_CERTIFICATE] = screen.profile.trustedCertificateSha256
             }
-            // Authentication, certificate review, and live sessions never survive process death.
+            // Authentication, failure context, certificate review, and live sessions are memory-only.
             is AppScreen.Connecting,
+            is AppScreen.ConnectionIssue,
             is AppScreen.ReviewCertificate,
             is AppScreen.Console,
             -> persist(savedStateHandle, AppScreen.Profiles)

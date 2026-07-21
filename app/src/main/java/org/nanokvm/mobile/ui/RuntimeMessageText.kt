@@ -149,6 +149,8 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
         ),
         failure.displayText(),
     )
+    ConsoleMessage.ReconnectCancelled ->
+        stringResource(R.string.console_message_reconnect_cancelled)
     is ConsoleMessage.ConnectionFailed -> failure.displayText()
     is ConsoleMessage.CommandFailed -> failure.displayText()
     ConsoleMessage.TypingApprovedClipboardText ->
@@ -183,6 +185,8 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
         stringResource(R.string.console_message_ctrl_alt_delete_sent)
     ConsoleMessage.HostControlSent ->
         stringResource(R.string.console_message_host_control_sent)
+    ConsoleMessage.HostControlSessionChanged ->
+        stringResource(R.string.console_message_host_control_session_changed)
     is ConsoleMessage.ConnectingVideo -> stringResource(
         R.string.console_message_connecting_video,
         transport.displayText(),

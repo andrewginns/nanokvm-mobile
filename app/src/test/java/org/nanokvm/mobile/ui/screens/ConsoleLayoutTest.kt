@@ -61,14 +61,46 @@ class ConsoleLayoutTest {
     }
 
     @Test
-    fun expandedWidthUsesSupportingPaneAtAnyHeight() {
+    fun compactHeightOverridesExpandedWidth() {
+        assertEquals(
+            ConsoleControlsPresentation.SideOverlay,
+            consoleControlsPresentation(
+                isExpandedWidth = true,
+                isCompactWidth = false,
+                heightDp = 479f,
+            ),
+        )
         assertEquals(
             ConsoleControlsPresentation.SupportingPane,
             consoleControlsPresentation(
                 isExpandedWidth = true,
                 isCompactWidth = false,
-                heightDp = 300f,
+                heightDp = 480f,
             ),
         )
+    }
+
+    @Test
+    fun widthAndHeightBoundaryMatrixIsDeterministic() {
+        data class Case(
+            val expanded: Boolean,
+            val compact: Boolean,
+            val height: Float,
+            val expected: ConsoleControlsPresentation,
+        )
+
+        listOf(
+            Case(false, true, 479f, ConsoleControlsPresentation.SideOverlay),
+            Case(false, true, 480f, ConsoleControlsPresentation.BottomSheet),
+            Case(false, false, 479f, ConsoleControlsPresentation.SideOverlay),
+            Case(false, false, 480f, ConsoleControlsPresentation.SideOverlay),
+            Case(true, false, 479f, ConsoleControlsPresentation.SideOverlay),
+            Case(true, false, 480f, ConsoleControlsPresentation.SupportingPane),
+        ).forEach { case ->
+            assertEquals(
+                case.expected,
+                consoleControlsPresentation(case.expanded, case.compact, case.height),
+            )
+        }
     }
 }

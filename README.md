@@ -12,23 +12,31 @@ keyboard, and controls that remain reachable in portrait and landscape.
 > It controls real keyboard, mouse, reset, and power hardware. Review the
 > target device before using guarded actions.
 
-## 0.3.2 development milestone
+![NanoKVM Mobile controlling an illustrative remote desktop in landscape, with compact console actions and the pan-and-zoom pad visible.](docs/images/readme/hero-console-landscape.webp)
 
-The current source milestone is **0.3.2** (Android version code **9**). It is a
-development candidate, not an approved or signed public release. The feature
-list below describes implemented source; capability-gated features still need
-the device, appliance, and signed-candidate evidence recorded in the parity
-ledger before they can be described as release-verified.
+<sub>NanoKVM Mobile 0.3.5 UI captured on an API 37 emulator. The remote desktop,
+device frame, and desk backdrop are illustrative generated layers.</sub>
+
+## 0.3.5 development milestone
+
+The current source milestone is **0.3.5** (Android version code **12**). It is a
+development candidate, not an approved, production-signed public release. The
+feature list below describes implemented source; capability-gated features
+still need the device, appliance, and signed-candidate evidence recorded in the
+parity ledger before they can be described as release-verified.
 
 - Saved NanoKVM connections with HTTPS certificate review and pinning.
 - NanoKVM login and cookie authentication for application versions 2.3.2+.
-- Hardware-decoded direct H.264 with automatic MJPEG fallback.
+- MediaCodec-decoded direct H.264 with automatic MJPEG fallback.
 - Optional MJPEG frame-difference detection with a bounded temporary wake when a
   stream starts or falls back.
-- Absolute direct-touch and optional trackpad pointer modes.
-- Tap, double-tap, drag, all five mouse buttons, wheel scroll, 1x–4x pinch zoom,
-  and pan.
-- Live Android IME input plus a special-key tray while keyboard mode is open.
+- Target-aware initial connection recovery and bounded reconnect progress with
+  stop, retry, alternate-credential, edit-profile, and disconnect actions.
+- Absolute direct-touch, relative trackpad, and external-input capture modes.
+- Tap, double-tap, drag, all five mouse buttons, wheel scrolling, Fit and 1:1
+  scaling, bounded pinch zoom, and pan.
+- Live Android IME input, keyboard-provided voice typing, and a special-key tray
+  while keyboard mode is open.
 - Explicit, previewed Android clipboard/share-target text typing with target
   layout selection, pacing, cancellation, and reconnect-safe destination binding.
 - Opt-in Android Keystore-encrypted passwords unlocked with biometrics or the
@@ -53,8 +61,8 @@ ledger before they can be described as release-verified.
   dynamic colour; the live console stays neutral so wallpaper colour never
   tints the remote image or status meaning.
 - Adaptive phone, landscape, and expanded layouts with bottom-sheet, side, or
-  supporting-pane controls plus a vertically movable pan/zoom pad that docks
-  above the keyboard while typing.
+  supporting-pane controls, compact phone actions, and a vertically movable
+  pan/zoom pad that docks above the keyboard while typing.
 
 The app implements the native side of the NanoKVM 2.4.3 parity roadmap while
 retaining a 2.3.2 compatibility floor. Capability gates and retained
@@ -67,6 +75,9 @@ evidence is attached to that ledger.
 ## Requirements
 
 - Android 8.0 (API 26) or newer.
+- On Android 17 (API 37), allow **Local network** access when prompted. If it is
+  denied, connection stays blocked until permission is restored through the
+  app's retry or system-settings recovery action.
 - A NanoKVM reachable over the local network. Add its device-specific mDNS
   hostname or IP address on first launch.
 - NanoKVM application version 2.3.2 or newer.
@@ -88,23 +99,23 @@ STUN/STUNS/TURN/TURNS peers during ICE negotiation.
 
 ## Install and update
 
-There is not yet an approved production binary. To build an installable
-self-signed development APK with the machine's Android debug key:
+There is not yet an approved production binary. For a local-only development
+install, build an APK with the current process's ambient Android debug key:
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 .\gradlew.bat --no-problems-report --dependency-verification=strict :app:assembleDebug
 ```
 
-The output is `app/build/outputs/apk/debug/app-debug.apk`. Android accepts an
-update only when the application ID and signing certificate match the installed
-copy and the new version code is not lower. Android debug keys are local to a
-build account, so an APK built on another machine or under another user can be
-rejected as **App not installed** even when the filename and version name look
-correct. Verify the APK certificate before distribution and retain the signing
-key securely. Do not uninstall merely to bypass a mismatch without first
-accepting that app-private profiles, certificate decisions, and saved
-credentials will be removed.
+The output is `app/build/outputs/apk/debug/app-debug.apk`. Treat that command as
+a throwaway local install, not as a shareable update lineage: sandboxed Gradle,
+Android Studio, and an interactive shell can select different ambient debug
+keys. Android accepts an update only when the application ID and signing
+certificate match the installed copy and the new version code is not lower. An
+APK built under another account can therefore be rejected as **App not
+installed** even when its filename and version name look correct. Do not
+uninstall merely to bypass a mismatch without first accepting that app-private
+profiles, certificate decisions, and saved credentials will be removed.
 
 Production artifacts must be signed outside the repository with the approved,
 stable release identity and pass [the release checklist](docs/RELEASE_CHECKLIST.md).
@@ -116,15 +127,17 @@ fail-closed local builder and supply the preceding APK:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\scripts\build-development-update.ps1 `
-    -PreviousApk .\dist\NanoKVM-Mobile-0.3.1-update-compatible-debug.apk
+    -PreviousApk 'C:\path\to\actual-previous.apk' `
+    -KeystorePath "$env:USERPROFILE\.android\debug.keystore"
 ```
 
-The builder selects a keystore only from its explicit argument,
-`NANOKVM_DEVELOPMENT_KEYSTORE`, or the current Windows account's `.android`
-directory, and rejects any keystore path inside the repository. It then rejects
-a package mismatch, a different signer, a version code that does not increase,
-or an attempt to replace an existing versioned output with different bytes. The
-key remains outside the repository.
+The predecessor is not stored in the repository: supply the actual APK that was
+previously installed or shared. The builder selects a keystore only from its
+explicit argument, `NANOKVM_DEVELOPMENT_KEYSTORE`, or the current Windows
+account's `.android` directory, and rejects any keystore path inside the
+repository. It then rejects a package mismatch, a different signer, a version
+code that does not increase, or an attempt to replace an existing versioned
+output with different bytes. The key remains outside the repository.
 
 ## Find your way around
 
@@ -136,13 +149,42 @@ key remains outside the repository.
    enter the NanoKVM password. Password saving is a separate opt-in choice.
 3. On the console, the floating actions provide **Show keyboard**, **Type phone
    clipboard**, and **Open console controls**.
-4. **Open console controls** contains scroll sensitivity, direct/trackpad mode,
-   the view pad toggle, Middle/Back/Forward mouse actions, Fit view, Video,
-   Power, and More actions.
+4. **Open console controls** contains scroll sensitivity, Direct, Trackpad, and
+   Capture input modes, the view pad toggle, Middle/Back/Forward mouse actions,
+   Fit and 1:1 view actions, Video, Power, and More actions.
 5. **More actions** contains reconnect and HID reset, **Device details**,
    **Virtual media**, **Wake-on-LAN**, **Administration**, **Operator tools**,
    **Shortcuts & autostart** when available, **PicoClaw (optional)**, full screen,
    and disconnect.
+
+### Interface tour
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="docs/images/readme/connections-light.webp"><img src="docs/images/readme/connections-light.webp" alt="NanoKVM Mobile connection catalogue in light theme showing a device-protected saved Lab profile and an HTTPS Workshop profile using reserved example addresses"></a><br>
+      <strong>Trusted connections</strong><br>
+      <sub>Saved profiles with HTTPS and per-device certificate protection.</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="docs/images/readme/console-controls-portrait.webp"><img src="docs/images/readme/console-controls-portrait.webp" alt="NanoKVM Mobile portrait console showing connected H.264 status, scroll sensitivity, and Direct, Trackpad, and Capture input choices"></a><br>
+      <strong>Reachable controls</strong><br>
+      <sub>Connection health, input modes, clipboard, keyboard, and scroll settings.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <a href="docs/images/readme/console-keyboard-portrait.webp"><img src="docs/images/readme/console-keyboard-portrait.webp" width="50%" alt="NanoKVM Mobile portrait console showing the remote special-key tray above standard Gboard with its voice microphone available"></a><br>
+      <strong>Native keyboard</strong><br>
+      <sub>Android IME input with a remote special-key accessory tray.</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>App UI reflects NanoKVM Mobile 0.3.5 and was captured on API 37 emulators;
+the standard keyboard state was recaptured from version code 12. The remote
+displays, device frames, and desk backdrops are illustrative generated fixtures;
+no generated UI substitutes for the app or Android keyboard.</sub>
 
 ## Known limitations
 
@@ -209,6 +251,9 @@ regeneration and performance commands are documented in
 The keyboard action opens the installed Android keyboard and, while keyboard
 mode is visible, an accessory tray for Escape, Tab, Enter, Backspace, Delete,
 modifiers, arrows, viewport positioning, function keys, and Ctrl-Alt-Delete.
+Voice typing remains available when the installed keyboard enables it. NanoKVM
+Mobile does not request microphone permission or receive voice audio; dictation
+and personalization follow that keyboard's own permissions and privacy settings.
 Committed supported text is translated to USB HID reports; composing text
 remains local until committed.
 
@@ -218,7 +263,9 @@ the part of the remote screen needed for the current task. Opening the Android
 keyboard temporarily places the pad directly above it; closing the keyboard
 restores the previous position. Separate keyboard, phone-clipboard, and console
 controls actions follow above or below the pad, leaving the pan/scroll strip full
-width; they remain available as floating actions when the pad is hidden.
+width; they remain available as floating actions when the pad is hidden. On
+compact phones these actions are 48 dp icon buttons so they do not cover the
+view controls; wider layouts restore their text labels.
 
 The dedicated four-direction scroll rail sits immediately to the right of the
 view-controls caret. Adjust it from **Open console controls > Scroll
@@ -229,9 +276,14 @@ Back, and Forward mouse actions; tap/drag and long press provide Left and Right.
 
 Physical keyboards and external mice are also routed to the remote host while
 the connected console is foregrounded. Direct mode maps an external pointer to
-the remote framebuffer; Trackpad mode sends relative movement. Support for
-special hardware keys and host handling of mouse buttons four/five still varies
-by Android device, NanoKVM firmware, and remote operating system.
+the remote framebuffer; Trackpad mode sends relative movement. **Capture input**
+requests Android pointer capture for an external mouse and routes relative mouse
+movement plus mapped hardware keys. Escape or Back releases capture locally and
+is not sent to the host; capture also ends when the keyboard opens, the input
+mode or session changes, or the app loses focus. If Android cannot grant pointer
+capture, Direct and Trackpad remain available. Support for special hardware keys
+and host handling of mouse buttons four/five still varies by Android device,
+NanoKVM firmware, and remote operating system.
 
 Saving a password is always opt-in. The encrypted replacement is committed only
 after the NanoKVM accepts it, and unlocking it requires Android's system device

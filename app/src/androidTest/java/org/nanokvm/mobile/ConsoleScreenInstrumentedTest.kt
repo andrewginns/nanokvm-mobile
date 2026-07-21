@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
 import android.view.PixelCopy
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -23,10 +24,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasText
@@ -46,8 +49,11 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -68,6 +74,7 @@ import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.runtime.TrustPreflightOutcome
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.runtime.BackendSession
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
@@ -133,6 +140,50 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun nativeKeyboardUsesStandardImeModeAndForwardsCommittedText() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Show keyboard")
+            .assertIsDisplayed()
+            .performClick()
+
+        var imeEditor: View? = null
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.activity.currentFocus?.takeIf { it.onCheckIsTextEditor() }?.also {
+                imeEditor = it
+            } != null
+        }
+
+        composeRule.runOnIdle {
+            val editor = imeEditor
+            assertNotNull("The native IME sink should hold focus", editor)
+            val editorInfo = EditorInfo()
+            val connection = editor!!.onCreateInputConnection(editorInfo)
+            assertNotNull("The native IME sink should expose an InputConnection", connection)
+            assertEquals(
+                InputType.TYPE_CLASS_TEXT,
+                editorInfo.inputType and InputType.TYPE_MASK_CLASS,
+            )
+            assertEquals(
+                "The native editor must not advertise a password variation, which disables voice input",
+                InputType.TYPE_TEXT_VARIATION_NORMAL,
+                editorInfo.inputType and InputType.TYPE_MASK_VARIATION,
+            )
+            assertTrue(editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
+            assertTrue(editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN != 0)
+            assertEquals(
+                "The native editor must not force IME incognito mode, which can hide voice input",
+                0,
+                editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING,
+            )
+            assertTrue(connection!!.commitText("hello from Android", 1))
+        }
+        composeRule.waitUntil(timeoutMillis = 2_000) {
+            backend.committedText == listOf("hello from Android" to KeyboardLayout.Us)
+        }
+    }
+
+    @Test
     fun portraitShortcutsDriveImePointerModeAndDockedViewControls() {
         renderConsole()
 
@@ -144,6 +195,11 @@ class ConsoleScreenInstrumentedTest {
         val quickActions = composeRule.onNodeWithTag("console-quick-actions")
             .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertDoesNotExist()
+        composeRule.onNodeWithText("Keyboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Clipboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Controls").assertDoesNotExist()
         assertTrue(
             "Shortcuts must remain inside the preview without reserving a side rail",
             quickActions.left >= previewBeforeKeyboard.left - 1f &&
@@ -178,11 +234,12 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
 
         // The accessory row is app-owned and remains available above the Android keyboard.
-        composeRule.onNodeWithText("Esc").assertIsDisplayed()
+        composeRule.onNodeWithText("Remote Esc").assertIsDisplayed()
         composeRule.onNodeWithText("Ctrl Alt Delete").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Hide native keyboard")
             .performScrollTo()
             .assertIsDisplayed()
+        waitForBottomDockedViewPanelAndStablePreview(previewBeforeKeyboard.height)
         val previewWithKeyboard = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
         val viewPanelWithKeyboard = composeRule.onNodeWithTag("view-navigation-panel")
@@ -214,29 +271,32 @@ class ConsoleScreenInstrumentedTest {
             remoteInputCallsBeforeKeyboardPadGesture,
             backend.remoteInputCallCount,
         )
-        composeRule.onNodeWithContentDescription("Show view controls").performClick()
-        composeRule.onNodeWithContentDescription("Zoom in")
-            .assertIsDisplayed()
-            .performClick()
         assertEquals(
-            "Opening or using View controls while typing must not resize the preview",
+            "Using the view pad while typing must preserve the IME-resized preview",
             previewWithKeyboard,
             composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot,
         )
-        composeRule.runOnIdle {
-            assertTrue(
-                "In-window View controls must keep the native IME editor focused",
-                composeRule.activity.currentFocus?.onCheckIsTextEditor() == true,
-            )
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithTag("console-quick-actions").assertDoesNotExist()
+        composeRule.onNodeWithTag("view-navigation-controls").assertIsDisplayed()
+        assertEquals(
+            "Opening View controls while typing must preserve the IME-resized preview",
+            previewWithKeyboard,
+            composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot,
+        )
+        composeRule.onNodeWithContentDescription("Zoom in")
+            .assertIsDisplayed()
+            .performClick()
+        var imeEditor: View? = null
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.activity.currentFocus?.takeIf { it.onCheckIsTextEditor() }?.also {
+                imeEditor = it
+            } != null
         }
-        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
 
         // Verify the focused native text editor really forwards InputConnection commits.
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.activity.currentFocus?.onCheckIsTextEditor() == true
-        }
         composeRule.runOnIdle {
-            val editor = composeRule.activity.currentFocus
+            val editor = imeEditor
             assertNotNull("The native IME sink should hold focus", editor)
             val editorInfo = EditorInfo()
             val connection = editor!!.onCreateInputConnection(editorInfo)
@@ -252,8 +312,10 @@ class ConsoleScreenInstrumentedTest {
             )
             assertTrue(editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
             assertTrue(editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN != 0)
-            assertTrue(
-                editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0,
+            assertEquals(
+                "The native editor must not force IME incognito mode, which can hide voice input",
+                0,
+                editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING,
             )
             assertTrue(connection!!.commitText("hello from Android", 1))
         }
@@ -261,9 +323,15 @@ class ConsoleScreenInstrumentedTest {
             backend.committedText == listOf("hello from Android" to KeyboardLayout.Us)
         }
 
-        composeRule.onNodeWithContentDescription("Hide native keyboard")
-            .performScrollTo()
-            .performClick()
+        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+        composeRule.onNodeWithTag("console-quick-actions").assertIsDisplayed()
+        val keyboardAction = composeRule.onNodeWithTag("console-keyboard-action")
+        if (
+            keyboardAction.fetchSemanticsNode().config[SemanticsProperties.StateDescription] ==
+            "Visible"
+        ) {
+            keyboardAction.performClick()
+        }
         composeRule.onNodeWithTag("view-navigation-pad").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Open console controls")
             .assertIsDisplayed()
@@ -272,12 +340,12 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
 
         val releaseCallsBeforePointerChange = backend.releaseAllCalls
-        composeRule.onNodeWithContentDescription("Direct pointer")
+        composeRule.onNodeWithContentDescription("Trackpad pointer")
             .performScrollTo()
             .assertIsDisplayed()
             .assertHasClickAction()
             .performClick()
-        composeRule.onNodeWithContentDescription("Trackpad pointer")
+        composeRule.onNodeWithContentDescription("Direct pointer")
             .performScrollTo()
             .assertIsDisplayed()
         assertEquals(
@@ -295,7 +363,6 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
         composeRule.onNodeWithContentDescription("Dock view pad")
             .performScrollTo()
-            .assertIsDisplayed()
             .assertHasClickAction()
             .performClick()
         composeRule.onNodeWithTag("console-control-sheet").assertDoesNotExist()
@@ -329,6 +396,7 @@ class ConsoleScreenInstrumentedTest {
         // The secondary navigation buttons consume no height until explicitly expanded.
         composeRule.onNodeWithContentDescription("Show view controls").performClick()
         composeRule.onNodeWithContentDescription("Hide view controls").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Pan view left")
             .assertIsDisplayed()
             .assertHasClickAction()
@@ -346,6 +414,7 @@ class ConsoleScreenInstrumentedTest {
             .assertHasClickAction()
             .performClick()
         composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+        composeRule.onNodeWithTag("console-quick-actions").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Pan view left").assertDoesNotExist()
         val previewAfterCollapsingViewControls = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
@@ -896,9 +965,13 @@ class ConsoleScreenInstrumentedTest {
             .fetchSemanticsNode().boundsInRoot
         val controlsTarget = composeRule.onNodeWithContentDescription("Open console controls")
             .fetchSemanticsNode().boundsInRoot
-        composeRule.onNodeWithTag("console-quick-connection-status")
+        val controlsStatus = composeRule.onNodeWithTag("console-controls-action")
             .assertIsDisplayed()
-            .assertContentDescriptionEquals("Connected")
+            .fetchSemanticsNode().config[SemanticsProperties.StateDescription]
+        assertEquals(
+            "Connected · H.264 direct · 30 fps · 8 ms · Drops 7 · Stalls 2",
+            controlsStatus,
+        )
         assertTrue(keyboardTarget.width >= minimumTouchTarget - 1f)
         assertTrue(keyboardTarget.height >= minimumTouchTarget - 1f)
         assertTrue(controlsTarget.width >= minimumTouchTarget - 1f)
@@ -1112,6 +1185,81 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun physicalEscapeRestoresNormalConsoleFromImmersiveMode() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("immersive-mode-action")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertTrue(
+                composeRule.activity.dispatchKeyEvent(
+                    KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+                ),
+            )
+            assertTrue(
+                composeRule.activity.dispatchKeyEvent(
+                    KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE),
+                ),
+            )
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Enter full screen").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun backClosesExpandedViewControlsBeforeRequestingDisconnect() {
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithContentDescription("Hide view controls").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions").assertDoesNotExist()
+
+        composeRule.runOnIdle {
+            composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Show view controls").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertIsDisplayed()
+        composeRule.onNodeWithText("Disconnect from Lab NanoKVM?").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, backend.disconnectCalls) }
+    }
+
+    @Test
+    fun bareConsoleBackRequiresTargetAwareDisconnectConfirmation() {
+        renderConsole()
+
+        composeRule.runOnIdle {
+            composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.onNodeWithText("Disconnect from Lab NanoKVM?").assertIsDisplayed()
+        composeRule.onNodeWithText("Target: ${profile.authority}", substring = true)
+            .assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(0, backend.disconnectCalls) }
+
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.runOnIdle { assertEquals(0, backend.disconnectCalls) }
+
+        composeRule.runOnIdle {
+            composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.onNodeWithTag("disconnect-confirmation-action").performClick()
+        composeRule.runOnIdle { assertEquals(1, backend.disconnectCalls) }
+    }
+
+    @Test
     fun moreActionsDiscoversPicoClawButConsentIsTheFirstProtocolEntry() {
         renderConsole()
 
@@ -1169,6 +1317,133 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun lightThemeReconnectAndRetryStatesUseConsoleForegrounds() {
+        val sessionState = MutableStateFlow(
+            backend.session.value.copy(
+                connection = ConnectionState.Reconnecting,
+                status = ConsoleMessage.ReconnectAttemptDelayed(
+                    attempt = 2,
+                    maximumAttempts = 5,
+                    delaySeconds = 3,
+                ),
+                reconnectAttempt = 2,
+                reconnectMaximumAttempts = 5,
+                nextReconnectDelayMillis = 3_000L,
+            ),
+        )
+        composeRule.setContent {
+            val session by sessionState.collectAsState()
+            NanoKvmTheme(themeMode = ThemeMode.LIGHT, useDynamicColor = false) {
+                ConsoleScreen(
+                    profile = profile,
+                    session = session,
+                    input = backend,
+                    videoSurface = backend,
+                    features = backend.features,
+                    onDisconnect = { backend.disconnectCalls++ },
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("console-transient-status").assertIsDisplayed()
+        assertTextColor("Reconnecting", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Stop reconnecting", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Disconnect", DarkConsoleColorScheme.onActive)
+        assertTextColor("Attempt 2 of 5", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Next attempt in 3 seconds", DarkConsoleColorScheme.onSurface)
+        assertTextColor(
+            "Target: ${profile.name} (${profile.authority})",
+            DarkConsoleColorScheme.onSurfaceMuted,
+        )
+        assertTextColor(
+            "Reconnect attempt 2 of 5 in 3 seconds",
+            DarkConsoleColorScheme.onSurfaceMuted,
+        )
+
+        composeRule.runOnIdle {
+            sessionState.value = sessionState.value.copy(
+                connection = ConnectionState.Failed,
+                status = null,
+                reconnectAttempt = null,
+                reconnectMaximumAttempts = null,
+                nextReconnectDelayMillis = null,
+            )
+        }
+        assertTextColor("Connection failed", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Retry", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Disconnect", DarkConsoleColorScheme.onActive)
+
+        composeRule.runOnIdle {
+            sessionState.value = sessionState.value.copy(connection = ConnectionState.Disconnected)
+        }
+        assertTextColor("Disconnected", DarkConsoleColorScheme.onSurface)
+        assertTextColor("Retry", DarkConsoleColorScheme.onSurface)
+    }
+
+    @Test
+    fun lightThemeDefaultConsoleControlsMeetContrastOnDarkSurfaces() {
+        renderConsole(themeMode = ThemeMode.LIGHT, useDynamicColor = false)
+
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        assertTextContrast("Fit", DarkConsoleColorScheme.controlSurfaceElevated)
+        assertTextContrast("1:1", DarkConsoleColorScheme.controlSurfaceElevated)
+        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-pointer-mode-controls").performScrollTo()
+        assertTextContrast("Direct pointer", DarkConsoleColorScheme.active)
+        assertTextContrast("Trackpad pointer", DarkConsoleColorScheme.controlSurface)
+        assertTextContrast("Capture input", DarkConsoleColorScheme.controlSurface)
+    }
+
+    @Test
+    fun lightThemeDisabledLabelledQuickActionUsesReadableConsoleForeground() {
+        val failedSession = backend.session.value.copy(connection = ConnectionState.Failed)
+        composeRule.setContent {
+            NanoKvmTheme(themeMode = ThemeMode.LIGHT, useDynamicColor = false) {
+                Box(Modifier.requiredSize(width = 600.dp, height = 700.dp)) {
+                    ConsoleScreen(
+                        profile = profile,
+                        session = failedSession,
+                        input = backend,
+                        videoSurface = backend,
+                        features = backend.features,
+                        onDisconnect = { backend.disconnectCalls++ },
+                        sessionDraftOwner = sessionDraftOwner,
+                        clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                        onSharedPasteConsumed = {},
+                        onScrollSensitivityChange = {},
+                        onMjpegFrameDetectionEnabledChange = {},
+                        onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-clipboard-action").assertIsNotEnabled()
+        assertTextColor("Clipboard", DarkConsoleColorScheme.onSurfaceMuted)
+        assertTextContrast("Clipboard", DarkConsoleColorScheme.controlSurfaceElevated)
+
+        composeRule.onNodeWithTag("console-controls-action").performClick()
+        composeRule.onNodeWithTag("console-pointer-mode-controls").performScrollTo()
+        composeRule.onNodeWithContentDescription("Capture input").assertIsNotEnabled()
+        assertTextColor("Capture input", DarkConsoleColorScheme.onSurfaceMuted)
+        assertTextContrast("Capture input", DarkConsoleColorScheme.controlSurface)
+        composeRule.onNodeWithContentDescription("Power controls")
+            .performScrollTo()
+            .assertIsNotEnabled()
+        assertTextColor("Power controls", DarkConsoleColorScheme.onSurfaceMuted)
+        assertTextContrast("Power controls", DarkConsoleColorScheme.controlSurfaceElevated)
+    }
+
+    @Test
     fun controlSheetExposesAccessibleOneShotAuxiliaryMouseButtons() {
         renderConsole(themeMode = ThemeMode.LIGHT, useDynamicColor = false)
         val previewBeforeControls = composeRule.onNodeWithTag("remote-preview")
@@ -1184,7 +1459,6 @@ class ConsoleScreenInstrumentedTest {
         // Scroll the rail itself through the vertical ancestor before scrolling its children.
         composeRule.onNodeWithTag("console-mouse-controls")
             .performScrollTo()
-            .assertIsDisplayed()
         val middleButtonTextLayouts = mutableListOf<TextLayoutResult>()
         composeRule.onNodeWithText("Middle mouse click", useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
@@ -1271,8 +1545,8 @@ class ConsoleScreenInstrumentedTest {
             .assertIsDisplayed()
             .assertHasClickAction()
             .assertContentDescriptionEquals("Close controls")
+        composeRule.onNodeWithTag("console-pointer-mode-controls").performScrollTo()
         composeRule.onNodeWithContentDescription("Direct pointer")
-            .performScrollTo()
             .assertIsDisplayed()
             .performClick()
         composeRule.onNodeWithContentDescription("Trackpad pointer")
@@ -1683,6 +1957,11 @@ class ConsoleScreenInstrumentedTest {
             }
         }
         composeRule.onNodeWithTag("console-layout-single-pane").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertDoesNotExist()
+        composeRule.onNodeWithText("Keyboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Clipboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Controls").assertDoesNotExist()
         composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
         val compactPreview = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
@@ -1695,6 +1974,11 @@ class ConsoleScreenInstrumentedTest {
 
         composeRule.runOnIdle { layoutWidth.intValue = 900 }
         composeRule.onNodeWithTag("console-layout-supporting-pane").assertExists()
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertDoesNotExist()
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertIsDisplayed()
+        composeRule.onNodeWithText("Keyboard").assertExists()
+        composeRule.onNodeWithText("Clipboard").assertExists()
+        composeRule.onNodeWithText("Controls").assertExists()
         composeRule.waitForIdle()
         val expandedPreview = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
@@ -1713,8 +1997,13 @@ class ConsoleScreenInstrumentedTest {
             composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
         )
 
-        composeRule.runOnIdle { layoutWidth.intValue = 700 }
+        composeRule.runOnIdle { layoutWidth.intValue = 600 }
         composeRule.onNodeWithTag("console-layout-single-pane").assertExists()
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertDoesNotExist()
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertIsDisplayed()
+        composeRule.onNodeWithText("Keyboard").assertExists()
+        composeRule.onNodeWithText("Clipboard").assertExists()
+        composeRule.onNodeWithText("Controls").assertExists()
         composeRule.waitForIdle()
         assertEquals(
             "Returning from the expanded breakpoint must retain the decoder Surface",
@@ -1726,6 +2015,153 @@ class ConsoleScreenInstrumentedTest {
             originalTextureView,
             composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
         )
+    }
+
+    @Test
+    fun expandedConsoleAdaptsAcrossCompactHeightWithoutReattachingVideoSurface() {
+        val layoutHeight = mutableIntStateOf(700)
+        composeRule.setContent {
+            val session by backend.session.collectAsState()
+            NanoKvmTheme {
+                Box(
+                    Modifier.requiredSize(
+                        width = 900.dp,
+                        height = layoutHeight.intValue.dp,
+                    ),
+                ) {
+                    ConsoleScreen(
+                        profile = profile,
+                        session = session,
+                        input = backend,
+                        videoSurface = backend,
+                        features = backend.features,
+                        onDisconnect = { backend.disconnectCalls++ },
+                        sessionDraftOwner = sessionDraftOwner,
+                        clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                        onSharedPasteConsumed = {},
+                        onScrollSensitivityChange = {},
+                        onMjpegFrameDetectionEnabledChange = {},
+                        onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithTag("console-layout-supporting-pane").assertExists()
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+        val originalTextureView = composeRule.runOnIdle {
+            findTextureView(composeRule.activity.window.decorView)
+        }
+        assertNotNull(originalTextureView)
+        val originalAttachCount = backend.attachSurfaceCalls
+        val originalDetachCount = backend.detachSurfaceCalls
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+
+        composeRule.runOnIdle { layoutHeight.intValue = 479 }
+        composeRule.onNodeWithTag("console-layout-single-pane").assertExists()
+        composeRule.onNodeWithTag("console-control-scrim").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Power controls")
+            .performScrollTo()
+            .assertIsDisplayed()
+        assertEquals(originalAttachCount, backend.attachSurfaceCalls)
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+        assertSame(
+            originalTextureView,
+            composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
+        )
+
+        composeRule.runOnIdle { layoutHeight.intValue = 700 }
+        composeRule.onNodeWithTag("console-layout-supporting-pane").assertExists()
+        composeRule.onNodeWithTag("console-control-scrim").assertDoesNotExist()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        assertEquals(originalAttachCount, backend.attachSurfaceCalls)
+        assertEquals(originalDetachCount, backend.detachSurfaceCalls)
+        assertSame(
+            originalTextureView,
+            composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
+        )
+    }
+
+    @Test
+    fun twoHundredPercentTextKeepsPrimaryAndRecoveryActionsReadable() {
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.session as MutableStateFlow<BackendSession>
+        composeRule.setContent {
+            val session by mutableSession.collectAsState()
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(baseDensity.density, fontScale = 2f),
+            ) {
+                NanoKvmTheme {
+                    Box(Modifier.requiredSize(width = 411.dp, height = 700.dp)) {
+                        ConsoleScreen(
+                            profile = profile,
+                            session = session,
+                            input = backend,
+                            videoSurface = backend,
+                            features = backend.features,
+                            onDisconnect = { backend.disconnectCalls++ },
+                            sessionDraftOwner = sessionDraftOwner,
+                            clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                            onSharedPasteConsumed = {},
+                            onScrollSensitivityChange = {},
+                            onMjpegFrameDetectionEnabledChange = {},
+                            onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-quick-actions-labelled").assertDoesNotExist()
+        composeRule.onNodeWithText("Keyboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Clipboard").assertDoesNotExist()
+        composeRule.onNodeWithText("Controls").assertDoesNotExist()
+        val preview = composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot
+        val density = composeRule.activity.resources.displayMetrics.density
+        val quickActionStrip = composeRule.onNodeWithTag("console-quick-actions")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(quickActionStrip.width <= 144f * density + 1f)
+        assertTrue(quickActionStrip.height <= 48f * density + 1f)
+        val quickActions = listOf(
+            composeRule.onNodeWithTag("console-keyboard-action")
+                .fetchSemanticsNode().boundsInRoot,
+            composeRule.onNodeWithTag("console-clipboard-action")
+                .fetchSemanticsNode().boundsInRoot,
+            composeRule.onNodeWithTag("console-controls-action")
+                .fetchSemanticsNode().boundsInRoot,
+        )
+        quickActions.forEach { bounds ->
+            assertTrue(bounds.left >= preview.left - 1f)
+            assertTrue(bounds.right <= preview.right + 1f)
+            assertTrue(bounds.top >= preview.top - 1f)
+            assertTrue(bounds.bottom <= preview.bottom + 1f)
+            assertTrue(bounds.width >= 48f * density - 1f)
+            assertTrue(bounds.height >= 48f * density - 1f)
+        }
+        quickActions.zipWithNext().forEach { (first, second) ->
+            assertTrue("Large-text quick actions must not overlap", first.right <= second.left + 1f)
+        }
+        composeRule.onNodeWithContentDescription("Show view controls").performClick()
+        composeRule.onNodeWithTag("console-quick-actions").assertDoesNotExist()
+        composeRule.onNodeWithTag("view-navigation-controls").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Hide view controls").performClick()
+        composeRule.onNodeWithTag("console-quick-actions-icons").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            mutableSession.value = mutableSession.value.copy(connection = ConnectionState.Failed)
+        }
+        composeRule.onNodeWithTag("retry-connection-action").assertIsDisplayed()
+        composeRule.onNodeWithTag("transient-disconnect-action").assertIsDisplayed()
+        val retry = composeRule.onNodeWithTag("retry-connection-action")
+            .fetchSemanticsNode().boundsInRoot
+        val disconnect = composeRule.onNodeWithTag("transient-disconnect-action")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("Large-text recovery actions must not overlap", retry.bottom <= disconnect.top + 1f)
+        assertTrue(retry.left >= preview.left - 1f && retry.right <= preview.right + 1f)
+        assertTrue(disconnect.left >= preview.left - 1f && disconnect.right <= preview.right + 1f)
     }
 
     @Test
@@ -1759,7 +2195,7 @@ class ConsoleScreenInstrumentedTest {
             )
         }
         composeRule.onNodeWithText("Reset the host now?").assertDoesNotExist()
-        composeRule.onNodeWithText("Send").assertDoesNotExist()
+        composeRule.onNodeWithText("Reset host").assertDoesNotExist()
 
         openResetConfirmation()
         composeRule.runOnIdle {
@@ -1768,7 +2204,7 @@ class ConsoleScreenInstrumentedTest {
             )
         }
         composeRule.onNodeWithText("Reset the host now?").assertDoesNotExist()
-        composeRule.onNodeWithText("Send").assertDoesNotExist()
+        composeRule.onNodeWithText("Reset host").assertDoesNotExist()
 
         composeRule.runOnIdle {
             mutableSession.value = mutableSession.value.copy(
@@ -1782,6 +2218,41 @@ class ConsoleScreenInstrumentedTest {
         }
     }
 
+    @Test
+    fun destructivePowerControlsAreDisabledWhenTheSessionIsNotUsable() {
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.session as MutableStateFlow<BackendSession>
+        mutableSession.value = mutableSession.value.copy(connection = ConnectionState.Failed)
+        renderConsole()
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Power controls")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertIsNotEnabled()
+        composeRule.onNodeWithText("Press power button").assertDoesNotExist()
+    }
+
+    @Test
+    fun destructivePowerConfirmationNamesAndBindsTheExactDestination() {
+        renderConsole()
+
+        openResetConfirmation()
+        composeRule.onNodeWithText("Reset host").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(listOf(PowerAction.Reset), backend.powerActions)
+            assertEquals(1, backend.powerDestinations.size)
+            assertEquals(profile.id, backend.powerDestinations.single().profileId)
+            assertEquals(profile.authority, backend.powerDestinations.single().authority)
+            assertEquals(
+                backend.session.value.sessionGeneration,
+                backend.powerDestinations.single().sessionGeneration,
+            )
+        }
+        composeRule.onNodeWithText("Reset the host now?").assertDoesNotExist()
+    }
+
     private fun openResetConfirmation() {
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
         composeRule.onNodeWithContentDescription("Power controls")
@@ -1789,7 +2260,44 @@ class ConsoleScreenInstrumentedTest {
             .performClick()
         composeRule.onNodeWithText("Reset button").performClick()
         composeRule.onNodeWithText("Reset the host now?").assertIsDisplayed()
-        composeRule.onNodeWithText("Send").assertIsDisplayed()
+        composeRule.onNodeWithText("Target: Lab NanoKVM (${profile.authority})").assertIsDisplayed()
+        composeRule.onNodeWithText("Reset host").assertIsDisplayed()
+    }
+
+    private fun assertTextColor(
+        text: String,
+        expected: androidx.compose.ui.graphics.Color,
+    ) {
+        val actual = resolvedTextColor(text)
+        assertEquals(
+            "'$text' must resolve from the fixed console palette",
+            expected.toArgb(),
+            actual.toArgb(),
+        )
+    }
+
+    private fun assertTextContrast(
+        text: String,
+        background: androidx.compose.ui.graphics.Color,
+        minimum: Double = 4.5,
+    ) {
+        val foreground = resolvedTextColor(text)
+        val contrast = colorContrastRatio(foreground.toArgb(), background.toArgb())
+        assertTrue(
+            "'$text' contrast was $contrast against ${background.toArgb().toUInt().toString(16)}; " +
+                "expected at least $minimum",
+            contrast >= minimum,
+        )
+    }
+
+    private fun resolvedTextColor(text: String): androidx.compose.ui.graphics.Color {
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText(text, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
+                action(layouts)
+            }
+        assertEquals("Expected one text layout for '$text'", 1, layouts.size)
+        return layouts.single().layoutInput.style.color
     }
 
     private fun performViewPadCustomAction(label: String) {
@@ -2014,6 +2522,27 @@ private fun assertColorNear(expected: Int, actual: Int) {
     )
 }
 
+private fun colorContrastRatio(first: Int, second: Int): Double {
+    fun relativeLuminance(color: Int): Double {
+        fun channel(value: Int): Double {
+            val encoded = value / 255.0
+            return if (encoded <= 0.04045) {
+                encoded / 12.92
+            } else {
+                Math.pow((encoded + 0.055) / 1.055, 2.4)
+            }
+        }
+        return 0.2126 * channel(Color.red(color)) +
+            0.7152 * channel(Color.green(color)) +
+            0.0722 * channel(Color.blue(color))
+    }
+
+    val firstLuminance = relativeLuminance(first)
+    val secondLuminance = relativeLuminance(second)
+    return (maxOf(firstLuminance, secondLuminance) + 0.05) /
+        (minOf(firstLuminance, secondLuminance) + 0.05)
+}
+
 private val TEST_VIDEO_COLOR = Color.rgb(31, 190, 142)
 
 private class RecordingConsoleBackend : ConsoleBackend {
@@ -2105,6 +2634,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     val scrollSteps = mutableListOf<Int>()
     val horizontalScrollSteps = mutableListOf<Int>()
     val powerActions = mutableListOf<PowerAction>()
+    val powerDestinations = mutableListOf<ApprovedCoreDestination>()
     @Volatile var attachSurfaceCalls = 0
     @Volatile var detachSurfaceCalls = 0
     @Volatile var phase3SurfaceIsVisible = false
@@ -2165,6 +2695,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     }
 
     override fun reconnect() = Unit
+    override fun cancelReconnect() = Unit
     override fun setForeground(isForeground: Boolean) = Unit
     override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
         attachSurfaceCalls++
@@ -2216,7 +2747,8 @@ private class RecordingConsoleBackend : ConsoleBackend {
     override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) {
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) {
+        powerDestinations += destination
         powerActions += action
     }
     override fun pasteText(request: ApprovedPasteRequest) {

@@ -82,6 +82,10 @@ source/dependency inputs to a signed distribution artifact.
 - The app has no analytics, automatic crash reporting, or application diagnostic
   logger. Device/release checks must still inspect filesystem, Keystore, logcat,
   backup/restore, screenshots, and traffic.
+- Live typing is owned by the user-selected Android IME. NanoKVM Mobile does not
+  request microphone permission or receive/retain voice audio; dictation and
+  personalization follow that IME's permissions and privacy settings. Only
+  committed text crosses the app's IME bridge, and the app does not persist it.
 
 Residual risks: Java/Android APIs may create short-lived immutable copies while
 encoding text or crypto input; wiping a mutable owner cannot guarantee erasure

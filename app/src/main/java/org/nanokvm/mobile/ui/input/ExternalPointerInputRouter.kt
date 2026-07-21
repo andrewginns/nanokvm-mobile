@@ -25,9 +25,14 @@ internal class ExternalPointerInputRouter(
     private var lastAbsolutePosition: ExternalAbsolutePosition? = null
     private var lifecycleReleased = false
 
+    /** Starts a newly confirmed input-ownership lifecycle before its first pointer sample. */
+    fun beginLifecycle() {
+        lifecycleReleased = false
+    }
+
     fun route(sample: ExternalPointerSample): List<ExternalPointerCommand> {
         if (sample.phase == ExternalPointerPhase.Cancel) return releaseAll()
-        lifecycleReleased = false
+        beginLifecycle()
 
         val commands = mutableListOf<ExternalPointerCommand>()
         val position = sample.position.takeIf(ExternalPointerPosition::isFinite)

@@ -12,6 +12,7 @@
     <string name="console_connection_disconnected">Disconnected</string>
     <string name="console_connection_connecting">Connecting</string>
     <string name="console_connection_connected">Connected</string>
+    <string name="console_connection_degraded">Degraded video</string>
     <string name="console_connection_reconnecting">Reconnecting</string>
     <string name="console_connection_failed">Connection failed</string>
     <string name="console_status_fps">%1$d fps</string>
@@ -71,6 +72,7 @@
         <item quantity="other">%1$d seconds</item>
     </plurals>
     <string name="console_message_reconnect_stopped">Reconnect stopped after %1$s: %2$s</string>
+    <string name="console_message_reconnect_cancelled">Automatic reconnect stopped. Retry when you are ready.</string>
     <plurals name="console_message_reconnect_attempt_count">
         <item quantity="one">%1$d attempt</item>
         <item quantity="other">%1$d attempts</item>
@@ -95,6 +97,7 @@
     <string name="console_message_hid_reset">HID interface reset</string>
     <string name="console_message_ctrl_alt_delete_sent">Ctrl-Alt-Delete sent</string>
     <string name="console_message_host_control_sent">Host control sent</string>
+    <string name="console_message_host_control_session_changed">The host-control request was not sent because the authenticated destination changed.</string>
     <string name="console_message_connecting_video">Connecting %1$s</string>
     <string name="console_message_video_fallback">%1$s unavailable; using %2$s</string>
     <string name="console_message_mjpeg_detection_unavailable">MJPEG frame detection is unavailable for this session.</string>
@@ -103,6 +106,13 @@
     <!-- Console controls -->
     <string name="console_pointer_direct">Direct pointer</string>
     <string name="console_pointer_trackpad">Trackpad pointer</string>
+    <string name="console_pointer_mode_title">Pointer mode</string>
+    <string name="console_capture_input">Capture input</string>
+    <string name="console_capture_input_detail">Send mouse and mapped keyboard input to the remote host. Esc or Back releases local control.</string>
+    <string name="console_capture_requesting">Requesting input capture…</string>
+    <string name="console_capture_active">Input captured · Esc or Back releases</string>
+    <string name="console_capture_unavailable">Input capture was not available. Direct and Trackpad remain available.</string>
+    <string name="console_release_input">Release</string>
     <string name="console_remote_pointer">Remote pointer controls</string>
     <string name="console_move_pointer_left">Move remote pointer left</string>
     <string name="console_move_pointer_right">Move remote pointer right</string>
@@ -118,12 +128,22 @@
     <string name="console_dock_view_pad">Dock view pad</string>
     <string name="console_scroll_sensitivity_value">Scroll sensitivity %1$s</string>
     <string name="console_fit_view">Fit view</string>
+    <string name="console_view_fit_label">Fit</string>
+    <string name="console_view_actual_size_label">1:1</string>
+    <string name="console_actual_size_remote_view">View remote at 1:1 pixels</string>
+    <string name="console_view_scale_fit">Fit</string>
+    <string name="console_view_scale_actual_size">1:1 pixels</string>
+    <string name="console_view_scale_custom">%1$s custom scale</string>
     <string name="console_video_settings">Video settings</string>
     <string name="console_power_controls">Power controls</string>
     <string name="console_more_actions">More actions</string>
     <string name="console_enter_immersive">Enter full screen</string>
     <string name="console_exit_immersive">Exit full screen</string>
     <string name="console_type_phone_clipboard">Type phone clipboard</string>
+    <string name="console_quick_keyboard">Keyboard</string>
+    <string name="console_quick_clipboard">Clipboard</string>
+    <string name="console_quick_stop">Stop</string>
+    <string name="console_quick_controls">Controls</string>
     <string name="console_stopping_clipboard_typing_progress">Stopping clipboard typing: %1$d of %2$d</string>
     <string name="console_cancel_clipboard_typing_progress">Cancel clipboard typing · %1$d of %2$d</string>
     <string name="console_multiplier_format">%1$.1f×</string>
@@ -137,7 +157,6 @@
     <string name="console_reset">Reset</string>
     <string name="console_cancel">Cancel</string>
     <string name="console_close">Close</string>
-    <string name="console_send">Send</string>
     <string name="console_ok">OK</string>
 
     <!-- Explicit Android-to-host clipboard typing -->
@@ -171,6 +190,7 @@
 
     <!-- Video settings -->
     <string name="console_transport">Transport</string>
+    <string name="console_applied_transport">Currently applied: %1$s</string>
     <string name="console_transport_auto">Auto</string>
     <string name="console_transport_webrtc">WebRTC</string>
     <string name="console_transport_h264">H.264</string>
@@ -181,8 +201,10 @@
     <string name="console_frame_rate">Frame rate</string>
     <string name="console_frame_rate_value">%1$d fps</string>
     <string name="console_h264_bitrate">H.264 bitrate</string>
+    <string name="console_h264_settings">H.264 stream settings</string>
     <string name="console_bitrate_value">%1$d Mbps</string>
     <string name="console_mjpeg_quality">MJPEG quality</string>
+    <string name="console_mjpeg_settings">MJPEG fallback settings</string>
     <string name="console_mjpeg_frame_detection">MJPEG frame-difference detection</string>
     <string name="console_mjpeg_frame_detection_detail">Reduces unchanged MJPEG frames. Off by default; when enabled, each MJPEG start gets one 10-second startup grace period to avoid an initially black preview.</string>
     <string name="console_mjpeg_frame_detection_state_on">Enabled</string>
@@ -215,10 +237,21 @@
     </plurals>
     <string name="console_confirm_ctrl_alt_delete_title">Send Ctrl Alt Delete?</string>
     <string name="console_confirm_ctrl_alt_delete_detail">The host will receive the secure attention sequence.</string>
+    <string name="console_confirm_host_target">Target: %1$s (%2$s)</string>
+    <string name="console_confirm_power_action">Press power button</string>
+    <string name="console_confirm_reset_action">Reset host</string>
+    <string name="console_confirm_force_off_action">Force power off</string>
+    <string name="console_confirm_ctrl_alt_delete_action">Send Ctrl-Alt-Delete</string>
     <string name="console_actions_title">Console actions</string>
     <string name="console_reconnect_stream">Reconnect stream</string>
     <string name="console_reset_keyboard_mouse">Reset keyboard and mouse</string>
     <string name="console_disconnect">Disconnect</string>
+    <string name="console_disconnect_title">Disconnect from %1$s?</string>
+    <string name="console_disconnect_detail">Target: %1$s\n\nThis ends the remote session. It does not power off or restart the host.</string>
+    <string name="console_retry">Retry</string>
+    <string name="console_stop_reconnecting">Stop reconnecting</string>
+    <string name="console_reconnect_progress">Attempt %1$d of %2$d</string>
+    <string name="console_reconnect_delay">Next attempt in %1$s</string>
 
     <!-- Virtual media and Wake-on-LAN -->
     <string name="console_virtual_media">Virtual media</string>
@@ -296,7 +329,7 @@
     <string name="console_confirm">Confirm</string>
 
     <!-- Native keyboard accessory -->
-    <string name="console_key_escape">Esc</string>
+    <string name="console_key_escape">Remote Esc</string>
     <string name="console_key_tab">Tab</string>
     <string name="console_key_enter">Enter</string>
     <string name="console_key_backspace">⌫</string>
@@ -329,7 +362,6 @@
     <string name="console_move_view_pad_top">Move view pad to top</string>
     <string name="console_move_view_pad_bottom">Move view pad to bottom</string>
     <string name="console_pan_zoom_view">Pan and zoom remote view</string>
-    <string name="console_zoom_state">%1$s zoom</string>
     <string name="console_pan_zoom_hint">Drag to pan · pinch to zoom</string>
     <string name="console_show_view_controls">Show view controls</string>
     <string name="console_hide_view_controls">Hide view controls</string>

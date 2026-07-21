@@ -28,6 +28,7 @@ import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.runtime.ApprovedOperatorDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.BackendSession
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConnectionFailure
@@ -233,11 +234,12 @@ private class OperatorReadOnlyBackend : ConsoleBackend {
     override fun resizeVideoSurface(width: Int, height: Int) = Unit
     override fun detachVideoSurface(surface: Surface) = Unit
     override fun reconnect() = Unit
+    override fun cancelReconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
     override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
 

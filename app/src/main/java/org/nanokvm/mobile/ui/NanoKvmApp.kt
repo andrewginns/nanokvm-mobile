@@ -20,8 +20,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -38,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -48,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
+import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.security.CredentialAuthenticator
 import org.nanokvm.mobile.ui.screens.CertificateReviewScreen
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
@@ -156,7 +162,17 @@ fun NanoKvmApp(
                         onForgetCertificate = viewModel::forgetProfileCertificate,
                         onCancel = viewModel::cancelToProfiles,
                     )
-                    is AppScreen.Connecting -> ConnectingScreen(screen.profile.name)
+                    is AppScreen.Connecting -> ConnectingScreen(
+                        profile = screen.profile,
+                        onCancel = viewModel::cancelToProfiles,
+                    )
+                    is AppScreen.ConnectionIssue -> ConnectionIssueScreen(
+                        issue = screen,
+                        onRetry = viewModel::retryConnectionIssue,
+                        onUseAnotherPassword = viewModel::useAnotherPasswordForConnectionIssue,
+                        onEditConnection = viewModel::editConnectionIssue,
+                        onBack = viewModel::cancelToProfiles,
+                    )
                     is AppScreen.ReviewCertificate -> CertificateReviewScreen(
                         profile = screen.profile,
                         certificate = screen.certificate,
@@ -184,6 +200,7 @@ fun NanoKvmApp(
                         canProtectPassword = credentialAuthenticator.canProtectPasswords,
                         onPasswordChange = viewModel::changeAdministrationPassword,
                         onDisconnect = viewModel::disconnect,
+                        onReauthenticate = viewModel::reauthenticateConsole,
                     )
                 }
             }
@@ -200,12 +217,12 @@ fun NanoKvmApp(
             )
         }
 
-        BackHandler(enabled = state.screen !is AppScreen.Profiles) {
-            if (state.screen is AppScreen.Console) {
-                viewModel.disconnect()
-            } else {
-                viewModel.cancelToProfiles()
-            }
+        // ConsoleScreen owns its layered Back priority (transient UI, capture, immersive mode,
+        // then target-aware disconnect confirmation). This app-level fallback must never pre-empt it.
+        BackHandler(
+            enabled = state.screen !is AppScreen.Profiles && state.screen !is AppScreen.Console,
+        ) {
+            viewModel.cancelToProfiles()
         }
     }
 }
@@ -347,20 +364,97 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-private fun ConnectingScreen(profileName: String) {
+internal fun ConnectingScreen(
+    profile: HostProfile,
+    onCancel: () -> Unit,
+) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CircularProgressIndicator()
         Text(
-            stringResource(R.string.connecting_to_profile, profileName),
+            stringResource(R.string.connecting_to_profile, profile.name),
             style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.connection_issue_target, profile.authority),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             stringResource(R.string.connecting_status),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        TextButton(
+            onClick = onCancel,
+            modifier = Modifier.testTag("connecting-cancel-action"),
+        ) {
+            Text(stringResource(R.string.connection_cancel_action))
+        }
+    }
+}
+
+@Composable
+internal fun ConnectionIssueScreen(
+    issue: AppScreen.ConnectionIssue,
+    onRetry: () -> Unit,
+    onUseAnotherPassword: () -> Unit,
+    onEditConnection: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.connection_issue_title, issue.profile.name),
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        Text(
+            text = stringResource(R.string.connection_issue_target, issue.profile.authority),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = issue.failure.displayText(),
+            modifier = Modifier.widthIn(max = 520.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        when (issue.primaryRecovery) {
+            ConnectionIssueRecovery.Retry -> Button(
+                onClick = onRetry,
+                modifier = Modifier.testTag("connection-issue-primary-action"),
+            ) {
+                Text(stringResource(R.string.connection_issue_retry_action))
+            }
+            ConnectionIssueRecovery.UseAnotherPassword -> Button(
+                onClick = onUseAnotherPassword,
+                modifier = Modifier.testTag("connection-issue-primary-action"),
+            ) {
+                Text(stringResource(R.string.connection_issue_use_password_action))
+            }
+            ConnectionIssueRecovery.EditConnection -> Button(
+                onClick = onEditConnection,
+                modifier = Modifier.testTag("connection-issue-primary-action"),
+            ) {
+                Text(stringResource(R.string.connection_issue_edit_action))
+            }
+            null -> Unit
+        }
+        TextButton(
+            onClick = onBack,
+            modifier = Modifier.testTag("connection-issue-back-action"),
+        ) {
+            Text(stringResource(R.string.connection_issue_back_action))
+        }
     }
 }

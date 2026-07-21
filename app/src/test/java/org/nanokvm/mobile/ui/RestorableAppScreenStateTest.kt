@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.runtime.CertificateDetails
+import org.nanokvm.mobile.runtime.ConnectionFailure
 
 class RestorableAppScreenStateTest {
     @Test
@@ -38,6 +39,7 @@ class RestorableAppScreenStateTest {
 
         listOf<AppScreen>(
             AppScreen.Connecting(profile),
+            initialConnectionIssue(profile, ConnectionFailure.TimedOut, retryable = true),
             AppScreen.ReviewCertificate(profile, certificate),
             AppScreen.Console(profile),
         ).forEach { screen ->

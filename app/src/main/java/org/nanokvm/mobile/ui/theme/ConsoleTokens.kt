@@ -1,8 +1,11 @@
 package org.nanokvm.mobile.ui.theme
 
-import androidx.compose.runtime.Immutable
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
@@ -43,6 +46,48 @@ val DarkConsoleColorScheme = ConsoleColorScheme(
 )
 
 val LocalConsoleColorScheme = staticCompositionLocalOf { DarkConsoleColorScheme }
+
+/**
+ * Material components inside the console must resolve against the fixed dark console palette.
+ *
+ * Supplying only a dark container and [LocalConsoleColorScheme] is not enough: buttons, chips,
+ * progress indicators, and disabled states read semantic colours from [MaterialTheme]. In a light
+ * or wallpaper-derived app theme that can put a dark foreground on the console's dark surfaces.
+ */
+internal fun consoleMaterialColorScheme(colors: ConsoleColorScheme): ColorScheme =
+    NanoDarkColorScheme.copy(
+        primary = colors.active,
+        onPrimary = colors.onActive,
+        background = colors.canvas,
+        onBackground = colors.onSurface,
+        surface = colors.controlSurface,
+        onSurface = colors.onSurface,
+        surfaceDim = colors.canvas,
+        surfaceBright = colors.controlSurfaceElevated,
+        surfaceContainerLowest = colors.canvas,
+        surfaceContainerLow = colors.controlSurface,
+        surfaceContainer = colors.controlSurface,
+        surfaceContainerHigh = colors.controlSurfaceElevated,
+        surfaceContainerHighest = colors.controlSurfaceElevated,
+        surfaceVariant = colors.controlSurfaceElevated,
+        onSurfaceVariant = colors.onSurfaceMuted,
+        outline = colors.outline,
+        outlineVariant = colors.outline,
+        inverseSurface = colors.onSurface,
+        inverseOnSurface = colors.canvas,
+        inversePrimary = colors.active,
+        surfaceTint = colors.active,
+        error = colors.critical,
+        onError = colors.canvas,
+        scrim = Color.Black,
+    )
+
+@Composable
+internal fun ConsoleMaterialTheme(content: @Composable () -> Unit) {
+    val consoleColors = LocalConsoleColorScheme.current
+    val materialColors = remember(consoleColors) { consoleMaterialColorScheme(consoleColors) }
+    MaterialTheme(colorScheme = materialColors, content = content)
+}
 
 object NanoKvmConsoleTheme {
     val colors: ConsoleColorScheme

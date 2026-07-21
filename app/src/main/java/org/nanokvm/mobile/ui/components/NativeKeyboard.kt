@@ -62,6 +62,8 @@ fun ConsoleKeyboard(
     input: RemoteInputSink,
     visible: Boolean,
     releaseGeneration: Long,
+    interceptLocalEscape: Boolean,
+    onLocalEscape: () -> Unit,
     layout: KeyboardLayout,
     onLayoutChange: (KeyboardLayout) -> Unit,
     onClose: () -> Unit,
@@ -104,6 +106,8 @@ fun ConsoleKeyboard(
 
     NativeImeHost(
         active = visible,
+        interceptLocalEscape = interceptLocalEscape,
+        onLocalEscape = onLocalEscape,
         onCommittedText = { text ->
             if (text.isNotEmpty()) {
                 input.typeCommittedText(text, layout)
@@ -304,6 +308,8 @@ private fun consoleFilterChipColors() = LocalConsoleColorScheme.current.let { co
 @Composable
 private fun NativeImeHost(
     active: Boolean,
+    interceptLocalEscape: Boolean,
+    onLocalEscape: () -> Unit,
     onCommittedText: (String) -> Unit,
     onKey: (RemoteKey, Boolean) -> Unit,
 ) {
@@ -315,12 +321,16 @@ private fun NativeImeHost(
                 ImeSinkView(context).also {
                     it.onCommittedText = onCommittedText
                     it.onRemoteKey = onKey
+                    it.interceptLocalEscape = interceptLocalEscape
+                    it.onLocalEscape = onLocalEscape
                     sinkView = it
                 }
             },
             update = {
                 it.onCommittedText = onCommittedText
                 it.onRemoteKey = onKey
+                it.interceptLocalEscape = interceptLocalEscape
+                it.onLocalEscape = onLocalEscape
             },
             modifier = Modifier.size(1.dp),
         )
@@ -328,22 +338,13 @@ private fun NativeImeHost(
 
     LaunchedEffect(active, sinkView) {
         val view = sinkView ?: return@LaunchedEffect
-        val inputMethod = view.context.getSystemService(InputMethodManager::class.java)
-        if (active) {
-            view.requestFocus()
-            view.post { inputMethod.showSoftInput(view, 0) }
-        } else {
-            inputMethod.hideSoftInputFromWindow(view.windowToken, 0)
-            view.clearFocus()
-        }
+        view.setImeActive(active)
     }
 
     DisposableEffect(sinkView) {
+        val effectView = sinkView
         onDispose {
-            sinkView?.let { view ->
-                view.context.getSystemService(InputMethodManager::class.java)
-                    .hideSoftInputFromWindow(view.windowToken, 0)
-            }
+            effectView?.setImeActive(false)
         }
     }
 }
@@ -351,11 +352,43 @@ private fun NativeImeHost(
 private class ImeSinkView(context: Context) : View(context) {
     var onCommittedText: (String) -> Unit = {}
     var onRemoteKey: (RemoteKey, Boolean) -> Unit = { _, _ -> }
+    var interceptLocalEscape: Boolean = false
+    var onLocalEscape: () -> Unit = {}
+    private val localEscape = LocalEscapeKeyInterceptor()
+    private val inputMethod by lazy { context.getSystemService(InputMethodManager::class.java) }
+    private var keepImeFocus = false
+    private val restoreIme = Runnable { restoreImeFocus() }
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
         setBackgroundColor(Color.TRANSPARENT)
+        onFocusChangeListener = OnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus && keepImeFocus) scheduleImeRestore()
+        }
+    }
+
+    fun setImeActive(active: Boolean) {
+        keepImeFocus = active
+        removeCallbacks(restoreIme)
+        if (active) {
+            scheduleImeRestore()
+        } else {
+            inputMethod.hideSoftInputFromWindow(windowToken, 0)
+            clearFocus()
+        }
+    }
+
+    private fun scheduleImeRestore() {
+        removeCallbacks(restoreIme)
+        post(restoreIme)
+        postDelayed(restoreIme, 250L)
+    }
+
+    private fun restoreImeFocus() {
+        if (!keepImeFocus || !isAttachedToWindow) return
+        if (!hasFocus()) requestFocus()
+        inputMethod.showSoftInput(this, 0)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -365,14 +398,14 @@ private class ImeSinkView(context: Context) : View(context) {
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
             EditorInfo.IME_FLAG_NO_FULLSCREEN or
-            EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-            EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI
         outAttrs.initialSelStart = 0
         outAttrs.initialSelEnd = 0
         return KvmInputConnection()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
         val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyDown(keyCode, event)
         // The remote host owns key-repeat timing while the HID usage remains pressed. Android's
         // repeated ACTION_DOWN events would only duplicate identical network reports.
@@ -381,6 +414,7 @@ private class ImeSinkView(context: Context) : View(context) {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
         val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyUp(keyCode, event)
         onRemoteKey(key, false)
         return true
@@ -411,6 +445,7 @@ private class ImeSinkView(context: Context) : View(context) {
         }
 
         override fun sendKeyEvent(event: KeyEvent): Boolean {
+            if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
             val key = remoteKeyForAndroidKeyCode(event.keyCode)
                 ?: return super.sendKeyEvent(event)
             when (event.action) {
@@ -425,6 +460,42 @@ private class ImeSinkView(context: Context) : View(context) {
             onRemoteKey(RemoteKey.Enter, true)
             onRemoteKey(RemoteKey.Enter, false)
             return true
+        }
+    }
+}
+
+/** Consumes a complete physical Escape key pair when local UI ownership is enabled. */
+internal class LocalEscapeKeyInterceptor {
+    private var keyUpPending = false
+
+    fun onKeyEvent(
+        event: KeyEvent,
+        enabled: Boolean,
+        onEscape: () -> Unit,
+    ): Boolean = onKeyEvent(event.keyCode, event.action, enabled, onEscape)
+
+    internal fun onKeyEvent(
+        keyCode: Int,
+        action: Int,
+        enabled: Boolean,
+        onEscape: () -> Unit,
+    ): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_ESCAPE) return false
+        return when (action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (!enabled && !keyUpPending) return false
+                if (!keyUpPending) {
+                    keyUpPending = true
+                    onEscape()
+                }
+                true
+            }
+            KeyEvent.ACTION_UP -> {
+                if (!keyUpPending) return false
+                keyUpPending = false
+                true
+            }
+            else -> false
         }
     }
 }

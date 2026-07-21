@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="connecting_to_profile">Connecting to %1$s</string>
+    <string name="connection_cancel_action">Cancel connection</string>
+    <string name="connection_issue_title">Couldn’t connect to %1$s</string>
+    <string name="connection_issue_target">Target: %1$s</string>
+    <string name="connection_issue_retry_action">Retry</string>
+    <string name="connection_issue_use_password_action">Use another password</string>
+    <string name="connection_issue_edit_action">Edit connection</string>
+    <string name="connection_issue_back_action">Back to connections</string>
     <string name="connecting_status">Negotiating authentication and video…</string>
     <string name="local_network_permission_title">Allow local network access?</string>
     <string name="local_network_permission_rationale">NanoKVM needs local network access to connect directly to %1$s. It does not scan your network or send this access to another service.</string>

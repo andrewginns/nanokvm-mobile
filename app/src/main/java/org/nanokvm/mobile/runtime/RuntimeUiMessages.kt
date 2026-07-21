@@ -98,6 +98,7 @@ sealed interface ConsoleMessage {
         val failure: ConnectionFailure,
     ) : Status
 
+    data object ReconnectCancelled : Status
     data class ConnectionFailed(val failure: ConnectionFailure) : Status
     data class CommandFailed(val failure: ConnectionFailure) : ActionFeedback
     data object TypingApprovedClipboardText : ActionFeedback
@@ -119,6 +120,7 @@ sealed interface ConsoleMessage {
     data object HidInterfaceReset : ActionFeedback
     data object CtrlAltDeleteSent : ActionFeedback
     data object HostControlSent : ActionFeedback
+    data object HostControlSessionChanged : ActionFeedback
     data class ConnectingVideo(val transport: VideoTransportDescriptor) : Status
     data class VideoFallback(
         val from: VideoTransportDescriptor,

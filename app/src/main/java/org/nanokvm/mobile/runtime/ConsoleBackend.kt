@@ -34,11 +34,14 @@ interface VideoSurfaceSink {
 /** Low-rate controls that are intrinsic to every connected console. */
 interface ConsoleCoreControls {
     fun reconnect()
+    /** Stops only the currently active automatic/manual reconnect run. */
+    fun cancelReconnect()
     fun updateVideo(settings: VideoSettings)
     /** Explicit, replay-free write for the app-local MJPEG frame-detection preference. */
     fun setMjpegFrameDetectionEnabled(enabled: Boolean)
     fun resetHid()
-    fun power(action: PowerAction)
+    /** Dispatches a one-shot host control only to the exact destination the user approved. */
+    fun power(destination: ApprovedCoreDestination, action: PowerAction)
     /** Types destination-bound, explicitly approved phone text through HID. */
     fun pasteText(request: ApprovedPasteRequest)
     /** Cancels an in-progress paced clipboard operation after its current atomic key pair. */
@@ -260,6 +263,28 @@ class ConsoleFeatureBundle internal constructor(
     internal val offlineUpdate: NanoKvmOfflineUpdateFeatureOwner? = null,
     internal val passwordChange: NanoKvmPasswordChangeFeatureOwner? = null,
 )
+
+/** Exact authenticated destination shown in the final core host-control confirmation. */
+data class ApprovedCoreDestination(
+    val profileId: String,
+    val authority: String,
+    val sessionGeneration: Long,
+) {
+    init {
+        require(profileId.isNotBlank()) { "Profile ID must not be blank" }
+        require(authority.isNotBlank()) { "Destination authority must not be blank" }
+        require(sessionGeneration >= 0L) { "Session generation must not be negative" }
+    }
+
+    override fun toString(): String =
+        "ApprovedCoreDestination(profileId=<redacted>, authority=<redacted>, " +
+            "sessionGeneration=$sessionGeneration)"
+}
+
+internal fun ApprovedCoreDestination.matches(binding: NanoKvmSessionBinding): Boolean =
+    profileId == binding.profileId &&
+        authority == binding.authority &&
+        sessionGeneration == binding.sessionGeneration
 
 data class ApprovedPicoClawDestination(
     val profileId: String,
@@ -1156,7 +1181,12 @@ data class RemotePasteProgress(
 
 enum class RemotePastePhase { Typing, Cancelling }
 
-enum class ConnectionState { Disconnected, Connecting, Connected, Reconnecting, Failed }
+enum class ConnectionState { Disconnected, Connecting, Connected, Degraded, Reconnecting, Failed }
+
+/** True while authenticated input/control remains available, including real video fallback. */
+val ConnectionState.isSessionUsable: Boolean
+    get() = this == ConnectionState.Connected || this == ConnectionState.Degraded
+
 enum class MouseButton { Left, Right, Middle, Back, Forward }
 enum class KeyboardLayout { Us, Uk }
 

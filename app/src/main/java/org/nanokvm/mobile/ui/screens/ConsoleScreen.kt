@@ -5,11 +5,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -48,12 +51,14 @@ import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,19 +90,25 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_MEDIUM_LOWER_BOUND
@@ -117,11 +128,13 @@ import org.nanokvm.mobile.data.MIN_SCROLL_SENSITIVITY
 import org.nanokvm.mobile.data.normalizeScrollSensitivity
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ApprovedOperatorDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.ApprovedPhase3Destination
 import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
 import org.nanokvm.mobile.runtime.ConnectionState
+import org.nanokvm.mobile.runtime.isSessionUsable
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
@@ -140,10 +153,15 @@ import org.nanokvm.mobile.runtime.VideoTransportPreference
 import org.nanokvm.mobile.ui.displayText
 import org.nanokvm.mobile.ui.components.ConsoleKeyboard
 import org.nanokvm.mobile.ui.components.ImmersiveModeEffect
+import org.nanokvm.mobile.ui.components.LocalEscapeKeyInterceptor
 import org.nanokvm.mobile.ui.components.PointerMode
 import org.nanokvm.mobile.ui.components.RemoteViewport
 import org.nanokvm.mobile.ui.components.ViewportAction
 import org.nanokvm.mobile.ui.components.ViewportCommand
+import org.nanokvm.mobile.ui.input.PointerCaptureController
+import org.nanokvm.mobile.ui.input.PointerCaptureReleaseReason
+import org.nanokvm.mobile.ui.input.PointerCaptureState
+import org.nanokvm.mobile.ui.theme.ConsoleMaterialTheme
 import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
 import org.nanokvm.protocol.NanoKvmCapability
 import org.nanokvm.protocol.NanoKvmCapabilitySupport
@@ -167,6 +185,17 @@ private sealed interface ConsoleOverlay {
 private val consoleOverlaySaver = Saver<ConsoleOverlay, Int>(
     save = { overlay -> overlay.saveableCode },
     restore = { code -> code.toConsoleOverlay() },
+)
+
+private val pointerModeSaver = Saver<PointerMode, String>(
+    save = { mode ->
+        if (mode == PointerMode.Captured) PointerMode.Trackpad.name else mode.name
+    },
+    restore = { saved ->
+        PointerMode.entries.firstOrNull { it.name == saved }
+            ?.takeUnless { it == PointerMode.Captured }
+            ?: PointerMode.Direct
+    },
 )
 
 private val ConsoleOverlay.saveableCode: Int
@@ -223,6 +252,7 @@ internal fun ConsoleScreen(
     videoSurface: VideoSurfaceSink,
     features: ConsoleFeatureBundle,
     onDisconnect: () -> Unit,
+    onReauthenticate: () -> Unit = onDisconnect,
     sessionDraftOwner: ConsoleSessionDraftOwner,
     clipboardGateway: ClipboardGateway,
     pendingSharedPaste: ClipboardPayload? = null,
@@ -252,7 +282,11 @@ internal fun ConsoleScreen(
     val picoClawState = picoClawControls?.picoClawState?.collectAsStateWithLifecycle()
     val automationOwner = features.automation
     val offlineUpdateOwner = features.offlineUpdate
-    var pointerMode by rememberSaveable { mutableStateOf(PointerMode.Direct) }
+    var pointerMode by rememberSaveable(stateSaver = pointerModeSaver) {
+        mutableStateOf(PointerMode.Direct)
+    }
+    val pointerCaptureController = remember { PointerCaptureController() }
+    val pointerCaptureState = pointerCaptureController.state
     var keyboardVisible by rememberSaveable { mutableStateOf(false) }
     var keyboardLayout by rememberSaveable { mutableStateOf(KeyboardLayout.Us) }
     var viewNavigationVisible by rememberSaveable { mutableStateOf(true) }
@@ -326,6 +360,9 @@ internal fun ConsoleScreen(
         Unit
     }
     var immersiveMode by rememberSaveable { mutableStateOf(false) }
+    var immersiveEscapeInProgress by remember { mutableStateOf(false) }
+    val consoleFocusRequester = remember { FocusRequester() }
+    val immersiveEscape = remember { LocalEscapeKeyInterceptor() }
     var pendingPhase3Action by remember { mutableStateOf<PendingPhase3Action?>(null) }
     var pasteRequest by remember { mutableStateOf<PendingClipboardPaste?>(null) }
     var pasteError by remember { mutableStateOf<String?>(null) }
@@ -336,7 +373,8 @@ internal fun ConsoleScreen(
     // A destructive confirmation is deliberately ephemeral. It must not be restored into a new
     // Activity instance or survive a connection-generation transition where its destination could
     // otherwise silently change underneath the dialog.
-    var pendingPowerAction by remember { mutableStateOf<PowerAction?>(null) }
+    var pendingPowerAction by remember { mutableStateOf<PendingPowerAction?>(null) }
+    var disconnectConfirmationVisible by remember { mutableStateOf(false) }
     val pasteUnavailableMessage = stringResource(R.string.console_clipboard_unavailable)
     val pasteEmptyMessage = stringResource(R.string.console_clipboard_empty)
     val pasteRejectedMessage = stringResource(R.string.console_clipboard_rejected)
@@ -350,6 +388,11 @@ internal fun ConsoleScreen(
         sessionGeneration = session.sessionGeneration,
     )
     val currentPhase3Destination = ApprovedPhase3Destination(
+        profileId = profile.id,
+        authority = profile.authority,
+        sessionGeneration = session.sessionGeneration,
+    )
+    val currentCoreDestination = ApprovedCoreDestination(
         profileId = profile.id,
         authority = profile.authority,
         sessionGeneration = session.sessionGeneration,
@@ -437,7 +480,18 @@ internal fun ConsoleScreen(
     ) {
         pendingPhase3Action = null
         pendingPowerAction = null
-        if (session.connection != ConnectionState.Connected) {
+        disconnectConfirmationVisible = false
+        if (!session.connection.isSessionUsable) {
+            if (
+                pointerMode == PointerMode.Captured ||
+                pointerCaptureController.state != PointerCaptureState.Idle
+            ) {
+                // The capture host owns the one neutral remote-input release for this lifecycle.
+                pointerCaptureController.release(PointerCaptureReleaseReason.SessionChanged)
+            } else {
+                input.releaseAllInput()
+            }
+            if (pointerMode == PointerMode.Captured) pointerMode = PointerMode.Trackpad
             if (
                 session.connection == ConnectionState.Failed ||
                 (!offlineDocumentPending && offlinePickerTarget == null)
@@ -461,7 +515,7 @@ internal fun ConsoleScreen(
     ) {
         if (
             offlineUpdateSurfaceVisible && offlineDocumentPending &&
-            session.connection == ConnectionState.Connected && offlineUpdateGateway != null
+            session.connection.isSessionUsable && offlineUpdateGateway != null
         ) {
             if (offlineDocumentHandoff.deliverTo(offlineUpdateGateway)) {
                 offlineDocumentPending = false
@@ -469,7 +523,7 @@ internal fun ConsoleScreen(
         }
     }
     val requestClipboardPaste = {
-        if (session.connection != ConnectionState.Connected) {
+        if (!session.connection.isSessionUsable) {
             pasteError = pasteDisconnectedMessage
         } else {
             when (val result = clipboardGateway.readDirectPlainText()) {
@@ -495,7 +549,7 @@ internal fun ConsoleScreen(
     LaunchedEffect(session.connection, session.sessionGeneration, profile.id) {
         val request = pasteRequest ?: return@LaunchedEffect
         if (
-            session.connection != ConnectionState.Connected ||
+            !session.connection.isSessionUsable ||
             !request.confirmation.remainsBoundTo(currentPasteTarget)
         ) {
             pasteRequest = null
@@ -517,6 +571,25 @@ internal fun ConsoleScreen(
             observedSensitiveWorkGeneration = sensitiveWorkGeneration
         }
     }
+    LaunchedEffect(pointerCaptureState) {
+        if (
+            pointerMode == PointerMode.Captured &&
+            pointerCaptureState == PointerCaptureState.Idle &&
+            pointerCaptureController.lastReleaseReason != null
+        ) {
+            pointerMode = PointerMode.Trackpad
+        }
+    }
+    LaunchedEffect(immersiveMode, keyboardVisible, pointerCaptureState) {
+        if (
+            immersiveMode &&
+            !keyboardVisible &&
+            pointerCaptureState != PointerCaptureState.Active &&
+            pointerCaptureState != PointerCaptureState.Requesting
+        ) {
+            consoleFocusRequester.requestFocus()
+        }
+    }
     LaunchedEffect(
         pendingSharedPaste,
         session.connection,
@@ -525,7 +598,7 @@ internal fun ConsoleScreen(
         pasteRequest,
     ) {
         val sharedPayload = pendingSharedPaste ?: return@LaunchedEffect
-        if (session.connection == ConnectionState.Connected && pasteRequest == null) {
+        if (session.connection.isSessionUsable && pasteRequest == null) {
             revealSensitivePaste = false
             pasteRequest = PendingClipboardPaste(
                 confirmation = PasteConfirmationRequest(sharedPayload, currentPasteTarget),
@@ -534,20 +607,35 @@ internal fun ConsoleScreen(
             onSharedPasteConsumed(sharedPayload)
         }
     }
-    val togglePointerMode = {
-        input.releaseAllInput()
-        pointerMode = if (pointerMode == PointerMode.Direct) {
+    val selectPointerMode: (PointerMode) -> Unit = select@{ selected ->
+        if (pointerMode == selected) return@select
+        if (selected == PointerMode.Captured && !session.connection.isSessionUsable) {
+            return@select
+        }
+        if (pointerMode == PointerMode.Captured) {
+            pointerCaptureController.release(PointerCaptureReleaseReason.PointerModeChanged)
+        } else {
+            input.releaseAllInput()
+        }
+        if (selected == PointerMode.Trackpad || selected == PointerMode.Captured) {
             // A neutral relative report also switches the backend away from its last absolute point.
             input.moveRelative(0, 0)
-            PointerMode.Trackpad
-        } else {
-            PointerMode.Direct
+        }
+        pointerMode = selected
+        if (selected == PointerMode.Captured) {
+            controlsExpanded = false
+            keyboardVisible = false
+            pointerCaptureController.request()
         }
     }
     val toggleKeyboard = {
         val showing = !keyboardVisible
         keyboardVisible = showing
         if (showing) {
+            if (pointerMode == PointerMode.Captured) {
+                pointerCaptureController.release(PointerCaptureReleaseReason.KeyboardOpened)
+                pointerMode = PointerMode.Trackpad
+            }
             controlsExpanded = false
         } else {
             input.releaseAllInput()
@@ -562,15 +650,75 @@ internal fun ConsoleScreen(
         viewportCommandSequence++
         viewportCommand = ViewportCommand(viewportCommandSequence, action)
     }
-    BackHandler(enabled = controlsExpanded) { controlsExpanded = false }
-    BackHandler(enabled = immersiveMode && !controlsExpanded) { immersiveMode = false }
+    val requestPowerAction: (PowerAction) -> Unit = request@{ action ->
+        if (!session.connection.isSessionUsable) return@request
+        pendingPowerAction = PendingPowerAction(
+            action = action,
+            destination = currentCoreDestination,
+            destinationName = profile.name.ifBlank { profile.authority },
+        )
+    }
+    val requestDisconnect = {
+        if (
+            pointerMode == PointerMode.Captured ||
+            pointerCaptureController.state != PointerCaptureState.Idle
+        ) {
+            pointerCaptureController.release(PointerCaptureReleaseReason.User)
+            pointerMode = PointerMode.Trackpad
+        } else {
+            input.releaseAllInput()
+        }
+        disconnectConfirmationVisible = true
+    }
+    BackHandler {
+        when {
+            pointerMode == PointerMode.Captured ||
+                pointerCaptureState != PointerCaptureState.Idle -> {
+                pointerCaptureController.release(PointerCaptureReleaseReason.Back)
+                pointerMode = PointerMode.Trackpad
+            }
+            controlsExpanded -> controlsExpanded = false
+            keyboardVisible -> {
+                keyboardVisible = false
+                input.releaseAllInput()
+            }
+            immersiveMode -> immersiveMode = false
+            else -> requestDisconnect()
+        }
+    }
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .imePadding(),
-    ) {
+    ConsoleMaterialTheme {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    val handled = immersiveEscape.onKeyEvent(
+                        event = event.nativeKeyEvent,
+                        enabled = immersiveMode,
+                        onEscape = { immersiveMode = false },
+                    )
+                    if (
+                        handled &&
+                        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE
+                    ) {
+                        immersiveEscapeInProgress = when (event.nativeKeyEvent.action) {
+                            android.view.KeyEvent.ACTION_DOWN -> true
+                            android.view.KeyEvent.ACTION_UP -> false
+                            else -> immersiveEscapeInProgress
+                        }
+                    }
+                    handled
+                }
+                .then(
+                    if ((immersiveMode || immersiveEscapeInProgress) && !keyboardVisible) {
+                        Modifier.focusRequester(consoleFocusRequester).focusable()
+                    } else {
+                        Modifier
+                    },
+                )
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .imePadding(),
+        ) {
         val availableWidth = maxWidth
         val availableHeight = maxHeight
         val windowSizeClass = windowAdaptiveInfo.windowSizeClass
@@ -586,16 +734,23 @@ internal fun ConsoleScreen(
             heightDp = availableHeight.value,
         )
         val consoleContentState = ConsoleContentState(
+            destinationName = profile.name.ifBlank { profile.authority },
+            authority = profile.authority,
             session = session,
             input = input,
             videoSurface = videoSurface,
             pointerMode = pointerMode,
+            pointerCaptureController = pointerCaptureController,
             fitRequest = fitRequest,
             scrollSensitivity = scrollSensitivity,
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
             viewNavigationVisible = viewNavigationVisible,
+            showQuickActionLabels =
+                availableWidth.value >= WIDTH_DP_MEDIUM_LOWER_BOUND.toFloat(),
             viewportCommand = viewportCommand,
+            immersiveMode = immersiveMode,
+            onExitImmersive = { immersiveMode = false },
             onKeyboard = toggleKeyboard,
             onKeyboardLayoutChange = { keyboardLayout = it },
             onClipboard = {
@@ -611,7 +766,20 @@ internal fun ConsoleScreen(
                 input.releaseAllInput()
             },
             onViewportAction = requestViewportAction,
-            onCtrlAltDelete = { pendingPowerAction = PowerAction.CtrlAltDelete },
+            onCtrlAltDelete = { requestPowerAction(PowerAction.CtrlAltDelete) },
+            onRetryConnection = {
+                input.releaseAllInput()
+                if (session.status == org.nanokvm.mobile.runtime.ConsoleMessage.AuthenticationExpired) {
+                    onReauthenticate()
+                } else {
+                    coreControls.reconnect()
+                }
+            },
+            onStopReconnect = {
+                input.releaseAllInput()
+                coreControls.cancelReconnect()
+            },
+            onDisconnect = requestDisconnect,
         )
         val controlsContent: @Composable (Modifier) -> Unit = { controlsModifier ->
             ConsoleControlContent(
@@ -631,11 +799,15 @@ internal fun ConsoleScreen(
                         requestClipboardPaste()
                     }
                 },
-                onPointerMode = togglePointerMode,
+                onPointerMode = selectPointerMode,
                 onViewNavigation = toggleViewNavigation,
                 onMouseClick = { button -> input.sendOneShotMouseClick(button) },
                 onFit = {
                     fitRequest++
+                    controlsExpanded = false
+                },
+                onActualSize = {
+                    requestViewportAction(ViewportAction.ActualSize)
                     controlsExpanded = false
                 },
                 onScrollSettings = {
@@ -692,6 +864,21 @@ internal fun ConsoleScreen(
                         ),
                 ) {
                     ConsoleMainContent(consoleContentState)
+                    if (pointerCaptureState != PointerCaptureState.Idle) {
+                        PointerCaptureStatus(
+                            state = pointerCaptureState,
+                            onRetry = pointerCaptureController::request,
+                            onRelease = {
+                                pointerCaptureController.release(
+                                    PointerCaptureReleaseReason.User,
+                                )
+                                pointerMode = PointerMode.Trackpad
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp)
+                        )
+                    }
                     if (picoClawState?.value?.manualInputBlockedOrUncertain == true) {
                         Surface(
                             modifier = Modifier
@@ -749,15 +936,16 @@ internal fun ConsoleScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
-            ConsoleControlBottomSheet(
-                onDismiss = { controlsExpanded = false },
-            ) {
-                controlsContent(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION),
-                )
+            if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
+                ConsoleControlBottomSheet(
+                    onDismiss = { controlsExpanded = false },
+                ) {
+                    controlsContent(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION),
+                    )
+                }
             }
         }
     }
@@ -765,6 +953,7 @@ internal fun ConsoleScreen(
     if (overlay == ConsoleOverlay.VideoSettings) {
         VideoSettingsDialog(
             initial = session.videoSettings,
+            appliedTransport = session.streamLabel.displayText(),
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
             onDismiss = { overlay = ConsoleOverlay.None },
             onApply = { settings, frameDetectionEnabled ->
@@ -791,16 +980,16 @@ internal fun ConsoleScreen(
             onDismiss = { overlay = ConsoleOverlay.None },
             onChoose = {
                 overlay = ConsoleOverlay.None
-                pendingPowerAction = it
+                requestPowerAction(it)
             },
         )
     }
-    pendingPowerAction?.let { action ->
+    pendingPowerAction?.let { request ->
         ConfirmPowerDialog(
-            action = action,
+            request = request,
             onDismiss = { pendingPowerAction = null },
             onConfirm = {
-                coreControls.power(action)
+                coreControls.power(request.destination, request.action)
                 pendingPowerAction = null
             },
         )
@@ -852,6 +1041,17 @@ internal fun ConsoleScreen(
             },
             onDisconnect = {
                 overlay = ConsoleOverlay.None
+                requestDisconnect()
+            },
+        )
+    }
+    if (disconnectConfirmationVisible) {
+        DisconnectConfirmationDialog(
+            destinationName = profile.name.ifBlank { profile.authority },
+            authority = profile.authority,
+            onDismiss = { disconnectConfirmationVisible = false },
+            onConfirm = {
+                disconnectConfirmationVisible = false
                 onDisconnect()
             },
         )
@@ -1063,7 +1263,7 @@ internal fun ConsoleScreen(
                 revealSensitivePaste = false
             },
             onConfirm = {
-                val stillConnected = session.connection == ConnectionState.Connected
+                val stillConnected = session.connection.isSessionUsable
                 val confirmation = request.confirmation
                 val stillBound = confirmation.remainsBoundTo(currentPasteTarget)
                 if (stillConnected && stillBound) {
@@ -1173,17 +1373,29 @@ private data class PendingClipboardPaste(
     val keyboardLayout: KeyboardLayout,
 )
 
+private data class PendingPowerAction(
+    val action: PowerAction,
+    val destination: ApprovedCoreDestination,
+    val destinationName: String,
+)
+
 private data class ConsoleContentState(
+    val destinationName: String,
+    val authority: String,
     val session: BackendSession,
     val input: RemoteInputSink,
     val videoSurface: VideoSurfaceSink,
     val pointerMode: PointerMode,
+    val pointerCaptureController: PointerCaptureController,
     val fitRequest: Int,
     val scrollSensitivity: Float,
     val keyboardVisible: Boolean,
     val keyboardLayout: KeyboardLayout,
     val viewNavigationVisible: Boolean,
+    val showQuickActionLabels: Boolean,
     val viewportCommand: ViewportCommand?,
+    val immersiveMode: Boolean,
+    val onExitImmersive: () -> Unit,
     val onKeyboard: () -> Unit,
     val onKeyboardLayoutChange: (KeyboardLayout) -> Unit,
     val onClipboard: () -> Unit,
@@ -1191,6 +1403,9 @@ private data class ConsoleContentState(
     val onHideKeyboard: () -> Unit,
     val onViewportAction: (ViewportAction) -> Unit,
     val onCtrlAltDelete: () -> Unit,
+    val onRetryConnection: () -> Unit,
+    val onStopReconnect: () -> Unit,
+    val onDisconnect: () -> Unit,
 )
 
 @Composable
@@ -1198,16 +1413,22 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
     Box(Modifier.fillMaxSize()) {
         ConsoleBody(
             modifier = Modifier.fillMaxSize(),
+            destinationName = state.destinationName,
+            authority = state.authority,
             session = state.session,
             input = state.input,
             videoSurface = state.videoSurface,
             pointerMode = state.pointerMode,
+            pointerCaptureController = state.pointerCaptureController,
             fitRequest = state.fitRequest,
             scrollSensitivity = state.scrollSensitivity,
             keyboardVisible = state.keyboardVisible,
             keyboardLayout = state.keyboardLayout,
             viewNavigationVisible = state.viewNavigationVisible,
+            showQuickActionLabels = state.showQuickActionLabels,
             viewportCommand = state.viewportCommand,
+            immersiveMode = state.immersiveMode,
+            onExitImmersive = state.onExitImmersive,
             onKeyboard = state.onKeyboard,
             onKeyboardLayoutChange = state.onKeyboardLayoutChange,
             onClipboard = state.onClipboard,
@@ -1215,11 +1436,15 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             onHideKeyboard = state.onHideKeyboard,
             onViewportAction = state.onViewportAction,
             onCtrlAltDelete = state.onCtrlAltDelete,
+            onRetryConnection = state.onRetryConnection,
+            onStopReconnect = state.onStopReconnect,
+            onDisconnect = state.onDisconnect,
         )
         if (!state.viewNavigationVisible) {
             ConsoleQuickActions(
                 session = state.session,
                 keyboardVisible = state.keyboardVisible,
+                showLabels = state.showQuickActionLabels,
                 onKeyboard = state.onKeyboard,
                 onClipboard = state.onClipboard,
                 onOpenControls = state.onOpenControls,
@@ -1232,16 +1457,22 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
 @Composable
 private fun ConsoleBody(
     modifier: Modifier,
+    destinationName: String,
+    authority: String,
     session: BackendSession,
     input: RemoteInputSink,
     videoSurface: VideoSurfaceSink,
     pointerMode: PointerMode,
+    pointerCaptureController: PointerCaptureController,
     fitRequest: Int,
     scrollSensitivity: Float,
     keyboardVisible: Boolean,
     keyboardLayout: KeyboardLayout,
     viewNavigationVisible: Boolean,
+    showQuickActionLabels: Boolean,
     viewportCommand: ViewportCommand?,
+    immersiveMode: Boolean,
+    onExitImmersive: () -> Unit,
     onKeyboard: () -> Unit,
     onKeyboardLayoutChange: (KeyboardLayout) -> Unit,
     onClipboard: () -> Unit,
@@ -1249,6 +1480,9 @@ private fun ConsoleBody(
     onHideKeyboard: () -> Unit,
     onViewportAction: (ViewportAction) -> Unit,
     onCtrlAltDelete: () -> Unit,
+    onRetryConnection: () -> Unit,
+    onStopReconnect: () -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     Column(modifier) {
@@ -1261,6 +1495,7 @@ private fun ConsoleBody(
                 inputGeneration = session.sessionGeneration,
                 videoSurfaceGeneration = session.videoSurfaceGeneration,
                 pointerMode = pointerMode,
+                pointerCaptureController = pointerCaptureController,
                 fitRequest = fitRequest,
                 scrollSensitivity = scrollSensitivity,
                 viewNavigationVisible = viewNavigationVisible,
@@ -1270,6 +1505,7 @@ private fun ConsoleBody(
                     ConsoleQuickActions(
                         session = session,
                         keyboardVisible = keyboardVisible,
+                        showLabels = showQuickActionLabels,
                         onKeyboard = onKeyboard,
                         onClipboard = onClipboard,
                         onOpenControls = onOpenControls,
@@ -1277,7 +1513,7 @@ private fun ConsoleBody(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
-            if (session.connection != ConnectionState.Connected) {
+            if (!session.connection.isSessionUsable) {
                 Card(
                     modifier = Modifier
                         .align(Alignment.Center)
@@ -1292,16 +1528,120 @@ private fun ConsoleBody(
                     Column(
                         modifier = Modifier.padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Text(connectionLabel(session.connection), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(
+                                R.string.console_confirm_host_target,
+                                destinationName,
+                                authority,
+                            ),
+                            color = consoleColors.onSurfaceMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         Text(
                             session.status?.displayText()
                                 ?: stringResource(R.string.console_waiting_for_video),
                             color = consoleColors.onSurfaceMuted,
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        if (
+                            session.connection == ConnectionState.Reconnecting &&
+                            session.reconnectAttempt != null &&
+                            session.reconnectMaximumAttempts != null
+                        ) {
+                            Text(
+                                stringResource(
+                                    R.string.console_reconnect_progress,
+                                    session.reconnectAttempt,
+                                    session.reconnectMaximumAttempts,
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            session.nextReconnectDelayMillis?.let { delayMillis ->
+                                val seconds = ((delayMillis + 999L) / 1_000L)
+                                    .coerceAtLeast(1L)
+                                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                                    .toInt()
+                                Text(
+                                    stringResource(
+                                        R.string.console_reconnect_delay,
+                                        pluralStringResource(
+                                            R.plurals.console_message_reconnect_delay,
+                                            seconds,
+                                            seconds,
+                                        ),
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            when (session.connection) {
+                                ConnectionState.Reconnecting -> OutlinedButton(
+                                    onClick = onStopReconnect,
+                                    modifier = Modifier.testTag("stop-reconnect-action"),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = consoleColors.onSurface,
+                                    ),
+                                ) {
+                                    Text(stringResource(R.string.console_stop_reconnecting))
+                                }
+                                ConnectionState.Failed,
+                                ConnectionState.Disconnected,
+                                -> OutlinedButton(
+                                    onClick = onRetryConnection,
+                                    modifier = Modifier.testTag("retry-connection-action"),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = consoleColors.onSurface,
+                                    ),
+                                ) {
+                                    Text(stringResource(R.string.console_retry))
+                                }
+                                ConnectionState.Connecting,
+                                ConnectionState.Connected,
+                                ConnectionState.Degraded,
+                                -> Unit
+                            }
+                            Button(
+                                onClick = onDisconnect,
+                                modifier = Modifier.testTag("transient-disconnect-action"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = consoleColors.active,
+                                    contentColor = consoleColors.onActive,
+                                ),
+                            ) {
+                                Text(stringResource(R.string.console_disconnect))
+                            }
+                        }
                     }
+                }
+            }
+            if (session.connection == ConnectionState.Degraded) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(8.dp)
+                        .testTag("console-degraded-status")
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                    color = consoleColors.controlSurfaceElevated,
+                    contentColor = consoleColors.warning,
+                    shape = MaterialTheme.shapes.large,
+                    shadowElevation = 4.dp,
+                ) {
+                    Text(
+                        listOfNotNull(
+                            connectionLabel(ConnectionState.Degraded),
+                            session.streamLabel.displayText(),
+                            session.status?.displayText(),
+                        ).joinToString(stringResource(R.string.console_status_separator)),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
                 }
             }
         }
@@ -1309,6 +1649,8 @@ private fun ConsoleBody(
             input = input,
             visible = keyboardVisible,
             releaseGeneration = session.inputReleaseGeneration,
+            interceptLocalEscape = immersiveMode,
+            onLocalEscape = onExitImmersive,
             layout = keyboardLayout,
             onLayoutChange = onKeyboardLayoutChange,
             onClose = onHideKeyboard,
@@ -1323,6 +1665,7 @@ private fun ConsoleBody(
 private fun ConsoleQuickActions(
     session: BackendSession,
     keyboardVisible: Boolean,
+    showLabels: Boolean,
     onKeyboard: () -> Unit,
     onClipboard: () -> Unit,
     onOpenControls: () -> Unit,
@@ -1350,120 +1693,202 @@ private fun ConsoleQuickActions(
         )
     }
     val openControlsDescription = stringResource(R.string.console_open_controls)
+    val keyboardLabel = stringResource(R.string.console_quick_keyboard)
+    val clipboardLabel = stringResource(
+        if (pasteProgress == null) R.string.console_quick_clipboard else R.string.console_quick_stop,
+    )
+    val controlsLabel = stringResource(R.string.console_quick_controls)
     val sessionSummary = sessionStatusSummary(session)
     val connectionStatus = connectionLabel(session.connection)
     val statusDescription = listOf(connectionStatus, sessionSummary)
         .filter(String::isNotBlank)
         .joinToString(stringResource(R.string.console_status_separator))
-    Row(
-        modifier = modifier.testTag("console-quick-actions"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(
+    val useLargeTextLayout = LocalDensity.current.fontScale >= LARGE_TEXT_LAYOUT_FONT_SCALE
+    val actionItems: @Composable () -> Unit = {
+        ConsoleQuickAction(
+            icon = Icons.Default.Keyboard,
+            visibleLabel = keyboardLabel.takeIf { showLabels },
+            actionDescription = keyboardActionDescription,
+            state = keyboardStateDescription,
+            selected = keyboardVisible,
             onClick = onKeyboard,
-            modifier = Modifier
-                .size(48.dp)
-                .semantics {
-                    contentDescription = keyboardActionDescription
-                    stateDescription = keyboardStateDescription
-                },
-        ) {
-            Surface(
-                modifier = Modifier.size(38.dp),
-                shape = MaterialTheme.shapes.extraLarge,
-                color = consoleColors.controlSurfaceElevated.copy(alpha = 0.96f),
-                contentColor = consoleColors.onSurface,
-                tonalElevation = 0.dp,
-                shadowElevation = 4.dp,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Keyboard,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = if (keyboardVisible) consoleColors.active else consoleColors.onSurface,
-                    )
-                }
-            }
-        }
-        IconButton(
+            tag = "console-keyboard-action",
+        )
+        ConsoleQuickAction(
+            icon = if (pasteProgress == null) {
+                Icons.Default.ContentPaste
+            } else {
+                Icons.Default.Close
+            },
+            visibleLabel = clipboardLabel.takeIf { showLabels },
+            actionDescription = clipboardActionDescription,
+            enabled = pasteProgress != null || session.connection.isSessionUsable,
+            selected = pasteProgress != null,
             onClick = onClipboard,
-            enabled = pasteProgress != null || session.connection == ConnectionState.Connected,
-            modifier = Modifier
-                .size(48.dp)
-                .semantics { contentDescription = clipboardActionDescription }
-                .testTag("console-clipboard-action"),
-        ) {
-            Surface(
-                modifier = Modifier.size(38.dp),
-                shape = MaterialTheme.shapes.extraLarge,
-                color = consoleColors.controlSurfaceElevated.copy(alpha = 0.96f),
-                contentColor = consoleColors.onSurface,
-                tonalElevation = 0.dp,
-                shadowElevation = 4.dp,
+            tag = "console-clipboard-action",
+        )
+        ConsoleQuickAction(
+            icon = Icons.Default.Settings,
+            visibleLabel = controlsLabel.takeIf { showLabels },
+            actionDescription = openControlsDescription,
+            state = statusDescription,
+            onClick = onOpenControls,
+            tag = "console-controls-action",
+            statusIcon = sessionStatusIcon(session.connection),
+            statusColor = sessionStatusColor(session),
+        )
+    }
+    if (!showLabels) {
+        Box(modifier.testTag("console-quick-actions")) {
+            Row(
+                modifier = Modifier.testTag("console-quick-actions-icons"),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        if (pasteProgress == null) Icons.Default.ContentPaste else Icons.Default.Close,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = if (pasteProgress == null) consoleColors.onSurface else consoleColors.active,
-                    )
-                }
+                actionItems()
             }
         }
-        Box(
-            modifier = Modifier.size(48.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            IconButton(
-                onClick = onOpenControls,
+        return
+    }
+    Surface(
+        modifier = modifier.testTag("console-quick-actions"),
+        shape = MaterialTheme.shapes.large,
+        color = consoleColors.controlSurfaceElevated,
+        contentColor = consoleColors.onSurface,
+        tonalElevation = 0.dp,
+        shadowElevation = 4.dp,
+    ) {
+        if (useLargeTextLayout) {
+            Column(
                 modifier = Modifier
-                    .size(48.dp)
-                    .semantics {
-                        contentDescription = openControlsDescription
-                        stateDescription = statusDescription
-                    },
+                    .padding(4.dp)
+                    .testTag("console-quick-actions-labelled"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = MaterialTheme.shapes.extraLarge,
-                    color = consoleColors.controlSurfaceElevated.copy(alpha = 0.96f),
-                    contentColor = consoleColors.onSurface,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 4.dp,
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
+                actionItems()
             }
-            Surface(
+        } else {
+            Row(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 1.dp, end = 1.dp)
-                    .size(18.dp)
-                    .semantics { contentDescription = connectionStatus }
-                    .testTag("console-quick-connection-status"),
-                shape = MaterialTheme.shapes.extraLarge,
-                color = consoleColors.controlSurfaceElevated,
-                contentColor = sessionStatusColor(session),
+                    .padding(4.dp)
+                    .testTag("console-quick-actions-labelled"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = sessionStatusIcon(session.connection),
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                    )
-                }
+                actionItems()
             }
         }
     }
 }
+
+@Composable
+private fun ConsoleQuickAction(
+    icon: ImageVector,
+    visibleLabel: String?,
+    actionDescription: String,
+    onClick: () -> Unit,
+    tag: String,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    state: String? = null,
+    statusIcon: ImageVector? = null,
+    statusColor: Color = Color.Unspecified,
+) {
+    val consoleColors = LocalConsoleColorScheme.current
+    val actionModifier = Modifier
+        .semantics(mergeDescendants = true) {
+            contentDescription = actionDescription
+            state?.let { stateDescription = it }
+        }
+        .testTag(tag)
+    if (visibleLabel == null) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = actionModifier.size(48.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(38.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                color = consoleColors.controlSurfaceElevated.copy(alpha = 0.96f),
+                contentColor = when {
+                    !enabled -> consoleColors.onSurfaceMuted
+                    selected -> consoleColors.active
+                    else -> consoleColors.onSurface
+                },
+                tonalElevation = 0.dp,
+                shadowElevation = 4.dp,
+            ) {
+                ConsoleQuickActionIcon(
+                    icon = icon,
+                    statusIcon = statusIcon,
+                    statusColor = statusColor,
+                    statusIconInset = 4.dp,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        return
+    }
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) consoleColors.active else consoleColors.onSurface,
+            disabledContentColor = consoleColors.onSurfaceMuted,
+        ),
+        modifier = actionModifier
+            .widthIn(min = 84.dp)
+            .heightIn(min = 56.dp),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            ConsoleQuickActionIcon(
+                icon = icon,
+                statusIcon = statusIcon,
+                statusColor = statusColor,
+            )
+            Text(
+                visibleLabel,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 3,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConsoleQuickActionIcon(
+    icon: ImageVector,
+    statusIcon: ImageVector?,
+    statusColor: Color,
+    modifier: Modifier = Modifier,
+    statusIconInset: Dp = 0.dp,
+) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+        )
+        if (statusIcon != null) {
+            Icon(
+                statusIcon,
+                contentDescription = null,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = statusIconInset, end = statusIconInset)
+                    .size(10.dp),
+                tint = statusColor,
+            )
+        }
+    }
+}
+
+private const val LARGE_TEXT_LAYOUT_FONT_SCALE = 1.5f
 
 @Composable
 private fun ClipboardPasteDialog(
@@ -1622,9 +2047,72 @@ private fun ConsoleControlBottomSheet(
         modifier = Modifier.testTag("console-control-sheet"),
         containerColor = consoleColors.controlSurfaceElevated,
         contentColor = consoleColors.onSurface,
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = consoleColors.onSurfaceMuted)
+        },
         tonalElevation = 0.dp,
         content = { content() },
     )
+}
+
+@Composable
+internal fun PointerCaptureStatus(
+    state: PointerCaptureState,
+    onRetry: () -> Unit,
+    onRelease: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (state == PointerCaptureState.Idle) return
+    val captureMessage = when (state) {
+        PointerCaptureState.Active -> stringResource(R.string.console_capture_active)
+        PointerCaptureState.Requesting -> stringResource(R.string.console_capture_requesting)
+        is PointerCaptureState.Unavailable -> stringResource(R.string.console_capture_unavailable)
+        PointerCaptureState.Idle -> return
+    }
+    Surface(
+        modifier = modifier
+            .widthIn(max = 360.dp)
+            .fillMaxWidth()
+            .testTag("pointer-capture-status")
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = MaterialTheme.shapes.large,
+        shadowElevation = 6.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(captureMessage, style = MaterialTheme.typography.labelLarge)
+            if (state is PointerCaptureState.Unavailable) {
+                TextButton(
+                    onClick = onRetry,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("pointer-capture-retry-action"),
+                ) {
+                    Text(stringResource(R.string.console_retry))
+                }
+            }
+            TextButton(
+                onClick = onRelease,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("pointer-capture-release-action"),
+            ) {
+                Text(
+                    stringResource(
+                        if (state is PointerCaptureState.Unavailable) {
+                            R.string.console_close
+                        } else {
+                            R.string.console_release_input
+                        },
+                    ),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1638,10 +2126,11 @@ private fun ConsoleControlContent(
     onClose: () -> Unit,
     onKeyboard: () -> Unit,
     onClipboard: () -> Unit,
-    onPointerMode: () -> Unit,
+    onPointerMode: (PointerMode) -> Unit,
     onViewNavigation: () -> Unit,
     onMouseClick: (MouseButton) -> Unit,
     onFit: () -> Unit,
+    onActualSize: () -> Unit,
     onScrollSettings: () -> Unit,
     onVideo: () -> Unit,
     onPower: () -> Unit,
@@ -1698,17 +2187,10 @@ private fun ConsoleControlContent(
             },
             onClipboard,
         )
-        SheetToggle(
-            if (pointerMode == PointerMode.Direct) Icons.Default.TouchApp else Icons.Default.Mouse,
-            stringResource(
-                if (pointerMode == PointerMode.Direct) {
-                    R.string.console_pointer_direct
-                } else {
-                    R.string.console_pointer_trackpad
-                },
-            ),
-            pointerMode == PointerMode.Trackpad,
-            onPointerMode,
+        PointerModeChoices(
+            selected = pointerMode,
+            captureEnabled = session.connection.isSessionUsable,
+            onSelect = onPointerMode,
         )
         SheetToggle(
             Icons.Default.OpenWith,
@@ -1729,6 +2211,11 @@ private fun ConsoleControlContent(
             onFit,
         )
         SheetAction(
+            Icons.Default.OpenWith,
+            stringResource(R.string.console_actual_size_remote_view),
+            onActualSize,
+        )
+        SheetAction(
             Icons.Default.Tune,
             stringResource(R.string.console_video_settings),
             onVideo,
@@ -1737,6 +2224,7 @@ private fun ConsoleControlContent(
             Icons.Default.PowerSettingsNew,
             stringResource(R.string.console_power_controls),
             onPower,
+            enabled = session.connection.isSessionUsable,
         )
         SheetAction(
             Icons.Default.MoreVert,
@@ -1750,6 +2238,96 @@ private fun ConsoleControlContent(
 private fun RemoteInputSink.sendOneShotMouseClick(button: MouseButton) {
     mouseButton(button, true)
     mouseButton(button, false)
+}
+
+@Composable
+private fun PointerModeChoices(
+    selected: PointerMode,
+    captureEnabled: Boolean,
+    onSelect: (PointerMode) -> Unit,
+) {
+    val directLabel = stringResource(R.string.console_pointer_direct)
+    val trackpadLabel = stringResource(R.string.console_pointer_trackpad)
+    val captureLabel = stringResource(R.string.console_capture_input)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("console-pointer-mode-controls"),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.console_pointer_mode_title),
+            style = MaterialTheme.typography.labelMedium,
+            color = LocalConsoleColorScheme.current.onSurfaceMuted,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag("console-pointer-mode-choices"),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            FilterChip(
+                selected = selected == PointerMode.Direct,
+                onClick = { onSelect(PointerMode.Direct) },
+                label = { Text(directLabel) },
+                leadingIcon = {
+                    Icon(Icons.Default.TouchApp, contentDescription = null)
+                },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = directLabel },
+                colors = consoleFilterChipColors(),
+            )
+            FilterChip(
+                selected = selected == PointerMode.Trackpad,
+                onClick = { onSelect(PointerMode.Trackpad) },
+                label = { Text(trackpadLabel) },
+                leadingIcon = {
+                    Icon(Icons.Default.Mouse, contentDescription = null)
+                },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = trackpadLabel },
+                colors = consoleFilterChipColors(),
+            )
+            FilterChip(
+                selected = selected == PointerMode.Captured,
+                enabled = captureEnabled,
+                onClick = { onSelect(PointerMode.Captured) },
+                label = { Text(captureLabel) },
+                leadingIcon = {
+                    Icon(Icons.Default.OpenWith, contentDescription = null)
+                },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = captureLabel },
+                colors = consoleFilterChipColors(),
+            )
+        }
+        Text(
+            text = stringResource(R.string.console_capture_input_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = LocalConsoleColorScheme.current.onSurfaceMuted,
+        )
+    }
+}
+
+@Composable
+private fun consoleFilterChipColors() = LocalConsoleColorScheme.current.let { consoleColors ->
+    FilterChipDefaults.filterChipColors(
+        containerColor = consoleColors.controlSurface,
+        labelColor = consoleColors.onSurface,
+        iconColor = consoleColors.onSurface,
+        disabledContainerColor = consoleColors.controlSurface,
+        disabledLabelColor = consoleColors.onSurfaceMuted,
+        disabledLeadingIconColor = consoleColors.onSurfaceMuted,
+        selectedContainerColor = consoleColors.active,
+        selectedLabelColor = consoleColors.onActive,
+        selectedLeadingIconColor = consoleColors.onActive,
+        disabledSelectedContainerColor = consoleColors.controlSurface,
+    )
 }
 
 @Composable
@@ -1902,6 +2480,7 @@ private fun SideSessionStatus(profile: HostProfile, session: BackendSession) {
 
 private fun sessionStatusIcon(connection: ConnectionState): ImageVector = when (connection) {
     ConnectionState.Connected -> Icons.Default.CheckCircle
+    ConnectionState.Degraded -> Icons.Default.ErrorOutline
     ConnectionState.Connecting, ConnectionState.Reconnecting -> Icons.Default.Refresh
     ConnectionState.Failed -> Icons.Default.ErrorOutline
     ConnectionState.Disconnected -> Icons.Default.LinkOff
@@ -1912,6 +2491,7 @@ private fun sessionStatusColor(session: BackendSession): Color {
     val consoleColors = LocalConsoleColorScheme.current
     return when (session.connection) {
         ConnectionState.Connected -> consoleColors.connected
+        ConnectionState.Degraded -> consoleColors.warning
         ConnectionState.Connecting, ConnectionState.Reconnecting -> consoleColors.warning
         ConnectionState.Failed -> consoleColors.critical
         ConnectionState.Disconnected -> consoleColors.onSurfaceMuted
@@ -1941,14 +2521,19 @@ private fun SheetAction(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
+    val contentColor = if (enabled) consoleColors.onSurface else consoleColors.onSurfaceMuted
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = label
+                if (!enabled) disabled()
+            }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1956,13 +2541,13 @@ private fun SheetAction(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = consoleColors.onSurface,
+            tint = contentColor,
         )
         Text(
             label,
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.labelLarge,
-            color = consoleColors.onSurface,
+            color = contentColor,
         )
     }
 }
@@ -2070,6 +2655,7 @@ private fun ScrollSettingsDialog(
 @Composable
 private fun VideoSettingsDialog(
     initial: VideoSettings,
+    appliedTransport: String,
     initialMjpegFrameDetectionEnabled: Boolean,
     onDismiss: () -> Unit,
     onApply: (VideoSettings, Boolean) -> Unit,
@@ -2091,6 +2677,12 @@ private fun VideoSettingsDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                Text(
+                    stringResource(R.string.console_applied_transport, appliedTransport),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("video-applied-transport"),
+                )
                 TransportChoiceRow(transport) { transport = it }
                 ChoiceRow(
                     stringResource(R.string.console_resolution),
@@ -2110,34 +2702,46 @@ private fun VideoSettingsDialog(
                     fps,
                     { stringResource(R.string.console_frame_rate_value, it) },
                 ) { fps = it }
-                ChoiceRow(
-                    stringResource(R.string.console_h264_bitrate),
-                    listOf(1_000, 2_000, 3_000, 5_000),
-                    bitrate,
-                    { stringResource(R.string.console_bitrate_value, it / 1_000) },
-                ) { bitrate = it }
-                ChoiceRow(
-                    stringResource(R.string.console_mjpeg_quality),
-                    listOf(50, 60, 80, 100),
-                    quality,
-                    { it.toString() },
-                ) { quality = it }
-                MjpegFrameDetectionPreferenceControl(
-                    enabled = mjpegFrameDetectionEnabled,
-                    onEnabledChange = { mjpegFrameDetectionEnabled = it },
-                )
-                ChoiceRow(
-                    stringResource(R.string.console_h264_gop),
-                    listOf(10, 30, 50, 100),
-                    gop,
-                    {
-                        pluralStringResource(
-                            R.plurals.console_h264_gop_value,
-                            it,
-                            it,
-                        )
-                    },
-                ) { gop = it }
+                if (transport != VideoTransportPreference.MJPEG) {
+                    Text(
+                        stringResource(R.string.console_h264_settings),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    ChoiceRow(
+                        stringResource(R.string.console_h264_bitrate),
+                        listOf(1_000, 2_000, 3_000, 5_000),
+                        bitrate,
+                        { stringResource(R.string.console_bitrate_value, it / 1_000) },
+                    ) { bitrate = it }
+                    ChoiceRow(
+                        stringResource(R.string.console_h264_gop),
+                        listOf(10, 30, 50, 100),
+                        gop,
+                        {
+                            pluralStringResource(
+                                R.plurals.console_h264_gop_value,
+                                it,
+                                it,
+                            )
+                        },
+                    ) { gop = it }
+                }
+                if (transport != VideoTransportPreference.H264) {
+                    Text(
+                        stringResource(R.string.console_mjpeg_settings),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    ChoiceRow(
+                        stringResource(R.string.console_mjpeg_quality),
+                        listOf(50, 60, 80, 100),
+                        quality,
+                        { it.toString() },
+                    ) { quality = it }
+                    MjpegFrameDetectionPreferenceControl(
+                        enabled = mjpegFrameDetectionEnabled,
+                        onEnabledChange = { mjpegFrameDetectionEnabled = it },
+                    )
+                }
                 Text(
                     stringResource(R.string.console_video_settings_help),
                     style = MaterialTheme.typography.bodySmall,
@@ -2292,29 +2896,95 @@ private fun PowerChoice(title: String, detail: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ConfirmPowerDialog(action: PowerAction, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    val (title, detail) = when (action) {
-        PowerAction.ShortPress -> stringResource(R.string.console_confirm_power_title) to
-            stringResource(R.string.console_confirm_power_detail)
-        PowerAction.Reset -> stringResource(R.string.console_confirm_reset_title) to
-            stringResource(R.string.console_confirm_reset_detail)
-        is PowerAction.LongPress -> stringResource(R.string.console_confirm_force_off_title) to
+private fun ConfirmPowerDialog(
+    request: PendingPowerAction,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val action = request.action
+    val (title, detail, confirmLabel) = when (action) {
+        PowerAction.ShortPress -> Triple(
+            stringResource(R.string.console_confirm_power_title),
+            stringResource(R.string.console_confirm_power_detail),
+            stringResource(R.string.console_confirm_power_action),
+        )
+        PowerAction.Reset -> Triple(
+            stringResource(R.string.console_confirm_reset_title),
+            stringResource(R.string.console_confirm_reset_detail),
+            stringResource(R.string.console_confirm_reset_action),
+        )
+        is PowerAction.LongPress -> Triple(
+            stringResource(R.string.console_confirm_force_off_title),
             pluralStringResource(
                 R.plurals.console_confirm_force_off_detail,
                 action.seconds,
                 action.seconds,
-            )
+            ),
+            stringResource(R.string.console_confirm_force_off_action),
+        )
         PowerAction.CtrlAltDelete -> {
-            stringResource(R.string.console_confirm_ctrl_alt_delete_title) to
-                stringResource(R.string.console_confirm_ctrl_alt_delete_detail)
+            Triple(
+                stringResource(R.string.console_confirm_ctrl_alt_delete_title),
+                stringResource(R.string.console_confirm_ctrl_alt_delete_detail),
+                stringResource(R.string.console_confirm_ctrl_alt_delete_action),
+            )
         }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { Text(detail) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(
+                        R.string.console_confirm_host_target,
+                        request.destinationName,
+                        request.destination.authority,
+                    ),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.testTag("power-confirmation-target"),
+                )
+                Text(detail)
+            }
+        },
         confirmButton = {
-            Button(onClick = onConfirm) { Text(stringResource(R.string.console_send)) }
+            Button(
+                onClick = onConfirm,
+                modifier = Modifier.testTag("power-confirmation-action"),
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.console_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun DisconnectConfirmationDialog(
+    destinationName: String,
+    authority: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(stringResource(R.string.console_disconnect_title, destinationName))
+        },
+        text = {
+            Text(stringResource(R.string.console_disconnect_detail, authority))
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                modifier = Modifier.testTag("disconnect-confirmation-action"),
+            ) {
+                Text(stringResource(R.string.console_disconnect))
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
@@ -2484,10 +3154,9 @@ internal fun consoleControlsPresentation(
     isCompactWidth: Boolean,
     heightDp: Float,
 ): ConsoleControlsPresentation = when {
+    heightDp < COMPACT_PORTRAIT_MIN_HEIGHT_DP -> ConsoleControlsPresentation.SideOverlay
     isExpandedWidth -> ConsoleControlsPresentation.SupportingPane
-    isCompactWidth && heightDp >= COMPACT_PORTRAIT_MIN_HEIGHT_DP -> {
-        ConsoleControlsPresentation.BottomSheet
-    }
+    isCompactWidth -> ConsoleControlsPresentation.BottomSheet
     else -> ConsoleControlsPresentation.SideOverlay
 }
 
@@ -2505,6 +3174,7 @@ private fun connectionLabel(state: ConnectionState): String = stringResource(
         ConnectionState.Disconnected -> R.string.console_connection_disconnected
         ConnectionState.Connecting -> R.string.console_connection_connecting
         ConnectionState.Connected -> R.string.console_connection_connected
+        ConnectionState.Degraded -> R.string.console_connection_degraded
         ConnectionState.Reconnecting -> R.string.console_connection_reconnecting
         ConnectionState.Failed -> R.string.console_connection_failed
     },

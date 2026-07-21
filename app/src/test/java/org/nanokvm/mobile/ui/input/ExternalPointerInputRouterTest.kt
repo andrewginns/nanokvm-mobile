@@ -211,6 +211,25 @@ class ExternalPointerInputRouterTest {
     }
 
     @Test
+    fun `late confirmed ownership opens a fresh teardown lifecycle`() {
+        val router = relativeRouter()
+
+        assertEquals(
+            listOf(ExternalPointerCommand.ReleaseAll),
+            router.releaseAll(),
+        )
+        assertTrue(router.releaseAll().isEmpty())
+
+        router.beginLifecycle()
+
+        assertEquals(
+            listOf(ExternalPointerCommand.ReleaseAll),
+            router.releaseAll(),
+        )
+        assertTrue(router.releaseAll().isEmpty())
+    }
+
+    @Test
     fun `wheel remains available over an absolute letterbox area`() {
         val router = absoluteRouter { null }
 

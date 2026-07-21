@@ -28,15 +28,25 @@ data class RemotePoint(val x: Float, val y: Float) {
 
 data class HidAbsolutePoint(val x: Int, val y: Int)
 
+enum class ViewportScaleMode {
+    Fit,
+    ActualSize,
+    Custom,
+}
+
 /**
  * Immutable mapping between a letterboxed remote frame and its local gesture viewport.
- * [zoom] is relative to fit and remains in the 1x..4x range.
+ *
+ * Fit is recomputed for each viewport, ActualSize maps one remote pixel to one local pixel, and
+ * Custom stores an absolute source-pixel-to-local-pixel scale. Keeping Custom absolute prevents a
+ * window resize from silently changing the user's selected scale.
  */
 data class ViewportTransform(
     val remoteWidth: Int,
     val remoteHeight: Int,
     val viewport: FloatSize,
-    val zoom: Float = 1f,
+    val scaleMode: ViewportScaleMode = ViewportScaleMode.Fit,
+    val customScale: Float = 1f,
     val pan: FloatPoint = FloatPoint(0f, 0f),
 ) {
     val fitScale: Float
@@ -45,7 +55,23 @@ data class ViewportTransform(
             viewport.height / max(1, remoteHeight),
         ).takeIf { it.isFinite() && it > 0f } ?: 1f
 
-    val contentScale: Float get() = fitScale * zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
+    val minimumCustomScale: Float get() = min(fitScale, ACTUAL_SIZE_SCALE)
+
+    val maximumCustomScale: Float get() = max(
+        fitScale * MAX_FIT_RELATIVE_ZOOM,
+        ACTUAL_SIZE_SCALE * MAX_ACTUAL_RELATIVE_ZOOM,
+    )
+
+    val contentScale: Float
+        get() = when (scaleMode) {
+            ViewportScaleMode.Fit -> fitScale
+            ViewportScaleMode.ActualSize -> ACTUAL_SIZE_SCALE
+            ViewportScaleMode.Custom -> customScale.takeIf { it.isFinite() && it > 0f }
+                ?: ACTUAL_SIZE_SCALE
+        }
+
+    /** Compatibility value for callers that display zoom relative to the current fit scale. */
+    val zoom: Float get() = contentScale / fitScale
 
     val contentRect: FloatRect
         get() {
@@ -73,7 +99,15 @@ data class ViewportTransform(
         )
     }
 
-    fun fit(): ViewportTransform = copy(zoom = 1f, pan = FloatPoint(0f, 0f))
+    fun fit(): ViewportTransform = copy(
+        scaleMode = ViewportScaleMode.Fit,
+        pan = FloatPoint(0f, 0f),
+    )
+
+    fun actualSize(): ViewportTransform = copy(
+        scaleMode = ViewportScaleMode.ActualSize,
+        pan = FloatPoint(0f, 0f),
+    ).clampPan()
 
     fun center(): ViewportTransform = copy(pan = FloatPoint(0f, 0f)).clampPan()
 
@@ -127,17 +161,21 @@ data class ViewportTransform(
 
     /** Keeps the remote pixel below [focalPoint] stationary while zooming. */
     fun zoomBy(multiplier: Float, focalPoint: FloatPoint): ViewportTransform {
+        if (!multiplier.isFinite() || multiplier <= 0f) return this
         val oldRect = contentRect
         val oldRemote = RemotePoint(
             x = (focalPoint.x - oldRect.left) / contentScale,
             y = (focalPoint.y - oldRect.top) / contentScale,
         )
-        val newZoom = (zoom * multiplier).coerceIn(MIN_ZOOM, MAX_ZOOM)
-        val newScale = fitScale * newZoom
+        val newScale = (contentScale * multiplier).coerceIn(
+            min(minimumCustomScale, contentScale),
+            max(maximumCustomScale, contentScale),
+        )
         val centeredLeft = (viewport.width - remoteWidth * newScale) / 2f
         val centeredTop = (viewport.height - remoteHeight * newScale) / 2f
         return copy(
-            zoom = newZoom,
+            scaleMode = ViewportScaleMode.Custom,
+            customScale = newScale,
             pan = FloatPoint(
                 focalPoint.x - centeredLeft - oldRemote.x * newScale,
                 focalPoint.y - centeredTop - oldRemote.y * newScale,
@@ -146,16 +184,20 @@ data class ViewportTransform(
     }
 
     private fun clampPan(): ViewportTransform {
-        val effectiveZoom = zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
-        val width = remoteWidth * fitScale * effectiveZoom
-        val height = remoteHeight * fitScale * effectiveZoom
+        val effectiveScale = contentScale
+        val width = remoteWidth * effectiveScale
+        val height = remoteHeight * effectiveScale
         val maxX = max(0f, (width - viewport.width) / 2f)
         val maxY = max(
             0f,
             height / 2f - viewport.height * VERTICAL_EDGE_MARGIN_FRACTION,
         )
         return copy(
-            zoom = effectiveZoom,
+            customScale = if (scaleMode == ViewportScaleMode.Custom) {
+                effectiveScale
+            } else {
+                customScale
+            },
             pan = FloatPoint(
                 x = pan.x.coerceIn(-maxX, maxX),
                 y = pan.y.coerceIn(-maxY, maxY),
@@ -164,13 +206,14 @@ data class ViewportTransform(
     }
 
     private fun verticalPanLimit(): Float {
-        val height = remoteHeight * fitScale * zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val height = remoteHeight * contentScale
         return max(0f, height / 2f - viewport.height * VERTICAL_EDGE_MARGIN_FRACTION)
     }
 
     companion object {
-        const val MIN_ZOOM = 1f
-        const val MAX_ZOOM = 4f
+        const val ACTUAL_SIZE_SCALE = 1f
+        const val MAX_FIT_RELATIVE_ZOOM = 4f
+        const val MAX_ACTUAL_RELATIVE_ZOOM = 4f
         private const val VERTICAL_EDGE_MARGIN_FRACTION = 0.08f
         fun fit(remoteWidth: Int, remoteHeight: Int, viewport: FloatSize) = ViewportTransform(
             remoteWidth = max(1, remoteWidth),

@@ -5,10 +5,56 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
-## [0.3.2] - Unreleased
+## [0.3.5] - Unreleased
 
-Android version code: **9**. This is the current development milestone and has
+Android version code: **12**. This is the current development milestone and has
 not yet passed the signed-production-candidate gate.
+
+### Fixed
+
+- The live native keyboard no longer forces the installed IME into
+  no-personalized-learning/incognito mode, restoring keyboard-provided voice
+  typing while leaving keyboard privacy controls with the user-selected IME.
+
+## [0.3.4] - Development snapshot
+
+Android version code: **11**. This development snapshot did not pass the
+signed-production-candidate gate.
+
+### Changed
+
+- Console quick actions use the compact icon treatment so keyboard, clipboard,
+  and controls remain clear of the movable pan-and-zoom controls.
+
+### Fixed
+
+- The fixed dark console palette now also drives Material component defaults,
+  keeping recovery actions, pointer chips, viewport controls, sheet handles,
+  and disabled actions readable under light and dynamic application themes.
+
+## [0.3.3] - Development snapshot
+
+Android version code: **10**. This development snapshot did not pass the
+signed-production-candidate gate.
+
+### Changed
+
+- Remote pointer capture now has an explicit lifecycle-owned controller and
+  visible capture status, with a local escape path that does not leak the key to
+  the remote host.
+- Connection recovery preserves destination ownership and exposes bounded,
+  user-actionable reconnect state across lifecycle transitions.
+
+### Fixed
+
+- Core-session destination approval, external-pointer routing, viewport
+  transforms, and keyboard teardown are covered by regression tests for their
+  cancellation and recovery edges.
+
+## [0.3.2] - Development snapshot
+
+Android version code: **9**. This development snapshot did not pass the
+signed-production-candidate gate.
 
 ### Changed
 

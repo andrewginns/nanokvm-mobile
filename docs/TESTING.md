@@ -105,6 +105,10 @@ Retain device/build/OS/window/input details and pass/fail notes for:
   three-button navigation;
 - compact, medium, and expanded widths, plus 200% font/display scale, long
   strings, RTL, dark/light theme, and IME open/closed;
+- on a physical device with a voice-capable IME, confirm the remote-input field
+  does not force incognito mode, the microphone remains available when enabled
+  in that IME, and one dictated phrase is committed exactly once to the intended
+  remote host without surviving keyboard close, reconnect, or foreground loss;
 - TalkBack reading/action order, Switch Access or equivalent switch-style
   traversal, hardware keyboard focus/activation, mouse/trackpad scrolling, and
   accessibility scanner/UI-check results;

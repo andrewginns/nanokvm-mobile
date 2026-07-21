@@ -4,7 +4,13 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ExecutorService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -26,6 +32,168 @@ import org.nanokvm.video.NanoKvmVideoStatus
 import org.nanokvm.video.NanoKvmVideoTransport
 
 class NanoKvmConsoleBackendTest {
+    @Test
+    fun `host controls reject foreign identity and generation before queueing`() = runBlocking {
+        val client = NanoKvmClient.create(
+            endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+            tokenStore = InMemorySessionTokenStore("core-destination-token"),
+        )
+        val backend = NanoKvmConsoleBackend(
+            workerDispatcher = Dispatchers.Unconfined,
+            reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+        )
+        backend.setPrivateField(
+            "authenticatedSession",
+            AuthenticatedNanoKvmSession(
+                client = client,
+                profileId = "approved-profile",
+                authority = "approved.example:443",
+                vmInfo = VmInfo(application = "2.4.3"),
+                capabilities = reflectedEmptyCapabilities(),
+            ),
+        )
+        backend.setPrivateField("acceptingCommands", true)
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.privateField("mutableSession") as
+            MutableStateFlow<BackendSession>
+        mutableSession.value = BackendSession(
+            connection = ConnectionState.Connected,
+            sessionGeneration = 19L,
+        )
+        val rejected = listOf(
+            ApprovedCoreDestination("other-profile", "approved.example:443", 19L),
+            ApprovedCoreDestination("approved-profile", "other.example:443", 19L),
+            ApprovedCoreDestination("approved-profile", "approved.example:443", 18L),
+        )
+
+        rejected.forEachIndexed { index, destination ->
+            backend.power(destination, PowerAction.CtrlAltDelete)
+
+            assertEquals(
+                ConsoleMessage.HostControlSessionChanged,
+                backend.session.value.lastActionFeedback?.content,
+            )
+            assertEquals(index + 1L, backend.session.value.lastActionFeedback?.revision)
+            assertEquals(null, backend.privateField("queuedKeyboardTail"))
+        }
+
+        backend.closeAndAwait()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `host control revalidates generation immediately before dispatch`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val client = NanoKvmClient.create(
+            endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+            tokenStore = InMemorySessionTokenStore("core-dispatch-token"),
+        )
+        val backend = NanoKvmConsoleBackend(
+            workerDispatcher = dispatcher,
+            reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+        )
+        backend.setPrivateField(
+            "authenticatedSession",
+            AuthenticatedNanoKvmSession(
+                client = client,
+                profileId = "approved-profile",
+                authority = "approved.example:443",
+                vmInfo = VmInfo(application = "2.4.3"),
+                capabilities = reflectedEmptyCapabilities(),
+            ),
+        )
+        backend.setPrivateField("acceptingCommands", true)
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.privateField("mutableSession") as
+            MutableStateFlow<BackendSession>
+        mutableSession.value = BackendSession(
+            connection = ConnectionState.Connected,
+            sessionGeneration = 19L,
+        )
+
+        val destination = ApprovedCoreDestination(
+            "approved-profile",
+            "approved.example:443",
+            19L,
+        )
+        backend.power(destination, PowerAction.CtrlAltDelete)
+        backend.power(destination, PowerAction.CtrlAltDelete)
+        mutableSession.value = mutableSession.value.copy(sessionGeneration = 20L)
+        runCurrent()
+
+        assertEquals(
+            ConsoleMessage.HostControlSessionChanged,
+            backend.session.value.lastActionFeedback?.content,
+        )
+        assertEquals(1L, backend.session.value.lastActionFeedback?.revision)
+        assertEquals(null, backend.privateField("queuedKeyboardTail"))
+        backend.close()
+        advanceUntilIdle()
+        backend.closeAndAwait()
+    }
+
+    @Test
+    fun `operator cancellation settles only the current reconnect run`() = runBlocking {
+        val client = NanoKvmClient.create(
+            endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+            tokenStore = InMemorySessionTokenStore("cancel-reconnect-token"),
+        )
+        val backend = NanoKvmConsoleBackend(
+            workerDispatcher = Dispatchers.Unconfined,
+            reconnectPolicy = ReconnectPolicy(listOf(60_000L), jitterFraction = 0.0),
+        )
+        backend.setPrivateField(
+            "authenticatedSession",
+            AuthenticatedNanoKvmSession(
+                client = client,
+                profileId = "cancel-profile",
+                authority = "cancel.example:443",
+                vmInfo = VmInfo(application = "2.4.3"),
+                capabilities = reflectedEmptyCapabilities(),
+            ),
+        )
+        backend.setPrivateField("acceptingCommands", true)
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.privateField("mutableSession") as
+            MutableStateFlow<BackendSession>
+        mutableSession.value = BackendSession(
+            connection = ConnectionState.Connected,
+            sessionGeneration = 11L,
+        )
+        val listener = backend.privateField("videoListener") as NanoKvmVideoListener
+
+        listener.onStatusChanged(
+            NanoKvmVideoStatus.Error(
+                NanoKvmVideoTransport.H264,
+                IOException("trigger reconnect"),
+            ),
+        )
+
+        assertEquals(ConnectionState.Reconnecting, backend.session.value.connection)
+        val reconnect = backend.privateField("reconnectJob") as Job
+        assertTrue(reconnect.isActive)
+        val releaseGenerationBeforeCancel = backend.session.value.inputReleaseGeneration
+
+        backend.cancelReconnect()
+
+        assertFalse(reconnect.isActive)
+        assertEquals(null, backend.privateField("reconnectJob"))
+        assertEquals(ConnectionState.Failed, backend.session.value.connection)
+        assertEquals(ConsoleMessage.ReconnectCancelled, backend.session.value.status)
+        assertEquals(null, backend.session.value.reconnectAttempt)
+        assertEquals(null, backend.session.value.reconnectMaximumAttempts)
+        assertEquals(null, backend.session.value.nextReconnectDelayMillis)
+        assertEquals(
+            releaseGenerationBeforeCancel + 1L,
+            backend.session.value.inputReleaseGeneration,
+        )
+
+        val settled = backend.session.value
+        backend.cancelReconnect()
+        assertEquals(settled, backend.session.value)
+        backend.closeAndAwait()
+    }
+
     @Test
     fun `frame detection 401 uses global teardown and invalidates later writes`() = runBlocking {
         val tokenStore = InMemorySessionTokenStore("frame-detection-session-token")
@@ -480,6 +648,7 @@ class NanoKvmConsoleBackendTest {
         )
 
         assertEquals(VideoStreamDescriptor.MjpegFallback, backend.session.value.streamLabel)
+        assertEquals(ConnectionState.Degraded, backend.session.value.connection)
         assertEquals(
             ConsoleMessage.VideoFallback(
                 from = VideoTransportDescriptor.DirectH264,
@@ -494,14 +663,96 @@ class NanoKvmConsoleBackendTest {
 
         listener.onStatusChanged(NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.MJPEG))
 
-        assertEquals(VideoStreamDescriptor.Mjpeg, backend.session.value.streamLabel)
-        assertEquals(null, backend.session.value.status)
+        assertEquals(ConnectionState.Degraded, backend.session.value.connection)
+        assertEquals(VideoStreamDescriptor.MjpegFallback, backend.session.value.streamLabel)
+        assertEquals(
+            ConsoleMessage.VideoFallback(
+                from = VideoTransportDescriptor.DirectH264,
+                to = VideoTransportDescriptor.Mjpeg,
+            ),
+            backend.session.value.status,
+        )
         assertEquals(
             ConsoleMessage.VideoSettingsApplied,
             backend.session.value.lastActionFeedback?.content,
         )
+
+        listener.onStatusChanged(NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.H264))
+
+        assertEquals(ConnectionState.Connected, backend.session.value.connection)
+        assertEquals(VideoStreamDescriptor.DirectH264, backend.session.value.streamLabel)
+        assertEquals(null, backend.session.value.status)
         backend.closeAndAwait()
     }
+
+    @Test
+    fun `applying video settings preserves unresolved fallback until streaming recovery`() {
+        val fallback = ConsoleMessage.VideoFallback(
+            from = VideoTransportDescriptor.DirectH264,
+            to = VideoTransportDescriptor.Mjpeg,
+        )
+        val settings = VideoSettings(
+            transportPreference = VideoTransportPreference.H264,
+            framesPerSecond = 60,
+        )
+        val degraded = BackendSession(
+            connection = ConnectionState.Degraded,
+            streamLabel = VideoStreamDescriptor.MjpegFallback,
+            videoSettings = VideoSettings(),
+            videoSurfaceGeneration = 8L,
+            framesPerSecond = 24,
+            status = fallback,
+        )
+
+        val updated = degraded.withAppliedVideoSettings(settings)
+
+        assertEquals(ConnectionState.Degraded, updated.connection)
+        assertEquals(VideoStreamDescriptor.MjpegFallback, updated.streamLabel)
+        assertEquals(fallback, updated.status)
+        assertEquals(settings, updated.videoSettings)
+        assertEquals(9L, updated.videoSurfaceGeneration)
+        assertEquals(null, updated.framesPerSecond)
+        assertEquals(
+            ConsoleMessage.VideoSettingsApplied,
+            updated.lastActionFeedback?.content,
+        )
+    }
+
+    @Test
+    fun `choosing the active fallback as primary recovers only after streaming evidence`() =
+        runBlocking {
+            val backend = NanoKvmConsoleBackend(
+                workerDispatcher = Dispatchers.Unconfined,
+                reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+            )
+            @Suppress("UNCHECKED_CAST")
+            val mutableSession = backend.privateField("mutableSession") as
+                MutableStateFlow<BackendSession>
+            val fallback = ConsoleMessage.VideoFallback(
+                from = VideoTransportDescriptor.WebRtc,
+                to = VideoTransportDescriptor.DirectH264,
+            )
+            mutableSession.value = BackendSession(
+                connection = ConnectionState.Degraded,
+                streamLabel = VideoStreamDescriptor.DirectH264Fallback,
+                videoSettings = VideoSettings(transportPreference = VideoTransportPreference.Auto),
+                status = fallback,
+            ).withAppliedVideoSettings(
+                VideoSettings(transportPreference = VideoTransportPreference.H264),
+            )
+
+            assertEquals(ConnectionState.Degraded, backend.session.value.connection)
+            assertEquals(VideoStreamDescriptor.DirectH264, backend.session.value.streamLabel)
+            assertEquals(fallback, backend.session.value.status)
+
+            val listener = backend.privateField("videoListener") as NanoKvmVideoListener
+            listener.onStatusChanged(NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.H264))
+
+            assertEquals(ConnectionState.Connected, backend.session.value.connection)
+            assertEquals(VideoStreamDescriptor.DirectH264, backend.session.value.streamLabel)
+            assertEquals(null, backend.session.value.status)
+            backend.closeAndAwait()
+        }
 
     @Test
     fun `late video callbacks from a replaced decoder cannot mutate replacement session`() =

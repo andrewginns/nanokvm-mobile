@@ -1,40 +1,82 @@
 package org.nanokvm.mobile.ui.theme
 
+import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ThemeContrastTest {
     @Test
     fun fixedApplicationSchemesMeetTextContrastForCorePairs() {
-        assertContrast("light on background", NanoLightColorScheme.onBackground, NanoLightColorScheme.background, 4.5)
-        assertContrast("light primary", NanoLightColorScheme.onPrimary, NanoLightColorScheme.primary, 4.5)
-        assertContrast(
-            "light surface variant",
-            NanoLightColorScheme.onSurfaceVariant,
-            NanoLightColorScheme.surfaceContainer,
-            4.5,
-        )
-        assertContrast("dark on background", NanoDarkColorScheme.onBackground, NanoDarkColorScheme.background, 4.5)
-        assertContrast("dark primary", NanoDarkColorScheme.onPrimary, NanoDarkColorScheme.primary, 4.5)
-        assertContrast(
-            "dark surface variant",
-            NanoDarkColorScheme.onSurfaceVariant,
-            NanoDarkColorScheme.surfaceContainer,
-            4.5,
-        )
+        assertMaterialTextPairs("light", NanoLightColorScheme)
+        assertMaterialTextPairs("dark", NanoDarkColorScheme)
     }
 
     @Test
     fun consoleSchemeMeetsTextAndStatusContrast() {
         val scheme = DarkConsoleColorScheme
         assertContrast("console text", scheme.onSurface, scheme.canvas, 4.5)
+        assertContrast("console text on controls", scheme.onSurface, scheme.controlSurface, 4.5)
         assertContrast("console muted text", scheme.onSurfaceMuted, scheme.controlSurface, 4.5)
+        assertContrast(
+            "console muted text on elevated controls",
+            scheme.onSurfaceMuted,
+            scheme.controlSurfaceElevated,
+            4.5,
+        )
         assertContrast("console control text", scheme.onSurface, scheme.controlSurfaceElevated, 4.5)
-        assertContrast("console active control", scheme.active, scheme.controlSurfaceElevated, 3.0)
-        assertContrast("console warning status", scheme.warning, scheme.canvas, 3.0)
-        assertContrast("console critical status", scheme.critical, scheme.canvas, 3.0)
+        assertContrast("console active label", scheme.active, scheme.controlSurfaceElevated, 4.5)
+        assertContrast("console active content", scheme.onActive, scheme.active, 4.5)
+        assertContrast("console warning status", scheme.warning, scheme.controlSurfaceElevated, 4.5)
+        assertContrast("console critical status", scheme.critical, scheme.controlSurfaceElevated, 4.5)
+    }
+
+    @Test
+    fun consoleMaterialBridgeKeepsStandardComponentsOnTheDarkConsolePalette() {
+        val console = DarkConsoleColorScheme
+        val material = consoleMaterialColorScheme(console)
+
+        assertEquals(console.active, material.primary)
+        assertEquals(console.onActive, material.onPrimary)
+        assertEquals(console.canvas, material.background)
+        assertEquals(console.onSurface, material.onBackground)
+        assertEquals(console.controlSurface, material.surface)
+        assertEquals(console.onSurface, material.onSurface)
+        assertEquals(console.controlSurfaceElevated, material.surfaceContainerHigh)
+        assertEquals(console.onSurfaceMuted, material.onSurfaceVariant)
+        assertEquals(console.critical, material.error)
+        assertEquals(console.canvas, material.onError)
+        assertMaterialTextPairs("console material", material)
+    }
+}
+
+private fun assertMaterialTextPairs(name: String, scheme: ColorScheme) {
+    listOf(
+        "primary" to (scheme.onPrimary to scheme.primary),
+        "primary container" to (scheme.onPrimaryContainer to scheme.primaryContainer),
+        "secondary" to (scheme.onSecondary to scheme.secondary),
+        "secondary container" to (scheme.onSecondaryContainer to scheme.secondaryContainer),
+        "tertiary" to (scheme.onTertiary to scheme.tertiary),
+        "tertiary container" to (scheme.onTertiaryContainer to scheme.tertiaryContainer),
+        "error" to (scheme.onError to scheme.error),
+        "error container" to (scheme.onErrorContainer to scheme.errorContainer),
+        "background" to (scheme.onBackground to scheme.background),
+        "surface" to (scheme.onSurface to scheme.surface),
+        "surface variant" to (scheme.onSurfaceVariant to scheme.surfaceVariant),
+        "inverse surface" to (scheme.inverseOnSurface to scheme.inverseSurface),
+    ).forEach { (pairName, colors) ->
+        assertContrast("$name $pairName", colors.first, colors.second, 4.5)
+    }
+    listOf(
+        "surface lowest" to scheme.surfaceContainerLowest,
+        "surface low" to scheme.surfaceContainerLow,
+        "surface container" to scheme.surfaceContainer,
+        "surface high" to scheme.surfaceContainerHigh,
+        "surface highest" to scheme.surfaceContainerHighest,
+    ).forEach { (surfaceName, surface) ->
+        assertContrast("$name $surfaceName", scheme.onSurface, surface, 4.5)
     }
 }
 

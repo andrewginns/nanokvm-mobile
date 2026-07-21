@@ -78,6 +78,9 @@ debug/emulator result does not close a signed-candidate or manual gate.
 - [ ] A representative physical ARM phone runs the signed candidate, including
   real Keystore, hardware input, video, lifecycle, memory, thermal, and OEM
   behavior. Emulator-only evidence does not close this item.
+- [ ] A voice-capable installed IME stays out of app-forced incognito mode and
+  commits one dictated phrase exactly once to the intended remote host; keyboard
+  close, reconnect, and foreground loss leave no replayable text.
 - [ ] Gesture and three-button navigation, portrait/landscape, resizable or
   split-screen windows, IME open/closed, and compact/medium/expanded widths pass.
 

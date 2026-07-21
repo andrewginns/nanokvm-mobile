@@ -53,6 +53,7 @@ class ViewportTransformTest {
         val screenAfter = zoomed.remoteToScreen(remoteBefore)
 
         assertEquals(2f, zoomed.zoom, 0.001f)
+        assertEquals(ViewportScaleMode.Custom, zoomed.scaleMode)
         assertEquals(focal.x, screenAfter.x, 0.01f)
         assertEquals(focal.y, screenAfter.y, 0.01f)
     }
@@ -63,9 +64,10 @@ class ViewportTransformTest {
         val zoomed = start.zoomBy(99f, FloatPoint(500f, 300f))
         val panned = zoomed.panBy(FloatPoint(100_000f, -100_000f))
 
-        assertEquals(4f, panned.zoom, 0f)
-        assertTrue(panned.pan.x < 2_000f)
-        assertTrue(panned.pan.y > -2_000f)
+        assertEquals(panned.maximumCustomScale, panned.contentScale, 0f)
+        assertTrue(panned.zoom >= ViewportTransform.MAX_FIT_RELATIVE_ZOOM)
+        assertTrue(panned.pan.x < panned.contentRect.width / 2f)
+        assertTrue(panned.pan.y > -panned.contentRect.height / 2f)
         assertTrue(panned.contentRect.right >= 1000f)
         assertTrue(panned.contentRect.top <= 0f)
     }
@@ -101,7 +103,110 @@ class ViewportTransformTest {
         val fitted = start.fit()
 
         assertEquals(1f, fitted.zoom, 0f)
+        assertEquals(ViewportScaleMode.Fit, fitted.scaleMode)
         assertEquals(FloatPoint(0f, 0f), fitted.pan)
+    }
+
+    @Test
+    fun `actual size is exactly one local pixel per remote pixel when remote is larger`() {
+        val transform = ViewportTransform.fit(
+            remoteWidth = 1920,
+            remoteHeight = 1080,
+            viewport = FloatSize(1000f, 700f),
+        ).actualSize()
+
+        assertEquals(ViewportScaleMode.ActualSize, transform.scaleMode)
+        assertEquals(1f, transform.contentScale, 0f)
+        assertEquals(1920f, transform.contentRect.width, 0f)
+        assertEquals(1080f, transform.contentRect.height, 0f)
+        assertEquals(FloatPoint(0f, 0f), transform.pan)
+    }
+
+    @Test
+    fun `actual size is centered and exactly one to one when remote is smaller`() {
+        val transform = ViewportTransform.fit(
+            remoteWidth = 640,
+            remoteHeight = 480,
+            viewport = FloatSize(1200f, 800f),
+        ).actualSize()
+
+        assertEquals(1f, transform.contentScale, 0f)
+        assertEquals(280f, transform.contentRect.left, 0f)
+        assertEquals(160f, transform.contentRect.top, 0f)
+        assertEquals(920f, transform.contentRect.right, 0f)
+        assertEquals(640f, transform.contentRect.bottom, 0f)
+    }
+
+    @Test
+    fun `actual size remains one to one across viewport resize`() {
+        val start = ViewportTransform.fit(
+            remoteWidth = 1920,
+            remoteHeight = 1080,
+            viewport = FloatSize(1000f, 700f),
+        ).actualSize().panBy(FloatPoint(180f, -120f))
+        val remoteCentre = requireNotNull(start.screenToRemote(FloatPoint(500f, 350f)))
+
+        val resized = start.withViewportPreservingCenter(FloatSize(720f, 420f))
+        val centreAfterResize = requireNotNull(
+            resized.screenToRemote(FloatPoint(360f, 210f)),
+        )
+
+        assertEquals(ViewportScaleMode.ActualSize, resized.scaleMode)
+        assertEquals(1f, resized.contentScale, 0f)
+        assertEquals(remoteCentre.x, centreAfterResize.x, 0.01f)
+        assertEquals(remoteCentre.y, centreAfterResize.y, 0.01f)
+    }
+
+    @Test
+    fun `custom scale is absolute and survives a resize`() {
+        val viewport = FloatSize(1000f, 700f)
+        val start = ViewportTransform.fit(1920, 1080, viewport)
+            .zoomBy(2f, FloatPoint(viewport.width / 2f, viewport.height / 2f))
+        val initialAbsoluteScale = start.contentScale
+
+        val resized = start.withViewportPreservingCenter(FloatSize(720f, 420f))
+
+        assertEquals(ViewportScaleMode.Custom, resized.scaleMode)
+        assertEquals(initialAbsoluteScale, resized.contentScale, 0f)
+        assertTrue(start.zoom != resized.zoom)
+    }
+
+    @Test
+    fun `custom scale survives resize even when it falls outside the new gesture bounds`() {
+        val tinyViewport = FloatSize(320f, 180f)
+        val hugeViewport = FloatSize(4_000f, 2_500f)
+        val lowScale = ViewportTransform.fit(1920, 1080, tinyViewport)
+            .zoomBy(1.25f, FloatPoint(160f, 90f))
+        val highScale = ViewportTransform.fit(1920, 1080, hugeViewport)
+            .zoomBy(2f, FloatPoint(2_000f, 1_250f))
+
+        val lowScaleOnHugeViewport = lowScale.withViewportPreservingCenter(hugeViewport)
+        val highScaleOnTinyViewport = highScale.withViewportPreservingCenter(tinyViewport)
+
+        assertTrue(lowScale.contentScale < lowScaleOnHugeViewport.minimumCustomScale)
+        assertEquals(lowScale.contentScale, lowScaleOnHugeViewport.contentScale, 0f)
+        assertTrue(highScale.contentScale > highScaleOnTinyViewport.maximumCustomScale)
+        assertEquals(highScale.contentScale, highScaleOnTinyViewport.contentScale, 0f)
+        assertEquals(ViewportScaleMode.Custom, lowScaleOnHugeViewport.scaleMode)
+        assertEquals(ViewportScaleMode.Custom, highScaleOnTinyViewport.scaleMode)
+    }
+
+    @Test
+    fun `pinching from actual size enters custom without moving the focal remote pixel`() {
+        val start = ViewportTransform.fit(
+            remoteWidth = 1920,
+            remoteHeight = 1080,
+            viewport = FloatSize(1000f, 700f),
+        ).actualSize()
+        val focal = FloatPoint(350f, 280f)
+        val remoteBefore = requireNotNull(start.screenToRemote(focal))
+
+        val zoomed = start.zoomBy(1.25f, focal)
+
+        assertEquals(ViewportScaleMode.Custom, zoomed.scaleMode)
+        assertEquals(1.25f, zoomed.contentScale, 0.001f)
+        assertEquals(focal.x, zoomed.remoteToScreen(remoteBefore).x, 0.01f)
+        assertEquals(focal.y, zoomed.remoteToScreen(remoteBefore).y, 0.01f)
     }
 
     @Test
@@ -134,7 +239,8 @@ class ViewportTransformTest {
         )
         assertEquals(remoteCentre.x, centreAfterResize.x, 0.01f)
         assertEquals(remoteCentre.y, centreAfterResize.y, 0.01f)
-        assertEquals(start.zoom, resized.zoom, 0f)
+        assertEquals(ViewportScaleMode.Custom, resized.scaleMode)
+        assertEquals(start.contentScale, resized.contentScale, 0f)
 
         val restored = resized.withViewportPreservingCenter(start.viewport)
         val centreAfterRestore = requireNotNull(
@@ -142,7 +248,8 @@ class ViewportTransformTest {
         )
         assertEquals(remoteCentre.x, centreAfterRestore.x, 0.01f)
         assertEquals(remoteCentre.y, centreAfterRestore.y, 0.01f)
-        assertEquals(start.zoom, restored.zoom, 0f)
+        assertEquals(ViewportScaleMode.Custom, restored.scaleMode)
+        assertEquals(start.contentScale, restored.contentScale, 0f)
         assertEquals(start.pan.x, restored.pan.x, 0.01f)
         assertEquals(start.pan.y, restored.pan.y, 0.01f)
     }

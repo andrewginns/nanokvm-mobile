@@ -15,6 +15,8 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
@@ -32,6 +34,7 @@ import org.nanokvm.mobile.ui.components.RemoteViewport
 import org.nanokvm.mobile.ui.components.ViewportAction
 import org.nanokvm.mobile.ui.components.ViewportCommand
 import org.nanokvm.mobile.ui.theme.NanoKvmTheme
+import org.nanokvm.mobile.ui.viewport.ViewportScaleMode
 
 class RemoteViewportAccessibilityInstrumentedTest {
     @get:Rule
@@ -189,6 +192,123 @@ class RemoteViewportAccessibilityInstrumentedTest {
         assertEquals(mappingBeforeRestore.second, mappingAfterRestore.second)
     }
 
+    @Test
+    fun fitAndActualSizeAreVisibleControlsAndActualSizeReportsExactOneToOneScale() {
+        var reportedMode = ViewportScaleMode.Fit
+        var reportedScale = 0f
+        composeRule.setContent {
+            NanoKvmTheme {
+                RemoteViewport(
+                    input = input,
+                    videoSurface = videoSurface,
+                    remoteWidth = 1_920,
+                    remoteHeight = 1_080,
+                    videoSurfaceGeneration = 1L,
+                    pointerMode = PointerMode.Trackpad,
+                    fitRequest = 0,
+                    viewNavigationVisible = true,
+                    onViewportScaleChanged = { mode, scale ->
+                        reportedMode = mode
+                        reportedScale = scale
+                    },
+                    modifier = Modifier.requiredSize(width = 360.dp, height = 500.dp),
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription(
+            composeRule.activity.getString(R.string.console_show_view_controls),
+        ).performClick()
+        composeRule.onNodeWithTag("viewport-fit").assertExists()
+        composeRule.onNodeWithTag("viewport-actual-size").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(ViewportScaleMode.ActualSize, reportedMode)
+        assertEquals(1f, reportedScale, 0f)
+
+        composeRule.onNodeWithTag("viewport-fit").performClick()
+        composeRule.waitForIdle()
+        assertEquals(ViewportScaleMode.Fit, reportedMode)
+        assertTrue(reportedScale < 1f)
+    }
+
+    @Test
+    fun actualSizeSurvivesSavedStateRestorationWithoutBecomingFitRelativeZoom() {
+        val restorationTester = StateRestorationTester(composeRule)
+        val command = mutableStateOf<ViewportCommand?>(null)
+        var reportedMode = ViewportScaleMode.Fit
+        var reportedScale = 0f
+        restorationTester.setContent {
+            NanoKvmTheme {
+                RemoteViewport(
+                    input = input,
+                    videoSurface = videoSurface,
+                    remoteWidth = 1_920,
+                    remoteHeight = 1_080,
+                    videoSurfaceGeneration = 1L,
+                    pointerMode = PointerMode.Trackpad,
+                    fitRequest = 0,
+                    viewportCommand = command.value,
+                    onViewportScaleChanged = { mode, scale ->
+                        reportedMode = mode
+                        reportedScale = scale
+                    },
+                    modifier = Modifier.requiredSize(width = 360.dp, height = 500.dp),
+                )
+            }
+        }
+        composeRule.runOnIdle {
+            command.value = ViewportCommand(sequence = 1, action = ViewportAction.ActualSize)
+        }
+        composeRule.waitForIdle()
+        assertEquals(ViewportScaleMode.ActualSize, reportedMode)
+        assertEquals(1f, reportedScale, 0f)
+
+        composeRule.runOnIdle { command.value = null }
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.waitForIdle()
+
+        assertEquals(ViewportScaleMode.ActualSize, reportedMode)
+        assertEquals(1f, reportedScale, 0f)
+    }
+
+    @Test
+    fun videoSurfaceUsesRemoteBufferDimensionsAndResizesWithoutDetach() {
+        val remoteWidth = mutableIntStateOf(1_366)
+        val remoteHeight = mutableIntStateOf(768)
+        val recordingSurface = RecordingVideoSurfaceSink()
+        composeRule.setContent {
+            NanoKvmTheme {
+                RemoteViewport(
+                    input = input,
+                    videoSurface = recordingSurface,
+                    remoteWidth = remoteWidth.intValue,
+                    remoteHeight = remoteHeight.intValue,
+                    videoSurfaceGeneration = 1L,
+                    pointerMode = PointerMode.Direct,
+                    fitRequest = 0,
+                    modifier = Modifier.requiredSize(width = 360.dp, height = 500.dp),
+                )
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            recordingSurface.attachDimensions.isNotEmpty()
+        }
+        assertEquals(listOf(1_366 to 768), recordingSurface.attachDimensions)
+
+        composeRule.runOnIdle {
+            remoteWidth.intValue = 1_024
+            remoteHeight.intValue = 600
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            recordingSurface.resizeDimensions.lastOrNull() == (1_024 to 600)
+        }
+
+        assertEquals(1, recordingSurface.attachDimensions.size)
+        assertEquals(0, recordingSurface.detachCount)
+    }
+
     private fun renderViewport() {
         composeRule.setContent {
             NanoKvmTheme {
@@ -283,4 +403,22 @@ private class NoOpVideoSurfaceSink : VideoSurfaceSink {
     override fun resizeVideoSurface(width: Int, height: Int) = Unit
 
     override fun detachVideoSurface(surface: Surface) = Unit
+}
+
+private class RecordingVideoSurfaceSink : VideoSurfaceSink {
+    val attachDimensions = mutableListOf<Pair<Int, Int>>()
+    val resizeDimensions = mutableListOf<Pair<Int, Int>>()
+    var detachCount = 0
+
+    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
+        attachDimensions += width to height
+    }
+
+    override fun resizeVideoSurface(width: Int, height: Int) {
+        resizeDimensions += width to height
+    }
+
+    override fun detachVideoSurface(surface: Surface) {
+        detachCount += 1
+    }
 }

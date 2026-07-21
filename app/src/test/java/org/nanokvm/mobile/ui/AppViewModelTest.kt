@@ -39,6 +39,7 @@ import org.nanokvm.mobile.data.ThemeMode
 import org.nanokvm.mobile.platform.LocalNetworkAccess
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ApprovedAdministrationDestination
+import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.CertificateDetails
 import org.nanokvm.mobile.runtime.CertificateTrustSource
@@ -381,8 +382,8 @@ class AppViewModelTest {
     }
 
     @Test
-    fun typedConnectionFailureBecomesCoreAppNotice() = runTest(dispatcher) {
-        val profile = HostProfile.Default
+    fun typedConnectionFailureBecomesTargetAwareRetryIssueAndClearsPassword() = runTest(dispatcher) {
+        val profile = HostProfile.Default.copy(name = "Rack KVM", host = "rack-kvm.local")
         val backend = FakeConsoleBackend().apply {
             connectHandler = {
                 ConnectOutcome.Failed(ConnectionFailure.TimedOut)
@@ -397,18 +398,20 @@ class AppViewModelTest {
 
         viewModel.prepareConnection(profile)
         advanceUntilIdle()
-        viewModel.submitPassword(profile, "session-only".toCharArray(), savePassword = false)
+        val password = "session-only".toCharArray()
+        viewModel.submitPassword(profile, password, savePassword = false)
         advanceUntilIdle()
 
-        assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
-        assertSameNotice(
-            AppNotice.Core(ConnectionFailure.TimedOut),
-            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
-        )
+        val issue = viewModel.state.value.screen as AppScreen.ConnectionIssue
+        assertEquals(profile, issue.profile)
+        assertEquals(ConnectionFailure.TimedOut, issue.failure)
+        assertEquals(ConnectionIssueRecovery.Retry, issue.primaryRecovery)
+        assertTrue(password.all { it == '\u0000' })
+        assertTrue(viewModel.state.value.pendingAppNotices.isEmpty())
     }
 
     @Test
-    fun typedTrustFailureBecomesCoreAppNoticeBeforePasswordCollection() = runTest(dispatcher) {
+    fun typedTrustFailurePreservesTargetBeforePasswordCollection() = runTest(dispatcher) {
         val profile = HostProfile.Default
         val backend = FakeConsoleBackend(
             trustOutcome = TrustPreflightOutcome.Failed(
@@ -427,11 +430,189 @@ class AppViewModelTest {
         advanceUntilIdle()
 
         assertNull(viewModel.state.value.passwordEntryProfile)
-        assertSameNotice(
-            AppNotice.Core(ConnectionFailure.CertificateDateInvalid),
-            viewModel.state.value.pendingAppNotices.firstOrNull()?.content,
-        )
+        val issue = viewModel.state.value.screen as AppScreen.ConnectionIssue
+        assertEquals(profile, issue.profile)
+        assertEquals(ConnectionFailure.CertificateDateInvalid, issue.failure)
+        assertNull(issue.primaryRecovery)
+        assertTrue(viewModel.state.value.pendingAppNotices.isEmpty())
     }
+
+    @Test
+    fun retryIssueRestartsTrustWithoutRetainingPreviousPassword() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val backend = FakeConsoleBackend().apply {
+            connectHandler = { ConnectOutcome.Failed(ConnectionFailure.Unreachable) }
+        }
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            FakeSavedCredentials(),
+            backend,
+        )
+        advanceUntilIdle()
+        viewModel.prepareConnection(profile)
+        advanceUntilIdle()
+        val firstPassword = "first-attempt".toCharArray()
+        viewModel.submitPassword(profile, firstPassword, savePassword = false)
+        advanceUntilIdle()
+
+        viewModel.retryConnectionIssue()
+        advanceUntilIdle()
+
+        assertTrue(firstPassword.all { it == '\u0000' })
+        assertEquals(listOf("preflight", "connect", "preflight"), backend.events)
+        assertEquals(profile, viewModel.state.value.passwordEntryProfile)
+        assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
+    }
+
+    @Test
+    fun rejectedRequestOffersManualPasswordWithoutDeletingSavedCredential() = runTest(dispatcher) {
+        val profile = HostProfile.Default
+        val credentials = FakeSavedCredentials(savedIds = mutableSetOf(profile.id))
+        val backend = FakeConsoleBackend().apply {
+            connectHandler = {
+                ConnectOutcome.Failed(
+                    failure = ConnectionFailure.RequestRejected(401),
+                    retryable = false,
+                )
+            }
+        }
+        val promptResults = MutableSharedFlow<CredentialPromptResult>(extraBufferCapacity = 1)
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            credentials,
+            backend,
+            promptResults,
+        )
+        advanceUntilIdle()
+        viewModel.prepareConnection(profile)
+        advanceUntilIdle()
+        val request = checkNotNull(viewModel.state.value.credentialPrompt)
+        promptResults.emit(CredentialPromptResult.Authenticated(request.id))
+        advanceUntilIdle()
+
+        val issue = viewModel.state.value.screen as AppScreen.ConnectionIssue
+        assertEquals(ConnectionIssueRecovery.UseAnotherPassword, issue.primaryRecovery)
+        viewModel.useAnotherPasswordForConnectionIssue()
+
+        assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
+        assertEquals(profile, viewModel.state.value.passwordEntryProfile)
+        assertEquals(setOf(profile.id), viewModel.state.value.savedPasswordProfileIds)
+        assertEquals(0, credentials.deleteCalls)
+    }
+
+    @Test
+    fun retryableRejectedRequestKeepsRetryAsThePrimaryRecovery() {
+        val issue = initialConnectionIssue(
+            profile = HostProfile.Default,
+            failure = ConnectionFailure.RequestRejected(503),
+            retryable = true,
+        )
+
+        assertEquals(ConnectionIssueRecovery.Retry, issue.primaryRecovery)
+    }
+
+    @Test
+    fun terminalNonAuthenticationRejectionDoesNotSuggestAnotherPassword() {
+        val issue = initialConnectionIssue(
+            profile = HostProfile.Default,
+            failure = ConnectionFailure.RequestRejected(404),
+            retryable = false,
+        )
+
+        assertEquals(null, issue.primaryRecovery)
+    }
+
+    @Test
+    fun expiredConsoleAuthenticationTearsDownBeforeStartingFreshAuthentication() =
+        runTest(dispatcher) {
+            val profile = HostProfile.Default
+            val backend = FakeConsoleBackend()
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+                FakeSavedCredentials(),
+                backend,
+            )
+            advanceUntilIdle()
+            viewModel.prepareConnection(profile)
+            advanceUntilIdle()
+            viewModel.submitPassword(
+                profile,
+                "initial-password".toCharArray(),
+                savePassword = false,
+            )
+            advanceUntilIdle()
+            assertEquals(AppScreen.Console(profile), viewModel.state.value.screen)
+
+            viewModel.reauthenticateConsole()
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("preflight", "connect", "disconnect", "preflight"),
+                backend.events,
+            )
+            assertEquals(profile, viewModel.state.value.passwordEntryProfile)
+            assertTrue(viewModel.state.value.screen is AppScreen.Profiles)
+        }
+
+    @Test
+    fun invalidAddressIssueRoutesToEditorForTheSameTarget() = runTest(dispatcher) {
+        val profile = HostProfile.Default.copy(name = "Broken target", host = "bad host")
+        val backend = FakeConsoleBackend(
+            trustOutcome = TrustPreflightOutcome.Failed(
+                failure = ConnectionFailure.InvalidAddress,
+                retryable = false,
+            ),
+        )
+        val viewModel = viewModel(
+            FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+            FakeSavedCredentials(),
+            backend,
+        )
+        advanceUntilIdle()
+        viewModel.prepareConnection(profile)
+        advanceUntilIdle()
+
+        val issue = viewModel.state.value.screen as AppScreen.ConnectionIssue
+        assertEquals(ConnectionIssueRecovery.EditConnection, issue.primaryRecovery)
+        viewModel.editConnectionIssue()
+
+        assertEquals(AppScreen.EditProfile(profile, isNew = false), viewModel.state.value.screen)
+    }
+
+    @Test
+    fun cancellingInitialConnectionPreventsLatePreflightFromReopeningAuthentication() =
+        runTest(dispatcher) {
+            val profile = HostProfile.Default
+            val preflightStarted = CompletableDeferred<Unit>()
+            val releaseLateResult = CompletableDeferred<Unit>()
+            val backend = FakeConsoleBackend().apply {
+                preflightHandler = {
+                    preflightStarted.complete(Unit)
+                    withContext(NonCancellable) { releaseLateResult.await() }
+                    trustOutcome
+                }
+            }
+            val viewModel = viewModel(
+                FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))),
+                FakeSavedCredentials(),
+                backend,
+            )
+            advanceUntilIdle()
+
+            viewModel.prepareConnection(profile)
+            runCurrent()
+            preflightStarted.await()
+            assertEquals(AppScreen.Connecting(profile), viewModel.state.value.screen)
+
+            viewModel.cancelToProfiles()
+            releaseLateResult.complete(Unit)
+            advanceUntilIdle()
+
+            assertSame(AppScreen.Profiles, viewModel.state.value.screen)
+            assertNull(viewModel.state.value.passwordEntryProfile)
+            assertNull(viewModel.state.value.credentialPrompt)
+            assertEquals(listOf("preflight", "disconnect"), backend.events)
+        }
 
     @Test
     fun changedCertificateIsReplacedOnlyWhenRememberingTheDecision() = runTest(dispatcher) {
@@ -1208,13 +1389,14 @@ private class FakeConsoleBackend(
     var closeCalls = 0
     var passwordDispatches = 0
     var connectHandler: suspend (ConnectRequest) -> ConnectOutcome = { ConnectOutcome.Connected }
+    var preflightHandler: suspend (HostProfile) -> TrustPreflightOutcome = { trustOutcome }
     var passwordMutationResult:
         NanoKvmAdministrationMutationResult<NanoKvmAdministrationAccountSnapshot> =
         NanoKvmAdministrationMutationResult.CredentialsChanged
 
     override suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome {
         events += "preflight"
-        return trustOutcome
+        return preflightHandler(profile)
     }
     override suspend fun connect(request: ConnectRequest): ConnectOutcome {
         events += "connect"
@@ -1224,6 +1406,7 @@ private class FakeConsoleBackend(
         events += "disconnect"
     }
     override fun reconnect() = Unit
+    override fun cancelReconnect() = Unit
     override fun setForeground(isForeground: Boolean) = Unit
     override fun attachVideoSurface(surface: Surface, width: Int, height: Int) = Unit
     override fun resizeVideoSurface(width: Int, height: Int) = Unit
@@ -1249,7 +1432,7 @@ private class FakeConsoleBackend(
         frameDetectionWrites += enabled
     }
     override fun resetHid() = Unit
-    override fun power(action: PowerAction) = Unit
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) = Unit
     override fun pasteText(request: ApprovedPasteRequest) = Unit
     override fun cancelPaste() = Unit
 

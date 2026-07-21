@@ -150,7 +150,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         onAuthenticationExpired = { binding -> expireAuthenticatedSession(binding) },
         onRejected = { message ->
             mutableSession.update { current ->
-                if (current.connection == ConnectionState.Connected) {
+                if (current.connection.isSessionUsable) {
                     current.withActionFeedback(message)
                 } else {
                     current
@@ -270,7 +270,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     override suspend fun connect(request: ConnectRequest): ConnectOutcome = withContext(workerDispatcher) {
         closeCommandAcceptanceBarrier()
         controlGate.invalidate()
-        cancelReconnect()
+        cancelReconnectJob()
         val operationJob = currentCoroutineContext()[Job]
         val accepted = synchronized(stateLock) {
             if (closed || !foreground) false else {
@@ -430,7 +430,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     override suspend fun disconnect() {
         closeCommandAcceptanceBarrier()
         controlGate.invalidate()
-        cancelReconnect()
+        cancelReconnectJob()
         withContext(workerDispatcher) {
             cancelPasteAndJoin(userInitiated = false)
             lifecycleMutex.withLock {
@@ -446,6 +446,30 @@ internal class NanoKvmConsoleBackend internal constructor(
             ReconnectFailure(IOException("Manual reconnect requested")),
             immediateFirstAttempt = true,
         )
+    }
+
+    override fun cancelReconnect() {
+        val cancelled = synchronized(stateLock) {
+            if (mutableSession.value.connection != ConnectionState.Reconnecting) {
+                return@synchronized null
+            }
+            val job = reconnectJob ?: return@synchronized null
+            reconnectJob = null
+            mutableSession.value = mutableSession.value.copy(
+                connection = ConnectionState.Failed,
+                status = ConsoleMessage.ReconnectCancelled,
+                reconnectAttempt = null,
+                reconnectMaximumAttempts = null,
+                nextReconnectDelayMillis = null,
+            )
+            job
+        }
+        if (cancelled != null) {
+            cancelled.cancel(CancellationException("Reconnect cancelled by operator"))
+            controlGate.invalidate()
+            requestPasteCancellation(userInitiated = false)
+            releaseAllInputNow()
+        }
     }
 
     override fun setForeground(isForeground: Boolean) {
@@ -466,7 +490,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
         closeCommandAcceptanceBarrier()
         controlGate.invalidate()
-        cancelReconnect()
+        cancelReconnectJob()
         connectToCancel?.cancel(CancellationException("App moved to background"))
         releaseAllInput()
         val administrationJobs = synchronized(stateLock) {
@@ -718,7 +742,9 @@ internal class NanoKvmConsoleBackend internal constructor(
     override fun updateVideo(settings: VideoSettings) {
         scope.launch {
             lifecycleMutex.withLock {
-                val activeSession = authenticatedSession
+                val activeSession = synchronized(stateLock) {
+                    if (currentSessionBindingLocked() == null) null else authenticatedSession
+                }
                 if (activeSession == null) {
                     mutableSession.update {
                         it.withActionFeedback(ConsoleMessage.ConnectBeforeChangingVideoSettings)
@@ -740,13 +766,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                     videoSettings = settings
                     closeVideoAndAwaitDecoderReleaseLocked()
                     forgetVideoSurfaceLocked()
-                    mutableSession.update {
-                        it.copy(
-                            videoSettings = settings,
-                            videoSurfaceGeneration = it.videoSurfaceGeneration + 1,
-                            framesPerSecond = null,
-                        ).withActionFeedback(ConsoleMessage.VideoSettingsApplied)
-                    }
+                    mutableSession.update { it.withAppliedVideoSettings(settings) }
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     mutableSession.update {
@@ -1131,7 +1151,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             mutableSession.update { current ->
                 current.copy(
                     administration = AdministrationUiState(
-                        available = current.connection == ConnectionState.Connected,
+                        available = current.connection.isSessionUsable,
                     ),
                 )
             }
@@ -1468,7 +1488,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         operatorSurfaceVisible = visible
         if (visible) {
             mutableOperatorState.update {
-                it.copy(available = mutableSession.value.connection == ConnectionState.Connected)
+                it.copy(available = mutableSession.value.connection.isSessionUsable)
             }
             installedGateway?.terminal?.onForeground()
             startOperatorSurfaceWorkIfNeeded()
@@ -1485,7 +1505,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             }
             jobs.forEach { it.cancel(CancellationException("Operator surface closed")) }
             mutableOperatorState.value = OperatorUiState(
-                available = mutableSession.value.connection == ConnectionState.Connected,
+                available = mutableSession.value.connection.isSessionUsable,
             )
         }
     }
@@ -1725,7 +1745,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             val active = authenticatedSession
             val generation = mutableSession.value.sessionGeneration
             if (
-                active != null && mutableSession.value.connection == ConnectionState.Connected &&
+                active != null && mutableSession.value.connection.isSessionUsable &&
                 !closed && foreground && acceptingCommands
             ) active to generation else null
         }
@@ -2026,9 +2046,20 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    override fun power(action: PowerAction) {
+    override fun power(destination: ApprovedCoreDestination, action: PowerAction) {
+        val approvedBinding = synchronized(stateLock) {
+            currentSessionBindingLocked()?.takeIf(destination::matches)
+        }
+        if (approvedBinding == null) {
+            publishCoreDestinationChanged()
+            return
+        }
         if (action is PowerAction.CtrlAltDelete) {
-            runControlAfterPaste(CONTROL_CTRL_ALT_DELETE, ConsoleMessage.CtrlAltDeleteSent) {
+            runControlAfterPaste(
+                key = CONTROL_CTRL_ALT_DELETE,
+                successMessage = ConsoleMessage.CtrlAltDeleteSent,
+                expectedBinding = approvedBinding,
+            ) {
                 val socket = synchronized(stateLock) { input }
                 socket?.sendKeyboardChord(
                     modifiers = setOf(HidModifier.LEFT_CONTROL, HidModifier.LEFT_ALT),
@@ -2040,7 +2071,11 @@ internal class NanoKvmConsoleBackend internal constructor(
             }
             return
         }
-        runControlAfterPaste(CONTROL_GPIO, ConsoleMessage.HostControlSent) { activeSession ->
+        runControlAfterPaste(
+            key = CONTROL_GPIO,
+            successMessage = ConsoleMessage.HostControlSent,
+            expectedBinding = approvedBinding,
+        ) { activeSession ->
             when (action) {
                 PowerAction.ShortPress -> activeSession.console.pressGpio(GpioAction.POWER, 800)
                 PowerAction.Reset -> activeSession.console.pressGpio(GpioAction.RESET, 800)
@@ -2068,7 +2103,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             )
         }
         controlGate.invalidate()
-        cancelReconnect()
+        cancelReconnectJob()
         resources.connectJob?.cancel(CancellationException("Console backend closed"))
         scope.cancel()
         runCatching { releaseAllInputNow(resources.input) }
@@ -2121,10 +2156,10 @@ internal class NanoKvmConsoleBackend internal constructor(
                 return
             }
             scope.launch(start = CoroutineStart.LAZY) {
+                val self = checkNotNull(currentCoroutineContext()[Job])
                 try {
-                    runReconnectPolicy(immediateFirstAttempt, expectedBinding)
+                    runReconnectPolicy(immediateFirstAttempt, expectedBinding, self)
                 } finally {
-                    val self = currentCoroutineContext()[Job]
                     synchronized(stateLock) {
                         if (reconnectJob === self) reconnectJob = null
                     }
@@ -2137,21 +2172,31 @@ internal class NanoKvmConsoleBackend internal constructor(
         created.start()
     }
 
-    private fun cancelReconnect() {
+    private fun cancelReconnectJob() {
         val old = synchronized(stateLock) {
             reconnectJob.also { reconnectJob = null }
         }
         old?.cancel(CancellationException("Reconnect no longer applicable"))
     }
 
+    private fun isReconnectRunCurrent(reconnectRun: Job): Boolean = synchronized(stateLock) {
+        isReconnectRunCurrentLocked(reconnectRun)
+    }
+
+    private fun isReconnectRunCurrentLocked(reconnectRun: Job): Boolean {
+        check(Thread.holdsLock(stateLock))
+        return reconnectJob === reconnectRun && reconnectRun.isActive
+    }
+
     private suspend fun runReconnectPolicy(
         immediateFirstAttempt: Boolean,
         expectedBinding: NanoKvmSessionBinding?,
+        reconnectRun: Job,
     ) {
         cancelPasteAndJoin(userInitiated = false)
         val prepared = lifecycleMutex.withLock {
             if (
-                closed || !foreground || client == null ||
+                !isReconnectRunCurrent(reconnectRun) || closed || !foreground || client == null ||
                 (expectedBinding != null && !synchronized(stateLock) {
                     matchesAuthenticatedSessionBindingLocked(expectedBinding)
                 })
@@ -2161,16 +2206,21 @@ internal class NanoKvmConsoleBackend internal constructor(
             // This is serialized with connect/replacement ownership. A late failure cannot clear
             // feature owners installed by a newer binding after its initial callback check.
             invalidateSessionFeatureSet()
-            mutableSession.update {
-                it.copy(
+            synchronized(stateLock) {
+                if (!isReconnectRunCurrentLocked(reconnectRun)) return@withLock false
+                mutableSession.value = mutableSession.value.copy(
                     connection = ConnectionState.Reconnecting,
                     status = ConsoleMessage.PreparingToReconnect,
                 )
             }
             stopStreamingLocked()
+            if (!isReconnectRunCurrent(reconnectRun)) return@withLock false
             forgetVideoSurfaceLocked()
-            mutableSession.update {
-                it.copy(videoSurfaceGeneration = it.videoSurfaceGeneration + 1)
+            synchronized(stateLock) {
+                if (!isReconnectRunCurrentLocked(reconnectRun)) return@withLock false
+                mutableSession.value = mutableSession.value.copy(
+                    videoSurfaceGeneration = mutableSession.value.videoSurfaceGeneration + 1,
+                )
             }
             true
         }
@@ -2182,37 +2232,43 @@ internal class NanoKvmConsoleBackend internal constructor(
                 val delaySeconds = ((progress.delayMillis + 999L) / 1_000L)
                     .coerceAtMost(Int.MAX_VALUE.toLong())
                     .toInt()
-                mutableSession.update {
-                    it.copy(
-                        connection = ConnectionState.Reconnecting,
-                        status = if (progress.delayMillis == 0L) {
-                            ConsoleMessage.ReconnectAttempt(
-                                progress.attempt,
-                                progress.maximumAttempts,
-                            )
-                        } else {
-                            ConsoleMessage.ReconnectAttemptDelayed(
-                                progress.attempt,
-                                progress.maximumAttempts,
-                                delaySeconds,
-                            )
-                        },
-                        reconnectAttempt = progress.attempt,
-                        reconnectMaximumAttempts = progress.maximumAttempts,
-                        nextReconnectDelayMillis = progress.delayMillis,
-                    )
+                synchronized(stateLock) {
+                    if (isReconnectRunCurrentLocked(reconnectRun)) {
+                        mutableSession.value = mutableSession.value.copy(
+                            connection = ConnectionState.Reconnecting,
+                            status = if (progress.delayMillis == 0L) {
+                                ConsoleMessage.ReconnectAttempt(
+                                    progress.attempt,
+                                    progress.maximumAttempts,
+                                )
+                            } else {
+                                ConsoleMessage.ReconnectAttemptDelayed(
+                                    progress.attempt,
+                                    progress.maximumAttempts,
+                                    delaySeconds,
+                                )
+                            },
+                            reconnectAttempt = progress.attempt,
+                            reconnectMaximumAttempts = progress.maximumAttempts,
+                            nextReconnectDelayMillis = progress.delayMillis,
+                        )
+                    }
                 }
             },
-            attempt = { reconnectInputOnce() },
+            attempt = { reconnectInputOnce(reconnectRun) },
         )
 
+        if (!isReconnectRunCurrent(reconnectRun)) return
         when (result) {
             ReconnectRunResult.Connected -> Unit
             is ReconnectRunResult.Terminal -> if (result.failure.isAuthenticationExpiry()) {
-                expectedBinding?.let(::expireAuthenticatedSession)
+                if (isReconnectRunCurrent(reconnectRun)) {
+                    expectedBinding?.let(::expireAuthenticatedSession)
+                }
             } else {
-                mutableSession.update {
-                    it.copy(
+                synchronized(stateLock) {
+                    if (!isReconnectRunCurrentLocked(reconnectRun)) return
+                    mutableSession.value = mutableSession.value.copy(
                         connection = ConnectionState.Failed,
                         status = ConsoleMessage.ConnectionFailed(
                             result.failure.toConnectionFailure(),
@@ -2223,8 +2279,9 @@ internal class NanoKvmConsoleBackend internal constructor(
                     )
                 }
             }
-            is ReconnectRunResult.Exhausted -> mutableSession.update {
-                it.copy(
+            is ReconnectRunResult.Exhausted -> synchronized(stateLock) {
+                if (!isReconnectRunCurrentLocked(reconnectRun)) return
+                mutableSession.value = mutableSession.value.copy(
                     connection = ConnectionState.Failed,
                     status = ConsoleMessage.ReconnectStopped(
                         result.attempts,
@@ -2238,8 +2295,12 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    private suspend fun reconnectInputOnce(): ReconnectAttemptResult = lifecycleMutex.withLock {
-        if (closed || !foreground) throw CancellationException("Reconnect is no longer applicable")
+    private suspend fun reconnectInputOnce(
+        reconnectRun: Job,
+    ): ReconnectAttemptResult = lifecycleMutex.withLock {
+        if (!isReconnectRunCurrent(reconnectRun) || closed || !foreground) {
+            throw CancellationException("Reconnect is no longer applicable")
+        }
         val activeClient = client ?: throw CancellationException("Session was disconnected")
         val activeSession = authenticatedSession ?: throw CancellationException("Session was disconnected")
         var pendingInput: NanoKvmInputSocket? = null
@@ -2258,6 +2319,9 @@ internal class NanoKvmConsoleBackend internal constructor(
                 throw state.cause
             }
             synchronized(stateLock) {
+                if (!isReconnectRunCurrentLocked(reconnectRun)) {
+                    throw CancellationException("Reconnect is no longer applicable")
+                }
                 val sessionGeneration = ++sessionGenerationCounter
                 input = createdInput
                 installSessionFeatureSetLocked(activeSession, sessionGeneration)
@@ -2295,7 +2359,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     }
 
     private suspend fun startVideoIfReadyLocked(knownToken: SessionToken? = null) {
-        if (!foreground || mutableSession.value.connection != ConnectionState.Connected) return
+        if (!foreground || !mutableSession.value.connection.isSessionUsable) return
         val activeClient = client ?: return
         val output = synchronized(stateLock) { surface } ?: return
         if (!output.isValid) return
@@ -2316,7 +2380,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         val accepted = synchronized(stateLock) {
             if (
                 closed || !foreground ||
-                mutableSession.value.connection != ConnectionState.Connected ||
+                !mutableSession.value.connection.isSessionUsable ||
                 surface !== output || !output.isValid
             ) {
                 false
@@ -2389,7 +2453,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                     .coerceAtMost(Int.MAX_VALUE.toLong())
                     .toInt()
                 mutableSession.update { current ->
-                    if (current.connection != ConnectionState.Connected) {
+                    if (!current.connection.isSessionUsable) {
                         current
                     } else {
                         current.copy(
@@ -2642,7 +2706,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         val current = mutableSession.value
         if (
             closed || !foreground || !acceptingCommands ||
-            current.connection != ConnectionState.Connected
+            !current.connection.isSessionUsable
         ) {
             return null
         }
@@ -5007,7 +5071,11 @@ internal class NanoKvmConsoleBackend internal constructor(
                     newGateway = checkNotNull(phase3Lifecycle.resolve(newBinding))
                     mutableSession.update { current ->
                         current.copy(
-                            connection = ConnectionState.Connected,
+                            connection = if (current.connection == ConnectionState.Degraded) {
+                                ConnectionState.Degraded
+                            } else {
+                                ConnectionState.Connected
+                            },
                             sessionGeneration = generation,
                             phase3 = Phase3FeatureUiState(
                                 available = true,
@@ -5281,7 +5349,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                 closed ||
                 !foreground ||
                 !acceptingCommands ||
-                current.connection != ConnectionState.Connected ||
+                !current.connection.isSessionUsable ||
                 activeSession == null ||
                 activeInput == null ||
                 !destinationMatches
@@ -5440,7 +5508,10 @@ internal class NanoKvmConsoleBackend internal constructor(
         requestPasteCancellation(userInitiated)?.join()
     }
 
-    private fun queueKeyboardCommandAfterPaste(block: suspend () -> Unit): Job? {
+    private fun queueKeyboardCommandAfterPaste(
+        onEpochRejected: (() -> Unit)? = null,
+        block: suspend () -> Unit,
+    ): Job? {
         var cancelledPaste: Job? = null
         val queued = synchronized(stateLock) {
             if (closed || !foreground || !acceptingCommands) return@synchronized null
@@ -5451,7 +5522,11 @@ internal class NanoKvmConsoleBackend internal constructor(
                 cancelledPaste?.join()
                 previous?.join()
                 pasteExecutionMutex.withLock {
-                    if (isCommandEpochCurrent(epoch)) block()
+                    if (isCommandEpochCurrent(epoch)) {
+                        block()
+                    } else {
+                        onEpochRejected?.invoke()
+                    }
                 }
             }
             queuedKeyboardTail = created
@@ -5562,7 +5637,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             active
         }
         controlGate.invalidate()
-        cancelReconnect()
+        cancelReconnectJob()
         releaseAllInputNow()
         invalidateSessionFeatureSet()
         requestPasteCancellation(userInitiated = false)
@@ -5605,7 +5680,7 @@ internal class NanoKvmConsoleBackend internal constructor(
 
     private fun isCommandEpochCurrent(epoch: Long): Boolean = synchronized(stateLock) {
         !closed && foreground && acceptingCommands && commandAcceptanceEpoch == epoch &&
-            mutableSession.value.connection == ConnectionState.Connected
+            mutableSession.value.connection.isSessionUsable
     }
 
     private fun isCurrentPasteLocked(operation: ActivePasteOperation): Boolean {
@@ -5617,7 +5692,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             commandAcceptanceEpoch == operation.commandEpoch &&
             authenticatedSession === operation.activeSession &&
             input === operation.activeInput &&
-            current.connection == ConnectionState.Connected &&
+            current.connection.isSessionUsable &&
             operation.request.matchesDestination(
                 profileId = operation.activeSession.profileId,
                 authority = operation.activeSession.authority,
@@ -5628,17 +5703,48 @@ internal class NanoKvmConsoleBackend internal constructor(
     private fun runControlAfterPaste(
         key: String,
         successMessage: ConsoleMessage.ActionFeedback,
+        expectedBinding: NanoKvmSessionBinding? = null,
         block: suspend (AuthenticatedNanoKvmSession) -> Unit,
     ) {
         val lease = controlGate.claim(key) ?: return
-        val queued = queueKeyboardCommandAfterPaste {
+        val queued = queueKeyboardCommandAfterPaste(
+            onEpochRejected = if (expectedBinding == null) {
+                null
+            } else {
+                ::publishCoreDestinationChanged
+            },
+        ) {
             lifecycleMutex.withLock {
                 val activeSession = authenticatedSession ?: return@withLock
-                if (mutableSession.value.connection != ConnectionState.Connected) return@withLock
+                if (!mutableSession.value.connection.isSessionUsable) return@withLock
+                if (
+                    expectedBinding != null && synchronized(stateLock) {
+                        currentSessionBindingLocked() != expectedBinding
+                    }
+                ) {
+                    publishCoreDestinationChanged()
+                    return@withLock
+                }
                 try {
-                    val executed = controlGate.executeIfCurrent(lease) { block(activeSession) }
+                    var destinationChanged = false
+                    val executed = controlGate.executeIfCurrent(lease) {
+                        val destinationStillMatches = synchronized(stateLock) {
+                            authenticatedSession === activeSession &&
+                                (expectedBinding == null ||
+                                    currentSessionBindingLocked() == expectedBinding)
+                        }
+                        if (destinationStillMatches) {
+                            block(activeSession)
+                        } else {
+                            destinationChanged = expectedBinding != null
+                        }
+                    }
+                    if (destinationChanged) {
+                        publishCoreDestinationChanged()
+                        return@withLock
+                    }
                     if (executed && authenticatedSession === activeSession) mutableSession.update {
-                        if (it.connection == ConnectionState.Connected) {
+                        if (it.connection.isSessionUsable) {
                             it.withActionFeedback(successMessage)
                         } else {
                             it
@@ -5659,7 +5765,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                         return@withLock
                     }
                     if (authenticatedSession === activeSession) mutableSession.update {
-                        if (it.connection == ConnectionState.Connected) {
+                        if (it.connection.isSessionUsable) {
                             it.withActionFeedback(
                                 ConsoleMessage.CommandFailed(
                                     error.toConnectionFailure(),
@@ -5674,11 +5780,22 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
         if (queued == null) {
             controlGate.release(lease)
+            if (expectedBinding != null) publishCoreDestinationChanged()
         } else {
             // The command can be rejected by a newer lifecycle epoch before [block] runs, or the
             // owning scope can be cancelled. Completion is therefore the only reliable release
             // point for the control lease.
             queued.invokeOnCompletion { controlGate.release(lease) }
+        }
+    }
+
+    private fun publishCoreDestinationChanged() {
+        mutableSession.update { current ->
+            if (current.connection.isSessionUsable) {
+                current.withActionFeedback(ConsoleMessage.HostControlSessionChanged)
+            } else {
+                current
+            }
         }
     }
 
@@ -5693,14 +5810,18 @@ internal class NanoKvmConsoleBackend internal constructor(
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
                     updateSessionFromVideo {
-                        it.copy(
-                            streamLabel = status.transport.toVideoStreamDescriptor(),
-                            status = if (it.connection == ConnectionState.Connected) {
-                                ConsoleMessage.ConnectingVideo(
-                                    status.transport.toVideoTransportDescriptor(),
-                                )
-                            } else it.status,
-                        )
+                        if (it.connection == ConnectionState.Degraded && it.streamLabel.isFallback) {
+                            it
+                        } else {
+                            it.copy(
+                                streamLabel = status.transport.toVideoStreamDescriptor(),
+                                status = if (it.connection.isSessionUsable) {
+                                    ConsoleMessage.ConnectingVideo(
+                                        status.transport.toVideoTransportDescriptor(),
+                                    )
+                                } else it.status,
+                            )
+                        }
                     }
                 }
                 is NanoKvmVideoStatus.Streaming -> {
@@ -5709,15 +5830,21 @@ internal class NanoKvmConsoleBackend internal constructor(
                     } else {
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
-                    updateSessionFromVideo {
-                        it.copy(
-                            streamLabel = status.transport.toVideoStreamDescriptor(),
-                            status = if (it.connection == ConnectionState.Connected) {
-                                null
-                            } else {
-                                it.status
-                            },
-                        )
+                    updateSessionFromVideo { current ->
+                        if (!current.connection.isSessionUsable) return@updateSessionFromVideo current
+                        val transport = status.transport.toVideoTransportDescriptor()
+                        val remainsOnFallback = current.connection == ConnectionState.Degraded &&
+                            current.streamLabel.isFallback &&
+                            current.streamLabel.transport == transport
+                        if (remainsOnFallback) {
+                            current
+                        } else {
+                            current.copy(
+                                connection = ConnectionState.Connected,
+                                streamLabel = status.transport.toVideoStreamDescriptor(),
+                                status = null,
+                            )
+                        }
                     }
                 }
                 is NanoKvmVideoStatus.FallingBack -> {
@@ -5726,22 +5853,22 @@ internal class NanoKvmConsoleBackend internal constructor(
                     } else {
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
-                    updateSessionFromVideo {
-                        it.copy(
+                    updateSessionFromVideo { current ->
+                        if (!current.connection.isSessionUsable) return@updateSessionFromVideo current
+                        current.copy(
+                            connection = ConnectionState.Degraded,
                             streamLabel = status.to.toVideoStreamDescriptor(fallback = true),
-                            status = if (it.connection == ConnectionState.Connected) {
-                                ConsoleMessage.VideoFallback(
-                                    from = status.from.toVideoTransportDescriptor(),
-                                    to = status.to.toVideoTransportDescriptor(),
-                                )
-                            } else it.status,
+                            status = ConsoleMessage.VideoFallback(
+                                from = status.from.toVideoTransportDescriptor(),
+                                to = status.to.toVideoTransportDescriptor(),
+                            ),
                         )
                     }
                 }
                 is NanoKvmVideoStatus.Error -> {
                     mjpegFrameDetectionCoordinator.onMjpegInactive()
                     val shouldReconnect = synchronized(stateLock) {
-                        !closed && mutableSession.value.connection == ConnectionState.Connected
+                        !closed && mutableSession.value.connection.isSessionUsable
                     }
                     if (shouldReconnect) {
                         scheduleReconnect(
@@ -6040,6 +6167,35 @@ internal class NanoKvmConsoleBackend internal constructor(
         const val PHASE3_TRANSFER_POLL_MILLIS = 2_500L
         val MJPEG_PAINT = Paint(Paint.FILTER_BITMAP_FLAG)
     }
+}
+
+/**
+ * Records accepted encoder settings without claiming that a degraded video path recovered.
+ * Recovery is published only by a subsequent streaming callback for the newly validated transport.
+ */
+internal fun BackendSession.withAppliedVideoSettings(settings: VideoSettings): BackendSession {
+    val unresolvedFallback =
+        connection == ConnectionState.Degraded && streamLabel.isFallback
+    val adoptsCurrentTransportAsPrimary = unresolvedFallback &&
+        settings.transportPreference.explicitTransport() == streamLabel.transport
+    return copy(
+        videoSettings = settings,
+        streamLabel = if (adoptsCurrentTransportAsPrimary) {
+            streamLabel.copy(isFallback = false)
+        } else {
+            streamLabel
+        },
+        videoSurfaceGeneration = videoSurfaceGeneration + 1,
+        framesPerSecond = null,
+        status = if (unresolvedFallback) status else null,
+    ).withActionFeedback(ConsoleMessage.VideoSettingsApplied)
+}
+
+private fun VideoTransportPreference.explicitTransport(): VideoTransportDescriptor? = when (this) {
+    VideoTransportPreference.Auto -> null
+    VideoTransportPreference.WEBRTC -> VideoTransportDescriptor.WebRtc
+    VideoTransportPreference.H264 -> VideoTransportDescriptor.DirectH264
+    VideoTransportPreference.MJPEG -> VideoTransportDescriptor.Mjpeg
 }
 
 /** Maps transport/protocol failures to a bounded presentation contract without exposing details. */
