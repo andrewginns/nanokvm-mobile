@@ -18,6 +18,8 @@ protected production signing identity and the retained evidence in
   bytes do not reuse the already shared 0.3.5/code-12 development identity.
 - Added guarded production-key creation, clean-build evidence, signing-lineage,
   and APK signing helpers for a traceable direct-GitHub distribution path.
+- Completed the strict dependency-verification manifest for fresh-cache release
+  builds so missing Maven metadata cannot be hidden by a warm developer cache.
 
 ## [0.3.5] - Development snapshot
 

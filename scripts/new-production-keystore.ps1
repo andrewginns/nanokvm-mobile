@@ -38,18 +38,20 @@ function Invoke-NativeInteractive {
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
 
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+
+        [Parameter(Mandatory = $true)]
+        [ref]$ExitCode
     )
 
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & $FilePath @Arguments | Out-Host
-        $exitCode = $LASTEXITCODE
+        & $FilePath @Arguments
+        $ExitCode.Value = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousPreference
     }
-    return $exitCode
 }
 
 function Assert-NoReparsePointInPath {
@@ -191,9 +193,11 @@ $generateArguments = @(
     "-validity", "10000",
     "-dname", $DistinguishedName
 )
-$generateExitCode = Invoke-NativeInteractive `
+$generateExitCode = 1
+Invoke-NativeInteractive `
     -FilePath $resolvedKeytool `
-    -Arguments $generateArguments
+    -Arguments $generateArguments `
+    -ExitCode ([ref]$generateExitCode)
 if ($generateExitCode -ne 0) {
     if (Test-Path -LiteralPath $absoluteKeystore) {
         Remove-Item -LiteralPath $absoluteKeystore -Force
@@ -205,21 +209,35 @@ Assert-SingleHardLink -Path $absoluteKeystore
 Assert-ProtectedAcl -Path $absoluteKeystore
 
 Write-Output "Re-enter the password once so keytool can report the public certificate identity."
-$certificateResult = Invoke-NativeCapture `
-    -FilePath $resolvedKeytool `
-    -Arguments @("-list", "-v", "-keystore", $absoluteKeystore, "-alias", $KeyAlias)
-$certificateOutput = $certificateResult.Output
-if ($certificateResult.ExitCode -ne 0) {
-    throw (
-        "The keystore was created, but its public certificate could not be inspected. " +
-        "Do not delete it; rerun keytool -list -v manually."
-    )
+$certificateFile = Join-Path $resolvedDirectoryItem.FullName (
+    ".nanokvm-public-certificate-" + [guid]::NewGuid().ToString("N") + ".der"
+)
+$exportExitCode = 1
+try {
+    Invoke-NativeInteractive `
+        -FilePath $resolvedKeytool `
+        -Arguments @(
+            "-exportcert",
+            "-storetype", "PKCS12",
+            "-keystore", $absoluteKeystore,
+            "-alias", $KeyAlias,
+            "-file", $certificateFile
+        ) `
+        -ExitCode ([ref]$exportExitCode)
+    if ($exportExitCode -ne 0 -or -not (Test-Path -LiteralPath $certificateFile -PathType Leaf)) {
+        throw (
+            "The keystore was created, but its public certificate could not be exported. " +
+            "Do not delete the keystore; inspect it manually with keytool."
+        )
+    }
+    $fingerprint = (
+        Get-FileHash -Algorithm SHA256 -LiteralPath $certificateFile
+    ).Hash.ToLowerInvariant()
+} finally {
+    if (Test-Path -LiteralPath $certificateFile -PathType Leaf) {
+        Remove-Item -LiteralPath $certificateFile -Force
+    }
 }
-$fingerprintMatch = [regex]::Match($certificateOutput, 'SHA256:\s*([0-9A-Fa-f:]{95})')
-if (-not $fingerprintMatch.Success) {
-    throw "The keystore was created, but the SHA-256 certificate fingerprint was not found."
-}
-$fingerprint = $fingerprintMatch.Groups[1].Value.Replace(":", "").ToLowerInvariant()
 
 Write-Output "Created production keystore: $absoluteKeystore"
 Write-Output "Key alias: $KeyAlias"

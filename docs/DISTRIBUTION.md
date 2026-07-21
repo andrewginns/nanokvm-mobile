@@ -173,7 +173,7 @@ The evidence helper invokes this clean build gate with JDK 21 and strict
 dependency verification:
 
 ```powershell
-.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
+.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --refresh-dependencies --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
 ```
 
 The repository build produces:

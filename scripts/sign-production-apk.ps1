@@ -57,18 +57,20 @@ function Invoke-NativeInteractive {
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
 
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+
+        [Parameter(Mandatory = $true)]
+        [ref]$ExitCode
     )
 
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & $FilePath @Arguments | Out-Host
-        $exitCode = $LASTEXITCODE
+        & $FilePath @Arguments
+        $ExitCode.Value = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousPreference
     }
-    return $exitCode
 }
 
 function Get-ApkMetadata {
@@ -668,9 +670,11 @@ try {
     $stagedVerification = Join-Path $resolvedStaging (Split-Path -Leaf $verificationPath)
     $stagedMetadata = Join-Path $resolvedStaging (Split-Path -Leaf $metadataPath)
 
-    $alignmentExitCode = Invoke-NativeInteractive `
+    $alignmentExitCode = 1
+    Invoke-NativeInteractive `
         -FilePath $zipAlign `
-        -Arguments @("-f", "-P", "16", "4", $resolvedUnsignedApk, $stagedAligned)
+        -Arguments @("-f", "-P", "16", "4", $resolvedUnsignedApk, $stagedAligned) `
+        -ExitCode ([ref]$alignmentExitCode)
     if ($alignmentExitCode -ne 0) {
         throw "zipalign failed with exit code $alignmentExitCode."
     }
@@ -686,9 +690,11 @@ try {
         "--out", $stagedSigned,
         $stagedAligned
     )
-    $signingExitCode = Invoke-NativeInteractive `
+    $signingExitCode = 1
+    Invoke-NativeInteractive `
         -FilePath $resolvedJava `
-        -Arguments $signingArguments
+        -Arguments $signingArguments `
+        -ExitCode ([ref]$signingExitCode)
     if ($signingExitCode -ne 0) {
         throw "APK signing failed with exit code $signingExitCode."
     }
@@ -707,9 +713,11 @@ try {
         throw "The signed APK uses a forbidden development/debug certificate."
     }
 
-    $alignmentCheckExitCode = Invoke-NativeInteractive `
+    $alignmentCheckExitCode = 1
+    Invoke-NativeInteractive `
         -FilePath $zipAlign `
-        -Arguments @("-c", "-P", "16", "4", $stagedSigned)
+        -Arguments @("-c", "-P", "16", "4", $stagedSigned) `
+        -ExitCode ([ref]$alignmentCheckExitCode)
     if ($alignmentCheckExitCode -ne 0) {
         throw "The signed APK failed final zipalign verification."
     }

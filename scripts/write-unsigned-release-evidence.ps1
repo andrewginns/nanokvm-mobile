@@ -271,6 +271,7 @@ $strictBuildArguments = @(
     "--no-daemon",
     "--no-parallel",
     "--no-configuration-cache",
+    "--refresh-dependencies",
     "--dependency-verification=strict",
     "clean",
     "test",
