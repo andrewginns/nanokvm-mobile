@@ -30,14 +30,14 @@ Important outputs are:
 - `app/build/outputs/mapping/<variant>/` — R8 mapping, seeds, usage and effective
   configuration.
 
-GitHub-hosted build/test lanes and public artifact uploads are intentionally not
-configured during active development. Maintainers run this gate locally and
-retain the exact command, source commit, dirty-tree status, output hashes, and
-relevant reports in a private evidence archive. These unsigned outputs are not
-post-signing release artifacts or checksums. The debug-signed benchmark and R8
-mapping outputs must also remain private test evidence. Before the first binary
-release, the release process must create an exact-source archive and checksum
-manifest without assuming that development build output is publishable.
+GitHub-hosted build/test lanes are intentionally not used as an unattended
+release gate. Maintainers run this gate locally and retain the exact command,
+source commit, dirty-tree status, output hashes, and relevant reports in a
+private evidence archive. These unsigned outputs are not post-signing release
+artifacts or checksums. The debug-signed benchmark and R8 mapping outputs must
+also remain private test evidence. A public pre-release is created only through
+the exact-source evidence and protected-signing process in `DISTRIBUTION.md`;
+development build output is never uploaded as though it were publishable.
 
 ### Debug signing and update compatibility
 

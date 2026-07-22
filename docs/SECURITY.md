@@ -169,14 +169,15 @@ checks the Gradle distribution hash, and enables strict Gradle verification
 metadata. Release builds use R8 and resource shrinking. The local strict build
 can generate a CycloneDX SBOM, R8 mapping/usage files, an unsigned APK/AAB, and
 versioned Baseline/Startup Profiles. GitHub-hosted CI and public build-artifact
-publication are intentionally disabled during active development. Current
-outputs, including the debug-signed benchmark, mapping, and configuration, are
-local evidence only and are not a public release bundle.
+publication are not used as an unattended trust boundary. Maintainers build and
+review locally; only the audited production-signing flow in `DISTRIBUTION.md`
+may create a public pre-release bundle. Ordinary local outputs, including the
+unsigned release, debug-signed benchmark, mapping, and configuration, remain
+private evidence and are not public release assets.
 
-Those controls do not make the current unsigned artifact a release. A
-production candidate must be signed through the documented release process and
-must retain source, licence/notice material, SBOM, dependency-vulnerability
-review result,
+Those controls do not make an unsigned artifact a release. A public candidate
+is signed through the documented release process and retains source,
+licence/notice material, SBOM, dependency-vulnerability review result,
 checksums, signing identity, mapping/usage output, and signed/minified smoke
 evidence. Reproducibility requires two isolated builds to match after accounting
 for the documented signing step. See `DISTRIBUTION.md`.

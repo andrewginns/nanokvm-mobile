@@ -194,15 +194,15 @@ The repository build produces:
   and effective configuration; and
 - generated profile sources plus packaged Baseline Profile metadata.
 
-GitHub-hosted build/test workflows and public artifact uploads are intentionally
-disabled during active development. Maintainers run the strict gate locally and
-retain its command output and artifacts privately against the exact commit.
-Before a production candidate is approved, run the evidence helper to create its
-exact tagged-source archive, durable build-artifact directory, and reviewed
-unsigned evidence manifest from the frozen release commit. Preserve the JSON,
-its companion artifact directory, and the strict-build log as one evidence set.
-Generate a separate checksum manifest after production signing; no
-development-output hash can identify the final published bytes.
+GitHub-hosted build/test workflows are intentionally not used as an unattended
+release gate. Maintainers run the strict gate locally and retain its command
+output and artifacts privately against the exact commit; public uploads are a
+separate, explicit release-owner action. Before a candidate is signed, run the
+evidence helper to create its exact tagged-source archive, durable build-artifact
+directory, and reviewed unsigned evidence manifest from the frozen release
+commit. Preserve the JSON, its companion artifact directory, and the strict-build
+log as one evidence set. Generate a separate checksum manifest after production
+signing; no development-output hash can identify the final published bytes.
 
 The helper retains and hashes its complete JVM test/release-lint output, merged
 release manifest and packaged Network Security Config, resolved release runtime
@@ -256,6 +256,40 @@ for crash/security diagnosis and release traceability unless the release owner
 deliberately publishes it. Its hash and custody location belong in the internal
 release record.
 
+## Public pre-release candidate lane
+
+A production-signed APK may be published for opt-in hobbyist testing as a
+GitHub **pre-release** before the stable-production matrix is complete, but only
+when every requirement below is satisfied:
+
+- the source is clean, frozen under the exact annotated tag, free of private
+  material, and accompanied by two independently reconciled unsigned builds;
+- the long-lived production key is outside the repository, its public lineage
+  is recorded, and two encrypted backups in separately controlled locations
+  have been confirmed before the first signing operation;
+- the signing helper consumes only the reviewed unsigned evidence and emits a
+  non-debuggable, non-profileable, aligned APK with verified v2/v3 signatures,
+  package/version identity, checksum, certificate digest, and release metadata;
+- the exact signed bytes selected for upload install and cold-launch on a
+  supported Android target without a crash, and the in-app About surface shows
+  the expected version, source tag, and signing identity;
+- the complete corresponding-source, licence/notice, dependency inventory,
+  SBOM, APK, checksum, certificate-verification, and release-note bundle is
+  published together;
+- the GitHub release is marked **pre-release**, is not marked **Latest**, and
+  says prominently that it is not stable or production-approved;
+- release notes enumerate every open Android/API, physical ARM, real NanoKVM,
+  accessibility, destructive, endurance, security/privacy, and performance
+  gate, plus the first-production-lineage migration consequence; and
+- no known source/test P0 or P1 correctness, security, credential, input-release,
+  data-loss, or licence/source-link defect remains undispositioned.
+
+This lane does not convert emulator or source evidence into device, appliance,
+accessibility, or field evidence. Testers must use trusted, recovery-capable
+targets and accept the disclosed gaps. Dynamic signed hashes and smoke results
+belong in the release assets/record so the frozen source tag is not changed
+after signing.
+
 ## Reproducibility
 
 Before claiming reproducibility, build the unsigned release artifact twice in
@@ -271,12 +305,15 @@ source and build recipe.
 
 ## Publication, rollback, and field evidence
 
-Publication requires every blocking item in `RELEASE_CHECKLIST.md` to be closed.
-If a signing, trust, credential, unintended-input, data-loss, or GPL source-link
-problem appears after publication, stop promotion, preserve evidence, publish a
-clear advisory, and withdraw or supersede the artifact through the distribution
-channel. Never reuse a version code for changed bytes, even when the earlier
-artifact was shared only as a development build.
+Stable publication, marking a release **Latest**, or describing a binary as
+production-approved requires every blocking item in `RELEASE_CHECKLIST.md` to
+be closed. Earlier public testing is permitted only through the pre-release
+candidate lane above. If a signing, trust, credential, unintended-input,
+data-loss, or GPL source-link problem appears after publication, stop promotion,
+preserve evidence, publish a clear advisory, and withdraw or supersede the
+artifact through the distribution channel. Never reuse a version code for
+changed bytes, even when the earlier artifact was shared only as a development
+build.
 
 The app has no internal telemetry. After distribution, use opt-in issue reports
 and channel-provided aggregate Android Vitals only where available. Field

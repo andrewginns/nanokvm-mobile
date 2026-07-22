@@ -174,7 +174,7 @@ tests across 83 suites, 76/76 app instrumentation tests, the video module's 1/1
 native WebRTC crash regression, and 1/1 real process-restart test on API 37.
 `WebSocketIngressMemoryInstrumentedTest` was not invoked and no Android heap/PSS
 result is claimed. Exact local build evidence, including historical checkpoints,
-is recorded in `BUILD_VERIFICATION.md`. This remains development evidence: no
-production binary is approved or signed, and the real-appliance,
-compatibility-floor, physical-device, endurance, destructive, and performance
-cases above remain open.
+is recorded in `BUILD_VERIFICATION.md`. A production-signed GitHub pre-release
+candidate does not constitute stable approval or close any row by itself; the
+real-appliance, compatibility-floor, physical-device, accessibility, endurance,
+destructive, signed-journey, and performance cases above remain open.

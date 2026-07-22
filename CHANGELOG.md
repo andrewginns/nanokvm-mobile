@@ -5,11 +5,12 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
-## [0.3.6] - Unreleased
+## [0.3.6] - 2026-07-22 (public pre-release candidate)
 
-Android version code: **13**. This source milestone prepares a minified,
-non-debuggable release candidate. Public distribution remains gated on the
-protected production signing identity and the retained evidence in
+Android version code: **13**. This is the first candidate distributed with the
+protected production signing identity. It is a GitHub pre-release, not a stable
+production approval: unchecked physical-device, accessibility, real-appliance,
+destructive, endurance, and wider Android-matrix items remain open in
 `docs/RELEASE_CHECKLIST.md`.
 
 ### Changed
@@ -26,6 +27,10 @@ protected production signing identity and the retained evidence in
 - The in-app About surface now exposes the exact version/code/source and actual
   installed signing certificate, with offline GPL, privacy, security, project,
   wrapper, and complete pinned WebRTC notice material.
+- Baseline Profile collection now waits for fully rendered destinations and
+  fails closed unless AndroidX observes three identical consecutive rule sets;
+  refreshed Baseline and Startup Profiles are package-verified in the release
+  APK and AAB.
 
 ## [0.3.5] - Development snapshot
 

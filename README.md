@@ -17,13 +17,14 @@ keyboard, and controls that remain reachable in portrait and landscape.
 <sub>NanoKVM Mobile 0.3.5 UI captured on an API 37 emulator. The remote desktop,
 device frame, and desk backdrop are illustrative generated layers.</sub>
 
-## 0.3.6 release-candidate milestone
+## 0.3.6 signed pre-release candidate
 
-The current source milestone is **0.3.6** (Android version code **13**). It
-prepares a minified, non-debuggable candidate, but is not yet an approved,
-production-signed public release. The feature list below describes implemented
-source; capability-gated features still need the device, appliance, and
-signed-candidate evidence recorded in the parity ledger before they can be
+Version **0.3.6** (Android version code **13**) is the project's first
+production-signed public pre-release candidate. It is deliberately not labelled
+as a stable production release: the compatibility-floor, physical-device,
+accessibility, real-appliance, destructive, and endurance gates remain open.
+The feature list below describes implemented source; capability-gated features
+still need the evidence recorded in the parity ledger before they can be
 described as release-verified.
 
 - Saved NanoKVM connections with HTTPS certificate review and pinning.
@@ -100,8 +101,25 @@ STUN/STUNS/TURN/TURNS peers during ICE negotiation.
 
 ## Install and update
 
-There is not yet an approved production binary. For a local-only development
-install, build an APK with the current process's ambient Android debug key:
+The production-signed **0.3.6** APK is published on the
+[v0.3.6 GitHub pre-release page](https://github.com/andrewginns/nanokvm-mobile/releases/tag/v0.3.6).
+Download `NanoKVM-Mobile-0.3.6-v13.apk` together with
+`NanoKVM-Mobile-0.3.6-v13-SHA256SUMS.txt` and
+`NanoKVM-Mobile-0.3.6-v13-signing-certificate-sha256.txt`. The release also
+contains the retained `apksigner` verification and machine-readable release
+metadata. The expected signing-certificate SHA-256 is:
+
+```text
+B8:C5:6C:A6:A2:29:C8:5C:D8:29:DA:21:CF:69:72:19:E2:D1:A1:D5:F9:4D:65:87:19:EB:FA:9E:90:90:75:FD
+```
+
+This is the first production signing lineage. It cannot update a development
+APK signed with the earlier debug identity. Removing a conflicting development
+install erases its app-private profiles, certificate pins, and protected
+credentials, so record anything needed to recreate those connections first.
+
+For a local-only development install, build an APK with the current process's
+ambient Android debug key:
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'

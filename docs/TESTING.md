@@ -93,7 +93,7 @@ thresholds from an unlocked x86_64 emulator.
 | API 34 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
 | API 35 / Android 15 | No retained current-commit result is claimed here | Run instrumentation locally for the current commit and separately run the signed/minified candidate through profile creation, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
 | API 36 / Android 16 | No retained current-commit result is claimed here | Run instrumentation locally and retain the current-commit result |
-| API 37 | The 2026-07-20 0.3.2 checkpoint passed 76/76 app instrumentation tests, 1/1 real-native WebRTC peer test, and 1/1 real process-restart test for a non-secret profile draft; exact scope and exclusions are recorded in `BUILD_VERIFICATION.md` | Repeat and retain the eventual release-source result; this emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, real Keystore, or signed-production-candidate evidence |
+| API 37 | The 2026-07-22 0.3.6 pre-release checkpoint passed 98/98 app instrumentation tests, 1/1 real-native WebRTC peer test, 2/2 strict Baseline Profile generators, 1/1 real process-restart test, and all four executed startup Macrobenchmarks; the two profile generators or four startup benchmarks were intentionally skipped when the complementary rule filter was selected | This emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, real Keystore, accessibility, or signed-candidate critical journeys |
 | Representative physical ARM | Not automated | Required for signed-candidate smoke, startup/frame comparison, real Keystore, input/video, thermal/OEM behavior, memory, and power/network observations |
 | Real NanoKVM | Requires local hardware and private credentials | Run at least 30 continuous minutes each on direct H.264 and forced/fallback MJPEG. If WebRTC is enabled and supported for the candidate, also run 30 minutes and force negotiation/ICE/decoder failure, retaining proof of the fresh WebRTC to H.264 to MJPEG chain; otherwise record WebRTC as an explicit capability-gated exclusion. Include keyboard, pointer, reconnect, foreground loss, frame continuity, memory, and input-release checks |
 
@@ -156,10 +156,10 @@ complete until it also includes:
 - three stable reference runs before regression thresholds become blocking.
 
 An earlier 2026-07-18 API 37 emulator diagnostic contains the four named
-compilation/startup modes and frame traces. The latest 2026-07-20 modernization
-checkpoint regenerated and verified 18,528 Baseline and 15,838 Startup rules;
-the four startup benchmark cases were intentionally skipped rather than rerun as
-performance measurements. The older timing and jank values are diagnostic only;
+compilation/startup modes and frame traces. The 2026-07-22 pre-release checkpoint
+regenerated and verified 18,523 Baseline and 16,133 Startup rules, then retained
+the four startup modes (including the no-compilation cold-start run) and their
+Perfetto traces. Emulator timing and jank values are diagnostic only;
 production benefit and regression thresholds require controlled physical ARM
 evidence.
 

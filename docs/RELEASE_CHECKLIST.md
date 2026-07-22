@@ -1,12 +1,20 @@
 # Release checklist
 
-Current status: **source is public for active development; no binary is approved
-for public distribution**. Hosted build/test automation and release artifact
-uploads are intentionally disabled. This checklist is a template for a named
-production candidate. Unchecked items remain open; source implementation or a
-debug/emulator result does not close a signed-candidate or manual gate.
+Current status: **v0.3.6 is scoped only as a production-signed GitHub
+pre-release candidate, not as a stable production approval**. Hosted build/test
+automation remains intentionally disabled. Unchecked items stay open; the
+pre-release label and release notes must disclose the physical-device,
+accessibility, real-appliance, destructive, endurance, and wider Android-matrix
+gaps. Source implementation, signing, or a debug/emulator result does not close
+a signed-candidate or manual gate.
 
-## Candidate record
+The non-waivable minimum for an opt-in public testing APK is the **Public
+pre-release candidate lane** in `DISTRIBUTION.md`; its dynamic hashes, signature
+verification, exact-byte smoke result, asset inventory, open-gate disclosure,
+and release-owner approval are retained with the GitHub release. The checklist
+below remains the gate for stable promotion or a **Latest** release.
+
+## Stable-promotion candidate record
 
 | Field | Value |
 | --- | --- |
