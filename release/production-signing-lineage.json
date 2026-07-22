@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "package": "org.nanokvm.mobile",
+  "keyAlias": "nanokvm-release",
+  "signingCertificateSha256": "b8c56ca6a229c85cd829da21cf697219e2d1a1d5f94d658719ebfa9e909075fd",
+  "firstProductionVersionName": "0.3.6",
+  "firstProductionVersionCode": 13,
+  "previousProduction": null
+}
