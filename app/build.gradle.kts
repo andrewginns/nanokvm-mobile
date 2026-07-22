@@ -75,6 +75,9 @@ val generateBundledAboutAssets by tasks.registering(Sync::class) {
 val verifyBundledAboutAssets by tasks.registering {
     group = "verification"
     description = "Verifies the complete pinned WebRTC notices and bundled project documents."
+    notCompatibleWithConfigurationCache(
+        "The integrity check reads script-scoped document mappings.",
+    )
     dependsOn(generateBundledAboutAssets)
     inputs.files(bundledAboutDocuments.keys)
     inputs.file(bundledWebRtcNotices)
