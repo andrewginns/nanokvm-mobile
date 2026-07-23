@@ -17,15 +17,15 @@ keyboard, and controls that remain reachable in portrait and landscape.
 <sub>NanoKVM Mobile 0.3.5 UI captured on an API 37 emulator. The remote desktop,
 device frame, and desk backdrop are illustrative generated layers.</sub>
 
-## 0.3.6 signed pre-release candidate
+## 0.3.6 public pre-release candidate
 
 Version **0.3.6** (Android version code **13**) is the project's first
-production-signed public pre-release candidate. It is deliberately not labelled
-as a stable production release: the compatibility-floor, physical-device,
-accessibility, real-appliance, destructive, and endurance gates remain open.
-The feature list below describes implemented source; capability-gated features
-still need the evidence recorded in the parity ledger before they can be
-described as release-verified.
+candidate scoped for distribution as a production-signed public pre-release.
+It is deliberately not labelled as a stable production release: the
+compatibility-floor, physical-device, accessibility, real-appliance,
+destructive, and endurance gates remain open. The feature list below describes
+implemented source; capability-gated features still need the evidence recorded
+in the parity ledger before they can be described as release-verified.
 
 - Saved NanoKVM connections with HTTPS certificate review and pinning.
 - NanoKVM login and cookie authentication for application versions 2.3.2+.
@@ -101,13 +101,13 @@ STUN/STUNS/TURN/TURNS peers during ICE negotiation.
 
 ## Install and update
 
-The production-signed **0.3.6** APK is published on the
+The production-signed **0.3.6** APK is designated for the
 [v0.3.6 GitHub pre-release page](https://github.com/andrewginns/nanokvm-mobile/releases/tag/v0.3.6).
-Download `NanoKVM-Mobile-0.3.6-v13.apk` together with
+Once published, download `NanoKVM-Mobile-0.3.6-v13.apk` together with
 `NanoKVM-Mobile-0.3.6-v13-SHA256SUMS.txt` and
-`NanoKVM-Mobile-0.3.6-v13-signing-certificate-sha256.txt`. The release also
-contains the retained `apksigner` verification and machine-readable release
-metadata. The expected signing-certificate SHA-256 is:
+`NanoKVM-Mobile-0.3.6-v13-signing-certificate-sha256.txt`. The complete release
+bundle contains the retained `apksigner` verification and machine-readable
+release metadata. The expected signing-certificate SHA-256 is:
 
 ```text
 B8:C5:6C:A6:A2:29:C8:5C:D8:29:DA:21:CF:69:72:19:E2:D1:A1:D5:F9:4D:65:87:19:EB:FA:9E:90:90:75:FD

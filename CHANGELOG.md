@@ -5,12 +5,13 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
-## [0.3.6] - 2026-07-22 (public pre-release candidate)
+## [0.3.6] - 2026-07-23 (public pre-release candidate)
 
-Android version code: **13**. This is the first candidate distributed with the
-protected production signing identity. It is a GitHub pre-release, not a stable
-production approval: unchecked physical-device, accessibility, real-appliance,
-destructive, endurance, and wider Android-matrix items remain open in
+Android version code: **13**. This is the first candidate prepared for
+distribution with the protected production signing identity. It is scoped for
+publication as a GitHub pre-release, not a stable production approval:
+unchecked physical-device, accessibility, real-appliance, destructive,
+endurance, and wider Android-matrix items remain open in
 `docs/RELEASE_CHECKLIST.md`.
 
 ### Changed

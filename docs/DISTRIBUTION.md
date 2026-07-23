@@ -263,7 +263,9 @@ GitHub **pre-release** before the stable-production matrix is complete, but only
 when every requirement below is satisfied:
 
 - the source is clean, frozen under the exact annotated tag, free of private
-  material, and accompanied by two independently reconciled unsigned builds;
+  material, and accompanied by one reviewed clean-build evidence set; a
+  reproducibility claim additionally requires the two independently reconciled
+  unsigned builds described below;
 - the long-lived production key is outside the repository, its public lineage
   is recorded, and two encrypted backups in separately controlled locations
   have been confirmed before the first signing operation;
