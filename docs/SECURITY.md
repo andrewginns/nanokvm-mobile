@@ -171,11 +171,11 @@ can generate a CycloneDX SBOM, R8 mapping/usage files, an unsigned APK/AAB, and
 versioned Baseline/Startup Profiles. GitHub-hosted CI and public build-artifact
 publication are not used as an unattended trust boundary. Maintainers build and
 review locally; only the audited production-signing flow in `DISTRIBUTION.md`
-may create a public pre-release bundle. Ordinary local outputs, including the
+may create a public release bundle. Ordinary local outputs, including the
 unsigned release, debug-signed benchmark, mapping, and configuration, remain
 private evidence and are not public release assets.
 
-Those controls do not make an unsigned artifact a release. A public candidate
+Those controls do not make an unsigned artifact a release. A public artifact
 is signed through the documented release process and retains source,
 licence/notice material, SBOM, dependency-vulnerability review result,
 checksums, signing identity, mapping/usage output, and signed/minified smoke
@@ -183,7 +183,7 @@ evidence. Reproducibility requires two isolated builds to match after accounting
 for the documented signing step. See `DISTRIBUTION.md`.
 
 R8 is an optimization and attack-surface-reduction tool, not an anti-tamper
-security boundary for GPL software. Play Integrity, Credential Manager/passkeys,
+security boundary for GPL software. Remote attestation, Credential Manager/passkeys,
 WebView hardening, deep-link validation, PendingIntent policy, WorkManager, and
 foreground-service controls are not applicable to the current local-only
 architecture and must be reassessed if that architecture changes.

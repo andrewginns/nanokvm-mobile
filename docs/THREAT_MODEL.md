@@ -183,7 +183,7 @@ for an open-source GPL application.
 - Firmware ultimately controls authorization, JWT expiry/revocation, rate
   limiting, and GPIO semantics. The app fails closed where observable but cannot
   repair a malicious appliance.
-- Play Integrity, Credential Manager/passkeys, deep-link/WebView/PendingIntent
+- Remote attestation, Credential Manager/passkeys, deep-link/WebView/PendingIntent
   hardening, WorkManager, foreground services, and anti-tamper controls are not
   applicable without corresponding product components. Reassess on architecture
   change.

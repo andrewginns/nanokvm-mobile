@@ -2,15 +2,14 @@
 
 ## Supported versions
 
-NanoKVM Mobile 0.3.6 is scoped for distribution as a production-signed GitHub
-pre-release candidate, not as an approved stable production release. Security
-fixes are developed on the current 0.3.x source milestone. The earlier
+NanoKVM Mobile 0.3.6 is the current stable, production-signed GitHub release.
+Security fixes are developed on the current 0.3.x source milestone. Earlier
 development APKs use a different debug signing identity and are not a supported
 public distribution channel.
 
 | Version | Security status |
 | --- | --- |
-| 0.3.6 public pre-release candidate | Receives critical fixes until superseded; wider release gates remain open |
+| 0.3.6 stable GitHub release | Receives critical fixes until superseded |
 | `main` / 0.3.x development | Receives fixes |
 | Debug-signed development snapshots | Superseded; no production update compatibility |
 | Older snapshots | Unsupported |

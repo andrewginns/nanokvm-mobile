@@ -5,14 +5,13 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
-## [0.3.6] - 2026-07-23 (public pre-release candidate)
+## [0.3.6] - 2026-07-23 (stable GitHub release)
 
-Android version code: **13**. This is the first candidate prepared for
-distribution with the protected production signing identity. It is scoped for
-publication as a GitHub pre-release, not a stable production approval:
-unchecked physical-device, accessibility, real-appliance, destructive,
-endurance, and wider Android-matrix items remain open in
-`docs/RELEASE_CHECKLIST.md`.
+Android version code: **13**. This is the first release signed with the protected
+production identity. It was published as a GitHub pre-release on 23 July 2026
+and promoted to stable on 9 August 2026 after several weeks of owner-reported
+use with NanoKVM application 2.4.3 without a reported issue. Remaining coverage
+scope is tracked in `docs/RELEASE_CHECKLIST.md`.
 
 ### Changed
 

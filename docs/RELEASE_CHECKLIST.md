@@ -1,20 +1,35 @@
 # Release checklist
 
-Current status: **v0.3.6 is scoped only as a production-signed GitHub
-pre-release candidate, not as a stable production approval**. Hosted build/test
-automation remains intentionally disabled. Unchecked items stay open; the
-pre-release label and release notes must disclose the physical-device,
-accessibility, real-appliance, destructive, endurance, and wider Android-matrix
-gaps. Source implementation, signing, or a debug/emulator result does not close
-a signed-candidate or manual gate.
+Current status: **v0.3.6/code 13 is the stable, production-signed GitHub
+release**. It was promoted after several weeks of owner-reported use with
+NanoKVM application 2.4.3 without a reported issue. Release verification is
+local; hosted build/test automation is not part of the process. Stable status
+does not turn unchecked future coverage into a compatibility claim; new
+distributable bytes must satisfy the applicable gates below and use a higher
+Android version code.
 
-The non-waivable minimum for an opt-in public testing APK is the **Public
-pre-release candidate lane** in `DISTRIBUTION.md`; its dynamic hashes, signature
-verification, exact-byte smoke result, asset inventory, open-gate disclosure,
-and release-owner approval are retained with the GitHub release. The checklist
-below remains the gate for stable promotion or a **Latest** release.
+The non-waivable minimum for a public testing APK is the
+[public pre-release candidate lane](DISTRIBUTION.md#public-pre-release-candidate-lane).
+Stable publication additionally requires the
+[stable direct-GitHub release lane](DISTRIBUTION.md#stable-direct-github-release-lane).
+Dynamic hashes, signature verification, exact-byte smoke results, asset
+inventory, scope disclosure, and release-owner approval are retained with the
+GitHub release. The checklist below remains the gate for new stable releases.
 
-## Stable-promotion candidate record
+## v0.3.6 stable-promotion record
+
+| Field | Value |
+| --- | --- |
+| Version name/code | `0.3.6` / `13` |
+| Source tag and commit | `v0.3.6` / `266bfb0ced4f5cf43b10cd8ca8a85564759aea88` |
+| Signed APK SHA-256 | `a255cb7a432dd418cc21dfcc86017c5d46b8c322c820c5345c11d40fbba79387` |
+| Signing certificate SHA-256 | `B8:C5:6C:A6:A2:29:C8:5C:D8:29:DA:21:CF:69:72:19:E2:D1:A1:D5:F9:4D:65:87:19:EB:FA:9E:90:90:75:FD` |
+| Retained evidence | [GitHub release assets](https://github.com/andrewginns/nanokvm-mobile/releases/tag/v0.3.6) |
+| Field evidence | Owner-reported use for several weeks with NanoKVM application 2.4.3 without a reported issue |
+| Promotion decision | Promoted unchanged to stable and **Latest** on 9 August 2026 |
+| Scope disposition | Compatibility limits remain documented in the release notes; no universal device or operation coverage is claimed |
+
+## Next stable-release candidate template
 
 | Field | Value |
 | --- | --- |
@@ -164,7 +179,7 @@ below remains the gate for stable promotion or a **Latest** release.
   power/thermal, and long-session evidence is retained.
 - [ ] Three stable reference runs establish noise and thresholds before the
   performance gate becomes blocking; regressions have owners/dispositions.
-- [ ] Field Android Vitals review is attached when the chosen distribution
+- [ ] Field health-metrics review is attached when the chosen distribution
   channel supplies it. Until a release has field exposure, this remains “not
   available,” not “passing.”
 

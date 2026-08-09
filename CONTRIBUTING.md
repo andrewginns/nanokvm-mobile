@@ -11,9 +11,9 @@ Thank you for helping improve NanoKVM Mobile.
 3. Keep secrets and appliance data out of source, fixtures, screenshots, traces,
    and build logs. Never commit passwords, JWTs, private keys, signing keys,
    private network inventories, or another person's console capture.
-4. Treat `main` as the 0.3.6 development milestone until a named, signed release
-   is approved. Changed distributable bytes require a new Android version code;
-   do not rename an old-version APK and present it as an update.
+4. Treat `main` as post-0.3.6 development. Changed distributable bytes require a
+   new Android version code; do not rename an old-version APK and present it as
+   an update.
 
 ## Engineering invariants
 
@@ -73,8 +73,8 @@ Run the strict repository gate before opening a pull request:
 .\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
 ```
 
-GitHub-hosted CI is intentionally disabled during active development, so a pull
-request does not replace this local validation. Record the source commit and
+This repository uses local verification rather than GitHub-hosted CI, so a pull
+request does not replace the documented local gate. Record the source commit and
 summarize the commands and device coverage you actually ran.
 
 When a booted emulator or device is available, run the applicable device and
