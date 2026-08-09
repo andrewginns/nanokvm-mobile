@@ -61,6 +61,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -1285,6 +1286,24 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun unavailablePicoClawFeatureHasNoUiEntryOrSurfaceWork() {
+        val disabledBackend = RecordingConsoleBackend(picoClawEnabled = false)
+        renderConsole(renderBackend = disabledBackend)
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("More actions")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.onNodeWithTag("picoclaw-action").assertDoesNotExist()
+        composeRule.onNodeWithTag("picoclaw-dialog").assertDoesNotExist()
+        composeRule.runOnIdle {
+            assertFalse(disabledBackend.picoClawSurfaceIsVisible)
+            assertEquals(0, disabledBackend.picoClawEntryCalls)
+        }
+    }
+
+    @Test
     fun unsupportedPicoClawIsExplicitAndNeverOffersConsentEntry() {
         backend.mutablePicoClawState.value = PicoClawUiState(
             support = PicoClawSupport.Unsupported,
@@ -2413,8 +2432,9 @@ class ConsoleScreenInstrumentedTest {
         onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit = {},
         themeMode: ThemeMode = ThemeMode.SYSTEM,
         useDynamicColor: Boolean = true,
+        renderBackend: RecordingConsoleBackend = backend,
     ) {
-        val connectedSession = backend.session.value
+        val connectedSession = renderBackend.session.value
         composeRule.setContent {
             NanoKvmTheme(themeMode = themeMode, useDynamicColor = useDynamicColor) {
                 Box(
@@ -2426,10 +2446,10 @@ class ConsoleScreenInstrumentedTest {
                             ConsoleScreen(
                                 profile = profile,
                                 session = connectedSession,
-                                input = backend,
-                                videoSurface = backend,
-                                features = backend.features,
-                                onDisconnect = { backend.disconnectCalls++ },
+                                input = renderBackend,
+                                videoSurface = renderBackend,
+                                features = renderBackend.features,
+                                onDisconnect = { renderBackend.disconnectCalls++ },
                                 sessionDraftOwner = sessionDraftOwner,
                                 clipboardGateway = clipboardGateway,
                                 pendingSharedPaste = pendingSharedPaste,
@@ -2447,10 +2467,10 @@ class ConsoleScreenInstrumentedTest {
                         ConsoleScreen(
                             profile = profile,
                             session = connectedSession,
-                            input = backend,
-                            videoSurface = backend,
-                            features = backend.features,
-                            onDisconnect = { backend.disconnectCalls++ },
+                            input = renderBackend,
+                            videoSurface = renderBackend,
+                            features = renderBackend.features,
+                            onDisconnect = { renderBackend.disconnectCalls++ },
                             sessionDraftOwner = sessionDraftOwner,
                             clipboardGateway = clipboardGateway,
                             pendingSharedPaste = pendingSharedPaste,
@@ -2545,7 +2565,9 @@ private fun colorContrastRatio(first: Int, second: Int): Double {
 
 private val TEST_VIDEO_COLOR = Color.rgb(31, 190, 142)
 
-private class RecordingConsoleBackend : ConsoleBackend {
+internal class RecordingConsoleBackend(
+    private val picoClawEnabled: Boolean = true,
+) : ConsoleBackend {
     val mutablePicoClawState = MutableStateFlow(
         PicoClawUiState(support = PicoClawSupport.Supported),
     )
@@ -2627,6 +2649,9 @@ private class RecordingConsoleBackend : ConsoleBackend {
     var disconnectCalls = 0
     var lastVideoSettings: VideoSettings? = null
     var surfaceFillColor: Int? = null
+    var surfaceBitmap: Bitmap? = null
+    @Volatile var successfulSurfaceDraws = 0
+    @Volatile var lastSurfaceDrawFailure: Throwable? = null
     var absoluteMoveCalls = 0
     var relativeMoveCalls = 0
     var mouseButtonCalls = 0
@@ -2680,7 +2705,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     override val features = ConsoleFeatureBundle(
         core = this,
         phase3 = phase3Controls,
-        picoClaw = picoClawControls,
+        picoClaw = picoClawControls.takeIf { picoClawEnabled },
     )
 
     override suspend fun preflightTrust(profile: HostProfile): TrustPreflightOutcome =
@@ -2699,14 +2724,53 @@ private class RecordingConsoleBackend : ConsoleBackend {
     override fun setForeground(isForeground: Boolean) = Unit
     override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
         attachSurfaceCalls++
-        surfaceFillColor?.let { color ->
-            runCatching {
-                val canvas = surface.lockCanvas(null)
-                canvas.drawColor(color)
-                surface.unlockCanvasAndPost(canvas)
+        val bitmap = surfaceBitmap
+        if (bitmap != null) {
+            drawTestSurface(surface) { canvas ->
+                canvas.drawColor(Color.BLACK)
+                canvas.drawBitmap(
+                    bitmap,
+                    null,
+                    android.graphics.Rect(0, 0, width, height),
+                    android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        isFilterBitmap = true
+                    },
+                )
+            }
+        } else {
+            surfaceFillColor?.let { color ->
+                drawTestSurface(surface) { canvas ->
+                    canvas.drawColor(color)
+                }
             }
         }
     }
+
+    private fun drawTestSurface(
+        surface: Surface,
+        draw: (android.graphics.Canvas) -> Unit,
+    ) {
+        var canvas: android.graphics.Canvas? = null
+        var failure: Throwable? = null
+        try {
+            val lockedCanvas = surface.lockCanvas(null)
+            canvas = lockedCanvas
+            draw(lockedCanvas)
+        } catch (drawFailure: Throwable) {
+            failure = drawFailure
+        } finally {
+            canvas?.let { lockedCanvas ->
+                try {
+                    surface.unlockCanvasAndPost(lockedCanvas)
+                } catch (unlockFailure: Throwable) {
+                    failure?.addSuppressed(unlockFailure)
+                    if (failure == null) failure = unlockFailure
+                }
+            }
+        }
+        failure?.let { lastSurfaceDrawFailure = it } ?: run { successfulSurfaceDraws++ }
+    }
+
     override fun resizeVideoSurface(width: Int, height: Int) = Unit
     override fun detachVideoSurface(surface: Surface) {
         detachSurfaceCalls++

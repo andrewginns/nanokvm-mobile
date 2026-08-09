@@ -1,9 +1,18 @@
 # Privacy notice
 
+**Effective date:** 2 August 2026
+**Developer:** NanoKVM Mobile project contributors
+
 NanoKVM Mobile is an open-source client for a NanoKVM appliance selected by the
 user. It has no developer-operated service, analytics, advertising, telemetry,
 account system, or automatic crash reporting. The maintainers do not receive
 data from the app.
+
+The Google Play distribution deliberately disables PicoClaw: it has no
+PicoClaw UI entry, feature gateway, background probe, provider-key transfer, or
+chat/history operation. PicoClaw references below describe only a separately
+distributed direct-release build. The remaining data handling and network
+sections apply to the Google Play build unless they expressly say otherwise.
 
 ## Data handled on the device
 
@@ -169,3 +178,14 @@ contents, and other private information.
 
 The implementation is publicly inspectable under GPL-3.0-or-later. Security
 concerns should be reported using [SECURITY.md](SECURITY.md).
+
+## Privacy questions
+
+For a general privacy question, open a
+[GitHub issue](https://github.com/andrewginns/nanokvm-mobile/issues/new) without
+including passwords, tokens, private network details, screen contents, or other
+sensitive information. For a concern that cannot safely be discussed publicly,
+use the repository's
+[private vulnerability-reporting form](https://github.com/andrewginns/nanokvm-mobile/security/advisories/new).
+These are the NanoKVM Mobile project's privacy contact mechanisms; the Google
+Play listing must additionally provide a monitored public support email.

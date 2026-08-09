@@ -1,0 +1,8 @@
+First Google Play release of the independent NanoKVM Mobile client.
+
+- Phone and tablet console controls in portrait and landscape
+- HTTPS profiles with certificate review and optional protected passwords
+- Direct H.264, MJPEG and explicitly selected WebRTC video
+- Guarded power, reset and appliance-administration actions
+
+Requires NanoKVM hardware and application version 2.3.2 or newer.

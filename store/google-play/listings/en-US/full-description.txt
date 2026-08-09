@@ -1,0 +1,29 @@
+NanoKVM Mobile is an independent, open-source Android client for a NanoKVM appliance that you own or are authorized to administer. NanoKVM hardware is required; this app does not provide a hosted remote desktop service.
+
+Use your phone or tablet to:
+
+- View the attached computer with direct H.264 or MJPEG video, with optional WebRTC on compatible appliances.
+- Control the remote keyboard and pointer using direct touch, a trackpad, an external mouse, Android's keyboard, or previewed clipboard text.
+- Keep important console actions reachable in portrait and landscape, including scaling, video quality, HID reset, power and reset controls.
+- Inspect device information and manage supported virtual media, Wake-on-LAN, appliance administration, terminal, script, shortcut and autostart features.
+- Save multiple HTTPS connection profiles and optionally protect a saved password with Android's biometric or device-credential prompt.
+
+Security and privacy
+
+The app connects directly to the NanoKVM address you choose. Authenticated control traffic requires HTTPS. Private and self-signed certificates can be reviewed and pinned per profile. There is no developer-operated cloud, account system, advertising, analytics, telemetry, or app-integrated or developer-operated crash-reporting service.
+
+WebRTC is attempted only when you explicitly select it. The appliance may provide STUN or TURN servers to establish that optional media path. Automatic video uses direct H.264 and then MJPEG instead.
+
+Important
+
+Power, reset, keyboard, pointer, terminal and administration actions affect real remote hardware. Review the selected appliance and attached computer before confirming an action.
+
+Controls labeled update, install or uninstall act on the connected NanoKVM appliance or an appliance-side component. They do not install or update the Android app. Android app updates are delivered by Google Play.
+
+Requirements
+
+- Android 8.0 or newer.
+- A reachable NanoKVM appliance running application version 2.3.2 or newer.
+- Initial NanoKVM access-point setup completed outside this app.
+
+NanoKVM Mobile is independent of Sipeed. It is not produced, endorsed, supported by, or affiliated with Sipeed, and it is not an official NanoKVM app.

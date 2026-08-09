@@ -5,6 +5,36 @@ codes are monotonically increasing: changed distributable bytes must never reuse
 an older code. No entry below represents an approved production release unless
 it explicitly says so.
 
+## [0.3.7] - 2026-08-02 (Google Play preparation candidate)
+
+Android version code: **14**. This source milestone prepares a dedicated Google
+Play bundle and publication package. It is not an approved production release:
+the protected signing, Play-delivered upgrade, reviewer-fixture, exact-candidate
+traffic, physical-device, and publisher approval gates remain open.
+
+### Changed
+
+- Added a release-grade `play` build variant that deliberately excludes the
+  PicoClaw UI and protocol gateway pending Google Play AI-content reporting and
+  moderation support; the direct `release` variant retains PicoClaw.
+- Added guarded, evidence-bound Play upload-key creation and AAB signing tooling
+  while keeping the upload identity separate from the existing production app
+  signing identity.
+- Added draft en-GB/en-US listing copy, a validated icon and feature graphic
+  showing the real mobile console UI and recognizable NanoKVM Full hardware,
+  four current-source 1080 x 1920 real-UI screenshot exports, Play App Content/
+  Data Safety worksheets, reviewer-access instructions, and publisher-owned
+  action records.
+- Recorded the v0.3.6 production artifact as the preceding public signing-lineage
+  input and advanced the next candidate version/code without reusing bytes.
+- Added Play-specific unit, UI-boundary, profile-packaging, listing-metadata, and
+  store-asset verification coverage.
+- Added a reproducible API 37/16 KB screenshot harness that preserves production
+  screenshot protection while rendering the real Compose screens with reserved
+  endpoints and a rights-cleared synthetic framebuffer.
+- Corrected the About build classification so the hardened custom `play` build
+  is presented as a public distribution build rather than a development build.
+
 ## [0.3.6] - 2026-07-23 (public pre-release candidate)
 
 Android version code: **13**. This is the first candidate prepared for

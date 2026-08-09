@@ -101,7 +101,7 @@ internal fun AboutDialog(onDismiss: () -> Unit) {
             versionCode = BuildConfig.VERSION_CODE,
             exactSourceUrl = BuildConfig.RELEASE_SOURCE_URL,
             signingCertificateSha256 = installedSigningCertificateSha256(context),
-            isDevelopmentBuild = BuildConfig.BUILD_TYPE != "release",
+            isDevelopmentBuild = !BuildConfig.PUBLIC_DISTRIBUTION_BUILD,
         )
     }
     AboutDialog(releaseInfo = releaseInfo, onDismiss = onDismiss)

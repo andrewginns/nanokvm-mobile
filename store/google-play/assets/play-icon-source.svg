@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img" aria-labelledby="title desc">
+  <title id="title">NanoKVM Mobile app icon</title>
+  <desc id="desc">A teal monitor with three activity bars on a dark background.</desc>
+  <rect width="108" height="108" fill="#071016"/>
+  <path fill="#44D7B6" d="M24 22h60a8 8 0 0 1 8 8v43a8 8 0 0 1-8 8H61v7h12v6H35v-6h12v-7H24a8 8 0 0 1-8-8V30a8 8 0 0 1 8-8Zm1 9v39h58V31Z"/>
+  <path fill="#E8FFF9" d="M33 42h10v17H33Zm16-6h10v23H49Zm16 10h10v13H65Z"/>
+</svg>

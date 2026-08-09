@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.nanokvm.mobile.data.HostProfile
@@ -32,6 +33,56 @@ import org.nanokvm.video.NanoKvmVideoStatus
 import org.nanokvm.video.NanoKvmVideoTransport
 
 class NanoKvmConsoleBackendTest {
+    @Test
+    fun `disabled PicoClaw policy exposes no controls and installs no protocol gateway`() =
+        runBlocking {
+            val client = NanoKvmClient.create(
+                endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+                tokenStore = InMemorySessionTokenStore("disabled-picoclaw-token"),
+            )
+            val authenticatedSession = AuthenticatedNanoKvmSession(
+                client = client,
+                profileId = "play-profile",
+                authority = "127.0.0.1:9",
+                vmInfo = VmInfo(application = "2.4.3"),
+                capabilities = reflectedEmptyCapabilities(),
+            )
+            val backend = NanoKvmConsoleBackend(
+                workerDispatcher = Dispatchers.Unconfined,
+                reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+                picoClawEnabled = false,
+            )
+
+            try {
+                assertNull(backend.features.picoClaw)
+                val stateLock = requireNotNull(backend.privateField("stateLock"))
+                synchronized(stateLock) {
+                    backend.invokePrivate(
+                        "installPicoClawGatewayLocked",
+                        authenticatedSession,
+                        1L,
+                    )
+                }
+
+                @Suppress("UNCHECKED_CAST")
+                val lifecycle = backend.privateField("picoClawLifecycle") as
+                    SessionBoundFeatureLifecycle<NanoKvmPicoClawFeatureGateway>
+                assertNull(lifecycle.binding())
+
+                backend.setPicoClawSurfaceVisible(true)
+                backend.enterPicoClaw(
+                    ApprovedPicoClawDestination("play-profile", "127.0.0.1:9", 1L),
+                )
+
+                assertFalse(backend.privateField("picoClawSurfaceVisible") as Boolean)
+                assertNull(lifecycle.binding())
+                assertFalse(backend.picoClawState.value.entered)
+            } finally {
+                backend.closeAndAwait()
+                authenticatedSession.close()
+            }
+        }
+
     @Test
     fun `host controls reject foreign identity and generation before queueing`() = runBlocking {
         val client = NanoKvmClient.create(
@@ -891,6 +942,12 @@ private fun Any.privateField(name: String): Any? =
 
 private fun Any.invokePrivateNoArgs(name: String): Any? =
     javaClass.getDeclaredMethod(name).apply { isAccessible = true }.invoke(this)
+
+private fun Any.invokePrivate(name: String, vararg arguments: Any?): Any? =
+    javaClass.declaredMethods
+        .single { method -> method.name == name && method.parameterCount == arguments.size }
+        .apply { isAccessible = true }
+        .invoke(this, *arguments)
 
 private class BackendFrameDetectionPort(
     private val failure: Throwable,

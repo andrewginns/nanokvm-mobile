@@ -1,12 +1,12 @@
 # Release checklist
 
-Current status: **v0.3.6 is scoped only as a production-signed GitHub
-pre-release candidate, not as a stable production approval**. Hosted build/test
-automation remains intentionally disabled. Unchecked items stay open; the
-pre-release label and release notes must disclose the physical-device,
-accessibility, real-appliance, destructive, endurance, and wider Android-matrix
-gaps. Source implementation, signing, or a debug/emulator result does not close
-a signed-candidate or manual gate.
+Current status: **v0.3.7/code 14 is a Google Play preparation candidate, not an
+approved or uploaded release**. The existing v0.3.6/code 13 artifact remains a
+production-signed GitHub pre-release candidate rather than a stable production
+approval. Hosted build/test automation remains intentionally disabled.
+Unchecked items stay open; source implementation, upload-key signing, or a
+debug/emulator result does not close a Play-delivered, signed-candidate, or
+manual gate.
 
 The non-waivable minimum for an opt-in public testing APK is the **Public
 pre-release candidate lane** in `DISTRIBUTION.md`; its dynamic hashes, signature
@@ -49,6 +49,10 @@ below remains the gate for stable promotion or a **Latest** release.
   licence report are retained with provenance/hashes and packaged beside any
   binary; the SBOM and an external notice link alone are not treated as the
   complete binary-distribution notice set.
+- [ ] The exact canonical Play AAB recorded as `playBundle` passes
+  `scripts/verify-play-page-size.ps1`; its immutable JSON evidence is retained
+  and reviewed as described in `PLAY_PAGE_SIZE.md`. A generic release bundle or
+  an ephemeral audit APK cannot close this 16 KB page-size gate.
 - [ ] Versioned Baseline and Startup Profile sources were regenerated when their
   CUJs changed and are packaged within the size limit.
 - [ ] Every `WEBUI_PARITY.md` row and applicable `APPLIANCE_TEST_PLAN.md` case has

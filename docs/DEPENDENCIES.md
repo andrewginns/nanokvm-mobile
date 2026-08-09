@@ -54,6 +54,15 @@ Gradle plugin alone uses 1.5.0-alpha07 because the 1.5 line is the first to
 support AGP 9's new DSL; stable 1.4.1 rejects AGP 9 application modules during
 configuration. Reassess this narrow exception when AndroidX 1.5 reaches stable.
 
+As of 2026-08-02, Android lint reports that AGP 9.3.1 is available over the
+pinned 9.3.0 and that Baseline Profile 1.5.0-beta01 is available over alpha07.
+Those five exact version-catalog advisories are retained explicitly in release
+evidence; every other lint issue remains blocking. They are deferred from the
+0.3.7 publication-preparation change so a build-tool/profile-generator update
+does not silently alter the candidate. Review both updates in a separate
+toolchain change with strict dependency metadata, profile generation, packaged
+profile, minification, and device tests before freezing the release tag.
+
 Biometric 1.1.0 remains the current stable release but declares the obsolete
 Fragment 1.2.5 transitively. The app therefore pins stable Fragment 1.8.9: its
 Activity Result integration is required for the Android 17 local-network

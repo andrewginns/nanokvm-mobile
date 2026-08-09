@@ -17,6 +17,17 @@ keyboard, and controls that remain reachable in portrait and landscape.
 <sub>NanoKVM Mobile 0.3.5 UI captured on an API 37 emulator. The remote desktop,
 device frame, and desk backdrop are illustrative generated layers.</sub>
 
+## 0.3.7 Google Play preparation candidate
+
+Version **0.3.7** (Android version code **14**) is the next source candidate.
+It adds a dedicated, non-debuggable `play` bundle, evidence-bound upload signing,
+and a draft Google Play publication package. The Play variant excludes PicoClaw
+until an in-app AI-output reporting and moderation path exists; the direct
+`release` variant retains it. This candidate is not yet approved or uploaded:
+protected signing, Play-generated APK verification, cross-store upgrade,
+reviewer access, exact-candidate traffic review, and publisher sign-off remain
+open in [the Play personal-actions checklist](docs/PLAY_PERSONAL_ACTIONS.md).
+
 ## 0.3.6 public pre-release candidate
 
 Version **0.3.6** (Android version code **13**) is the project's first

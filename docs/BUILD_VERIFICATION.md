@@ -39,6 +39,24 @@ also remain private test evidence. A public pre-release is created only through
 the exact-source evidence and protected-signing process in `DISTRIBUTION.md`;
 development build output is never uploaded as though it were publishable.
 
+### Google Play bundle lane
+
+The dedicated Play artifact uses the same release hardening and Baseline
+Profiles while excluding PicoClaw at the backend policy boundary. Build and
+check it with JDK 21 and strict dependency verification:
+
+```powershell
+.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --dependency-verification=strict :app:testPlayUnitTest lintPlay assemblePlay bundlePlay :app:verifyPlayProfiles
+```
+
+The unsigned outputs are
+`app/build/outputs/apk/play/app-play-unsigned.apk` and
+`app/build/outputs/bundle/play/app-play.aab`. Neither is an upload artifact
+until the exact tagged evidence is frozen and the AAB is signed with the
+separate registered Play upload key. Never substitute the PicoClaw-enabled
+`bundleRelease` artifact for the App Content answers prepared for the Play
+variant. See `PLAY_UPLOAD_SIGNING.md` and `PLAY_RELEASE_IDENTITY.md`.
+
 ### Debug signing and update compatibility
 
 Android's default debug keystore is selected from the JVM process's user-home

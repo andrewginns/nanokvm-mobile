@@ -380,6 +380,9 @@ abstract class NormalizeCycloneDxSbom : DefaultTask() {
 
 @DisableCachingByDefault(because = "Verifies generated source profiles and assembled APK/AAB packaging")
 abstract class VerifyReleaseProfiles : DefaultTask() {
+    @get:Input
+    abstract val artifactLabel: Property<String>
+
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val baselineProfile: RegularFileProperty
@@ -398,6 +401,7 @@ abstract class VerifyReleaseProfiles : DefaultTask() {
 
     @TaskAction
     fun verify() {
+        val label = artifactLabel.get()
         val baselineRules = profileRules(baselineProfile.get().asFile)
         val startupRules = profileRules(startupProfile.get().asFile)
         if (baselineRules.none(::isNanoKvmRule)) {
@@ -417,10 +421,10 @@ abstract class VerifyReleaseProfiles : DefaultTask() {
 
         ZipFile(releaseApk.get().asFile).use { apk ->
             val binaryProfile = apk.getEntry("assets/dexopt/baseline.prof")
-                ?: throw GradleException("Release APK does not contain assets/dexopt/baseline.prof.")
+                ?: throw GradleException("$label APK does not contain assets/dexopt/baseline.prof.")
             val binaryMetadata = apk.getEntry("assets/dexopt/baseline.profm")
-                ?: throw GradleException("Release APK does not contain assets/dexopt/baseline.profm.")
-            verifyBinaryProfileSizes(binaryProfile.size, binaryMetadata.size, "Release APK")
+                ?: throw GradleException("$label APK does not contain assets/dexopt/baseline.profm.")
+            verifyBinaryProfileSizes(binaryProfile.size, binaryMetadata.size, "$label APK")
             if (binaryProfile.method != ZipEntry.STORED || binaryMetadata.method != ZipEntry.STORED) {
                 throw GradleException("Compiled Baseline Profile entries must be stored uncompressed.")
             }
@@ -428,10 +432,10 @@ abstract class VerifyReleaseProfiles : DefaultTask() {
 
         ZipFile(releaseBundle.get().asFile).use { bundle ->
             val binaryProfile = bundle.getEntry(BUNDLE_PROFILE_PATH)
-                ?: throw GradleException("Release AAB does not contain $BUNDLE_PROFILE_PATH.")
+                ?: throw GradleException("$label AAB does not contain $BUNDLE_PROFILE_PATH.")
             val binaryMetadata = bundle.getEntry(BUNDLE_METADATA_PATH)
-                ?: throw GradleException("Release AAB does not contain $BUNDLE_METADATA_PATH.")
-            verifyBinaryProfileSizes(binaryProfile.size, binaryMetadata.size, "Release AAB")
+                ?: throw GradleException("$label AAB does not contain $BUNDLE_METADATA_PATH.")
+            verifyBinaryProfileSizes(binaryProfile.size, binaryMetadata.size, "$label AAB")
             logger.lifecycle(
                 "Verified {} Baseline rules, {} Startup rules, and packaged APK/AAB binary profiles ({} bytes).",
                 baselineRules.size,
@@ -475,7 +479,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 13
+        versionCode = 14
         versionName = project.version.toString()
 
         buildConfigField(
@@ -483,6 +487,8 @@ android {
             "RELEASE_SOURCE_URL",
             "\"https://github.com/andrewginns/nanokvm-mobile/tree/v${project.version}\"",
         )
+        buildConfigField("boolean", "PICOCLAW_ENABLED", "true")
+        buildConfigField("boolean", "PUBLIC_DISTRIBUTION_BUILD", "false")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -506,6 +512,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            buildConfigField("boolean", "PUBLIC_DISTRIBUTION_BUILD", "true")
         }
         create("benchmark") {
             initWith(getByName("release"))
@@ -513,6 +520,17 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             isProfileable = true
+            buildConfigField("boolean", "PUBLIC_DISTRIBUTION_BUILD", "false")
+        }
+        create("play") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+            isProfileable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            buildConfigField("boolean", "PICOCLAW_ENABLED", "false")
+            buildConfigField("boolean", "PUBLIC_DISTRIBUTION_BUILD", "true")
         }
     }
 
@@ -529,6 +547,12 @@ android {
     sourceSets.getByName("main").assets.srcDir(bundledAboutAssetsDirectory.get().asFile)
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("play")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
 }
 
 tasks.named("preBuild").configure {
@@ -580,7 +604,7 @@ dependencies {
     baselineProfile(project(":macrobenchmark"))
 }
 
-tasks.matching { it.name == "assembleRelease" }.configureEach {
+tasks.matching { it.name == "assembleRelease" || it.name == "assemblePlay" }.configureEach {
     mustRunAfter("generateBaselineProfile")
 }
 
@@ -588,10 +612,22 @@ tasks.register<VerifyReleaseProfiles>("verifyReleaseProfiles") {
     group = "verification"
     description = "Verifies generated Baseline/Startup Profiles and release APK packaging."
     dependsOn("assembleRelease", "bundleRelease")
+    artifactLabel.set("Release")
     baselineProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/baseline-prof.txt"))
     startupProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/startup-prof.txt"))
     releaseApk.set(layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk"))
     releaseBundle.set(layout.buildDirectory.file("outputs/bundle/release/app-release.aab"))
+}
+
+tasks.register<VerifyReleaseProfiles>("verifyPlayProfiles") {
+    group = "verification"
+    description = "Verifies generated Baseline/Startup Profiles and Play APK/AAB packaging."
+    dependsOn("assemblePlay", "bundlePlay")
+    artifactLabel.set("Play")
+    baselineProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/baseline-prof.txt"))
+    startupProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/startup-prof.txt"))
+    releaseApk.set(layout.buildDirectory.file("outputs/apk/play/app-play-unsigned.apk"))
+    releaseBundle.set(layout.buildDirectory.file("outputs/bundle/play/app-play.aab"))
 }
 
 val rawCycloneDxSbom = layout.buildDirectory.file("reports/cyclonedx/raw.cdx.json")

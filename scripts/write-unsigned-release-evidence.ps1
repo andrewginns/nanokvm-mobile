@@ -11,6 +11,9 @@ param(
 
     [string]$UnsignedApk,
     [string]$ReleaseBundle,
+    [switch]$IncludePlayBundle,
+    [string]$PlayBundle,
+    [string]$PlayUnsignedApk,
     [string]$Sbom,
     [string]$BuildLogPath,
     [string]$OutputPath
@@ -18,10 +21,15 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "release-lint-advisories.ps1")
 $publishedEvidencePaths = [System.Collections.Generic.List[string]]::new()
 $inProgressEvidence = $null
 $inProgressBuildLog = $null
 $inProgressArtifactDirectory = $null
+
+if (($PlayBundle -or $PlayUnsignedApk) -and -not $IncludePlayBundle) {
+    throw "PlayBundle and PlayUnsignedApk require -IncludePlayBundle."
+}
 
 function Invoke-NativeCapture {
     param(
@@ -91,6 +99,51 @@ function Get-ApkMetadata {
     }
 }
 
+function Assert-UnsignedAppBundle {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Bundle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$JarSigner
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($Bundle)
+    try {
+        $entryNames = New-Object 'System.Collections.Generic.HashSet[string]' (
+            [StringComparer]::Ordinal
+        )
+        foreach ($entry in $archive.Entries) {
+            $name = $entry.FullName.Replace('\', '/')
+            if (-not $entryNames.Add($name)) {
+                throw "The Play App Bundle contains a duplicate ZIP entry: $name"
+            }
+            if ($name -match '(?i)^META-INF/(?:MANIFEST\.MF|[^/]+\.(?:SF|RSA|DSA|EC))$') {
+                throw "The reviewed Play App Bundle already contains JAR signature metadata: $name"
+            }
+        }
+        foreach ($requiredEntry in @("BundleConfig.pb", "base/manifest/AndroidManifest.xml")) {
+            if (-not $entryNames.Contains($requiredEntry)) {
+                throw "The Play App Bundle is incomplete; missing $requiredEntry."
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
+
+    $signatureResult = Invoke-NativeCapture `
+        -FilePath $JarSigner `
+        -Arguments @("-verify", "-verbose:summary", "-certs", $Bundle)
+    if (
+        $signatureResult.ExitCode -ne 0 -or
+        $signatureResult.Output -notmatch '(?i)jar is unsigned' -or
+        $signatureResult.Output -match '(?i)jar verified'
+    ) {
+        throw "The reviewed Play App Bundle is already or partially JAR-signed."
+    }
+}
+
 function Get-ArtifactRecord {
     param(
         [Parameter(Mandatory = $true)]
@@ -117,6 +170,38 @@ function Get-ArtifactRecord {
         lastWriteTimeUtc = $item.LastWriteTimeUtc.ToString("o")
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
     }
+}
+
+function Resolve-CanonicalPlayOutput {
+    param(
+        [string]$RequestedPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CanonicalRelativePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ParameterName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Repository
+    )
+
+    $canonical = [IO.Path]::GetFullPath((Join-Path $Repository $CanonicalRelativePath))
+    if ([string]::IsNullOrWhiteSpace($RequestedPath)) {
+        return $canonical
+    }
+    $requested = if ([IO.Path]::IsPathRooted($RequestedPath)) {
+        [IO.Path]::GetFullPath($RequestedPath)
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $Repository $RequestedPath))
+    }
+    if (-not $requested.Equals($canonical, [StringComparison]::OrdinalIgnoreCase)) {
+        throw (
+            "$ParameterName must identify the canonical :app Play task output: " +
+            $canonical
+        )
+    }
+    return $canonical
 }
 
 function Copy-RetainedArtifact {
@@ -177,6 +262,18 @@ function Remove-EvidencePath {
 }
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ($IncludePlayBundle) {
+    $PlayBundle = Resolve-CanonicalPlayOutput `
+        -RequestedPath $PlayBundle `
+        -CanonicalRelativePath "app\build\outputs\bundle\play\app-play.aab" `
+        -ParameterName "PlayBundle" `
+        -Repository $repository
+    $PlayUnsignedApk = Resolve-CanonicalPlayOutput `
+        -RequestedPath $PlayUnsignedApk `
+        -CanonicalRelativePath "app\build\outputs\apk\play\app-play-unsigned.apk" `
+        -ParameterName "PlayUnsignedApk" `
+        -Repository $repository
+}
 $gitStatusResult = Invoke-NativeCapture `
     -FilePath "git.exe" `
     -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
@@ -353,6 +450,15 @@ $strictBuildArguments = @(
     ":macrobenchmark:assembleBenchmark",
     ":app:verifyReproducibleSbomMetadata"
 )
+if ($IncludePlayBundle) {
+    $strictBuildArguments += @(
+        ":app:testPlayUnitTest",
+        ":app:lintPlay",
+        ":app:assemblePlay",
+        ":app:bundlePlay",
+        ":app:verifyPlayProfiles"
+    )
+}
 $gradleWrapper = Join-Path $repository "gradlew.bat"
 $jdkHome = Split-Path -Parent (Split-Path -Parent $resolvedJava)
 $previousJavaHome = $env:JAVA_HOME
@@ -468,6 +574,12 @@ if (-not $Sbom) {
 }
 $unsignedApkRecord = Get-ArtifactRecord -Path $UnsignedApk -Repository $repository
 $releaseBundleRecord = Get-ArtifactRecord -Path $ReleaseBundle -Repository $repository
+$playBundleRecord = $null
+$playUnsignedApkRecord = $null
+if ($IncludePlayBundle) {
+    $playBundleRecord = Get-ArtifactRecord -Path $PlayBundle -Repository $repository
+    $playUnsignedApkRecord = Get-ArtifactRecord -Path $PlayUnsignedApk -Repository $repository
+}
 $sbomRecord = Get-ArtifactRecord -Path $Sbom -Repository $repository
 $strictBuildLogRecord = Get-ArtifactRecord -Path $absoluteBuildLog -Repository $repository
 
@@ -484,6 +596,16 @@ $r8Outputs = [ordered]@{
     usage = Join-Path $repository "app\build\outputs\mapping\release\usage.txt"
     configuration = Join-Path $repository "app\build\outputs\mapping\release\configuration.txt"
     resources = Join-Path $repository "app\build\outputs\mapping\release\resources.txt"
+}
+$playR8Outputs = [ordered]@{}
+if ($IncludePlayBundle) {
+    $playR8Outputs = [ordered]@{
+        mapping = Join-Path $repository "app\build\outputs\mapping\play\mapping.txt"
+        seeds = Join-Path $repository "app\build\outputs\mapping\play\seeds.txt"
+        usage = Join-Path $repository "app\build\outputs\mapping\play\usage.txt"
+        configuration = Join-Path $repository "app\build\outputs\mapping\play\configuration.txt"
+        resources = Join-Path $repository "app\build\outputs\mapping\play\resources.txt"
+    }
 }
 
 $resolvedUnsignedApk = (Resolve-Path -LiteralPath (Join-Path $repository $unsignedApkRecord.path)).Path
@@ -512,12 +634,62 @@ if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
     throw "The unsigned APK failed signature inspection for an unexpected reason."
 }
 
+if ($IncludePlayBundle) {
+    $resolvedPlayUnsignedApk = Resolve-Path -LiteralPath (
+        Join-Path $repository $playUnsignedApkRecord.path
+    )
+    $playApkMetadata = Get-ApkMetadata -Apk $resolvedPlayUnsignedApk.Path -Aapt2 $aapt2
+    if (
+        $playApkMetadata.package -ne $apkMetadata.package -or
+        $playApkMetadata.versionName -ne $apkMetadata.versionName -or
+        $playApkMetadata.versionCode -ne $apkMetadata.versionCode -or
+        $playApkMetadata.minimumSdk -ne $apkMetadata.minimumSdk -or
+        $playApkMetadata.targetSdk -ne $apkMetadata.targetSdk -or
+        $playApkMetadata.debuggable -or
+        $playApkMetadata.profileable -or
+        $playApkMetadata.testOnly
+    ) {
+        throw "The unsigned Play APK does not preserve the reviewed release identity."
+    }
+    $playApkVerificationResult = Invoke-NativeCapture `
+        -FilePath $resolvedJava `
+        -Arguments @("-jar", $apkSignerJar, "verify", $resolvedPlayUnsignedApk.Path)
+    if ($playApkVerificationResult.ExitCode -eq 0) {
+        throw "The Play APK evidence input is already signed."
+    }
+    if ($playApkVerificationResult.Output -notmatch 'DOES NOT VERIFY|Missing META-INF') {
+        throw "The unsigned Play APK failed signature inspection for an unexpected reason."
+    }
+    $jdkBin = Split-Path -Parent $resolvedJava
+    $jarSigner = Join-Path $jdkBin "jarsigner.exe"
+    $keyTool = Join-Path $jdkBin "keytool.exe"
+    foreach ($playJdkTool in @($jarSigner, $keyTool)) {
+        if (-not (Test-Path -LiteralPath $playJdkTool -PathType Leaf)) {
+            throw "The explicit JDK 21 installation lacks $playJdkTool."
+        }
+    }
+    $resolvedPlayBundle = Resolve-Path -LiteralPath (
+        Join-Path $repository $playBundleRecord.path
+    )
+    Assert-UnsignedAppBundle -Bundle $resolvedPlayBundle.Path -JarSigner $jarSigner
+}
+
 $testFiles = @()
 foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
     $testResultDirectory = Join-Path $repository "$module\build\test-results\testDebugUnitTest"
     if (Test-Path -LiteralPath $testResultDirectory -PathType Container) {
         $testFiles += Get-ChildItem -LiteralPath $testResultDirectory -File -Filter "TEST-*.xml"
     }
+}
+if ($IncludePlayBundle) {
+    $playTestResultDirectory = Join-Path $repository "app\build\test-results\testPlayUnitTest"
+    if (-not (Test-Path -LiteralPath $playTestResultDirectory -PathType Container)) {
+        throw "The strict Play build did not produce Play unit-test results."
+    }
+    $testFiles += Get-ChildItem `
+        -LiteralPath $playTestResultDirectory `
+        -File `
+        -Filter "TEST-*.xml"
 }
 $testTotals = [ordered]@{ suites = $testFiles.Count; tests = 0; failures = 0; errors = 0; skipped = 0 }
 foreach ($testFile in $testFiles) {
@@ -539,18 +711,33 @@ foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
         $lintFiles += Get-Item -LiteralPath $lintFile
     }
 }
+if ($IncludePlayBundle) {
+    $playLintFile = Join-Path $repository "app\build\reports\lint-results-play.xml"
+    if (-not (Test-Path -LiteralPath $playLintFile -PathType Leaf)) {
+        throw "The strict Play build did not produce its Play lint report."
+    }
+    $lintFiles += Get-Item -LiteralPath $playLintFile
+}
 $lintSourceResults = foreach ($lintFile in $lintFiles) {
-    [xml]$lintDocument = Get-Content -LiteralPath $lintFile.FullName
+    $assessment = Get-NanoKvmReleaseLintAssessment `
+        -Path $lintFile.FullName `
+        -Repository $repository
     [pscustomobject]@{
         source = $lintFile.FullName
-        issues = $lintDocument.SelectNodes("/issues/issue").Count
+        issues = $assessment.issues
+        blockingIssues = $assessment.blockingIssues
+        allowedAdvisories = $assessment.allowedAdvisories
     }
 }
-if ($lintSourceResults.Count -lt 3 -or ($lintSourceResults | Where-Object { $_.issues -ne 0 })) {
+$minimumLintReportCount = $(if ($IncludePlayBundle) { 4 } else { 3 })
+if (
+    $lintSourceResults.Count -lt $minimumLintReportCount -or
+    ($lintSourceResults | Where-Object { $_.blockingIssues -ne 0 })
+) {
     throw "The retained release lint reports are missing or contain issues."
 }
 
-foreach ($requiredArtifact in @(
+$requiredArtifacts = @(
     $unsignedApkRecord,
     $releaseBundleRecord,
     $sbomRecord,
@@ -569,7 +756,16 @@ foreach ($requiredArtifact in @(
     (Get-ArtifactRecord -Repository $repository -Path (
         Join-Path $repository "app\src\main\generated\baselineProfiles\startup-prof.txt"
     ))
-)) {
+)
+if ($IncludePlayBundle) {
+    $requiredArtifacts += @($playBundleRecord, $playUnsignedApkRecord)
+    foreach ($playR8Output in $playR8Outputs.GetEnumerator()) {
+        $requiredArtifacts += Get-ArtifactRecord `
+            -Repository $repository `
+            -Path $playR8Output.Value
+    }
+}
+foreach ($requiredArtifact in $requiredArtifacts) {
     if ($requiredArtifact.length -le 0) {
         throw "A required release evidence artifact is empty: $($requiredArtifact.path)"
     }
@@ -616,6 +812,22 @@ $retainedSources = [ordered]@{
     startupProfile = [pscustomobject]@{
         source = Join-Path $repository "app\src\main\generated\baselineProfiles\startup-prof.txt"
         destination = "profiles\startup-prof.txt"
+    }
+}
+if ($IncludePlayBundle) {
+    $retainedSources["playBundle"] = [pscustomobject]@{
+        source = $PlayBundle
+        destination = "artifacts\app-play.aab"
+    }
+    $retainedSources["playUnsignedApk"] = [pscustomobject]@{
+        source = $PlayUnsignedApk
+        destination = "artifacts\app-play-unsigned.apk"
+    }
+    foreach ($playR8Output in $playR8Outputs.GetEnumerator()) {
+        $retainedSources["playR8$($playR8Output.Key)"] = [pscustomobject]@{
+            source = $playR8Output.Value
+            destination = "play-r8\$($playR8Output.Key).txt"
+        }
     }
 }
 foreach ($retainedSource in $retainedSources.GetEnumerator()) {
@@ -684,6 +896,8 @@ foreach ($lintSourceResult in $lintSourceResults) {
         lastWriteTimeUtc = $lintRecord.lastWriteTimeUtc
         sha256 = $lintRecord.sha256
         issues = $lintSourceResult.issues
+        blockingIssues = $lintSourceResult.blockingIssues
+        allowedAdvisories = $lintSourceResult.allowedAdvisories
     }
 }
 
@@ -699,7 +913,7 @@ if (-not $gradleVersionMatch.Success -or -not $gradleDistributionHashMatch.Succe
     throw "The Gradle wrapper version or distribution checksum is not pinned."
 }
 
-[pscustomobject]@{
+$evidenceRecord = [ordered]@{
     schemaVersion = 2
     createdUtc = [DateTime]::UtcNow.ToString("o")
     sourceTag = $SourceTag
@@ -749,7 +963,34 @@ if (-not $gradleVersionMatch.Success -or -not $gradleDistributionHashMatch.Succe
             Get-FileHash -Algorithm SHA256 -LiteralPath $apkSignerJar
         ).Hash.ToLowerInvariant()
     }
-} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $inProgressEvidence -Encoding utf8
+}
+if ($IncludePlayBundle) {
+    $evidenceRecord["playBundle"] = $retainedRecords.playBundle
+    $evidenceRecord["playUnsignedApk"] = $retainedRecords.playUnsignedApk
+    $evidenceRecord["playVariant"] = [pscustomobject]@{
+        unitTestTask = ":app:testPlayUnitTest"
+        lintTask = ":app:lintPlay"
+        assembleTask = ":app:assemblePlay"
+        bundleTask = ":app:bundlePlay"
+        profileVerificationTask = ":app:verifyPlayProfiles"
+        jarsignerSha256 = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $jarSigner
+        ).Hash.ToLowerInvariant()
+        keytoolSha256 = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $keyTool
+        ).Hash.ToLowerInvariant()
+    }
+    $evidenceRecord["playR8"] = [pscustomobject]@{
+        mapping = $retainedRecords.playR8mapping
+        seeds = $retainedRecords.playR8seeds
+        usage = $retainedRecords.playR8usage
+        configuration = $retainedRecords.playR8configuration
+        resources = $retainedRecords.playR8resources
+    }
+}
+[pscustomobject]$evidenceRecord |
+    ConvertTo-Json -Depth 8 |
+    Set-Content -LiteralPath $inProgressEvidence -Encoding utf8
 
 Move-Item -LiteralPath $inProgressEvidence -Destination $absoluteOutput
 $publishedEvidencePaths.Add($absoluteOutput)
@@ -760,3 +1001,6 @@ Write-Output "Evidence SHA-256: $evidenceHash"
 Write-Output "Retained evidence artifacts: $absoluteArtifactDirectory"
 Write-Output "Source archive SHA-256: $($sourceArchiveRecord.sha256)"
 Write-Output "Unsigned APK SHA-256: $($retainedRecords.unsignedApk.sha256)"
+if ($IncludePlayBundle) {
+    Write-Output "Unsigned Play AAB SHA-256: $($retainedRecords.playBundle.sha256)"
+}

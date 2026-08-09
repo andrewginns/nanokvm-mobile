@@ -29,6 +29,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "release-lint-advisories.ps1")
 
 function Invoke-NativeCapture {
     param(
@@ -485,7 +486,7 @@ if ($reviewedTestReports.Count -ne [int]$evidence.tests.suites) {
     throw "The reviewed evidence does not contain every JVM test report."
 }
 $reviewedLint = @($evidence.lint)
-if ($reviewedLint.Count -lt 3 -or ($reviewedLint | Where-Object { [int]$_.issues -ne 0 })) {
+if ($reviewedLint.Count -lt 3) {
     throw "The reviewed evidence does not contain the required clean release lint results."
 }
 if (
@@ -530,7 +531,26 @@ foreach ($testReport in $reviewedTestReports) {
     [void](Resolve-EvidenceArtifact -Record $testReport -Repository $repository)
 }
 foreach ($lintReport in $reviewedLint) {
-    [void](Resolve-EvidenceArtifact -Record $lintReport -Repository $repository)
+    $resolvedLintReport = Resolve-EvidenceArtifact `
+        -Record $lintReport `
+        -Repository $repository
+    $lintAssessment = Get-NanoKvmReleaseLintAssessment `
+        -Path $resolvedLintReport `
+        -Repository $repository
+    $hasStructuredAssessment = (
+        $null -ne $lintReport.PSObject.Properties["blockingIssues"] -and
+        $null -ne $lintReport.PSObject.Properties["allowedAdvisories"]
+    )
+    $lintEvidenceMatches = if ($hasStructuredAssessment) {
+        Test-NanoKvmLintEvidenceMatches `
+            -EvidenceRecord $lintReport `
+            -Assessment $lintAssessment
+    } else {
+        [int]$lintReport.issues -eq 0 -and $lintAssessment.issues -eq 0
+    }
+    if ($lintAssessment.blockingIssues -ne 0 -or -not $lintEvidenceMatches) {
+        throw "A retained lint report has unreviewed issues or differs from its evidence record."
+    }
 }
 $resolvedUnsignedApk = $verifiedEvidenceArtifacts["unsignedApk"]
 $actualUnsignedHash = (

@@ -41,6 +41,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import org.nanokvm.mobile.BuildConfig
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.protocol.AbsoluteMouseReport
 import org.nanokvm.protocol.ApiResponseException
@@ -110,6 +111,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     private val workerDispatcher: CoroutineDispatcher,
     private val reconnectPolicy: ReconnectPolicy,
     private val webRtcRuntimeProvider: WebRtcRuntimeProvider? = null,
+    private val picoClawEnabled: Boolean = BuildConfig.PICOCLAW_ENABLED,
 ) : ConsoleBackend,
     Phase3Controls,
     AdministrationControls,
@@ -131,7 +133,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         phase3 = this,
         administration = this,
         operator = this,
-        picoClaw = this,
+        picoClaw = this.takeIf { picoClawEnabled },
         automation = this,
         offlineUpdate = this,
         passwordChange = this,
@@ -1733,6 +1735,10 @@ internal class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun setPicoClawSurfaceVisible(visible: Boolean) {
+        if (!picoClawEnabled) {
+            picoClawSurfaceVisible = false
+            return
+        }
         picoClawSurfaceVisible = visible
         if (visible) {
             startPicoClawSurfaceWorkIfNeeded()
@@ -3922,6 +3928,10 @@ internal class NanoKvmConsoleBackend internal constructor(
         picoClawLifecycle.clear()
         prior?.close()
         clearPicoClawHistoryHandlesLocked()
+        if (!picoClawEnabled) {
+            mutablePicoClawState.value = PicoClawUiState()
+            return
+        }
         val version = activeSession.capabilities.applicationVersion
         if (version == null || version < MINIMUM_PICOCLAW_VERSION) {
             mutablePicoClawState.value = PicoClawUiState(support = PicoClawSupport.Unsupported)
@@ -3943,7 +3953,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     }
 
     private fun currentPicoClawBinding(): NanoKvmSessionBinding? = synchronized(stateLock) {
-        if (!picoClawSurfaceVisible) return@synchronized null
+        if (!picoClawEnabled || !picoClawSurfaceVisible) return@synchronized null
         currentSessionBindingLocked()
     }
 
@@ -4210,6 +4220,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         onCompletion: () -> Unit = {},
         block: suspend (NanoKvmPicoClawFeatureGateway, NanoKvmSessionBinding) -> Unit,
     ): Boolean {
+        if (!picoClawEnabled) return false
         val selection = resolvePicoClawGateway(destination) ?: return false
         lateinit var created: Job
         val accepted = synchronized(stateLock) {
@@ -4269,6 +4280,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     private fun resolvePicoClawGateway(
         destination: ApprovedPicoClawDestination,
     ): Pair<NanoKvmPicoClawFeatureGateway, NanoKvmSessionBinding>? {
+        if (!picoClawEnabled) return null
         val binding = currentPicoClawBinding()
         val gateway = binding?.let(picoClawLifecycle::resolve)
         if (binding == null || gateway == null || !destination.matches(binding)) {
