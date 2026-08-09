@@ -50,9 +50,10 @@ with the standard local debug key. It exists only for controlled performance and
 release-like testing; it is not a distributable artifact.
 
 Macrobenchmark remains on the stable AndroidX 1.4.1 line. The Baseline Profile
-Gradle plugin alone uses 1.5.0-alpha07 because the 1.5 line is the first to
+Gradle plugin alone uses 1.5.0-beta01 because the 1.5 line is the first to
 support AGP 9's new DSL; stable 1.4.1 rejects AGP 9 application modules during
-configuration. Reassess this narrow exception when AndroidX 1.5 reaches stable.
+configuration. Reassess this narrow pre-release exception when AndroidX 1.5
+reaches stable.
 
 Biometric 1.1.0 remains the current stable release but declares the obsolete
 Fragment 1.2.5 transitively. The app therefore pins stable Fragment 1.8.9: its
