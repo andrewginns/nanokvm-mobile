@@ -5,8 +5,8 @@ only from Google Maven, Maven Central, and the Gradle Plugin Portal; repository
 declarations in individual projects are rejected. Versions are centralized in
 `gradle/libs.versions.toml`, artifacts are checked against
 `gradle/verification-metadata.xml`, and the Gradle distribution is protected by
-its published checksum. GitHub-hosted CI is intentionally disabled during
-active development; dependency and build validation is run locally.
+its published checksum. Dependency and build validation is run locally; hosted
+CI is not part of this repository's release process.
 
 ## Runtime dependencies
 
@@ -16,7 +16,7 @@ active development; dependency and build validation is run locally.
 | Jetpack Compose UI, Foundation, Material 3 and Material 3 Adaptive | Native Android UI, accessibility semantics, current-window size classification, and supporting-pane layout | User interaction, window geometry, and rendered local state only | Apache-2.0 | App maintainers; each dependency PR |
 | AndroidX DataStore Preferences | Persist non-secret NanoKVM profiles and public certificate pins | App-private storage; explicitly excluded from backup | Apache-2.0 | App maintainers; each dependency PR |
 | AndroidX Biometric | Authorize Android Keystore access to an explicitly saved password | System biometric/device-credential prompt; the library does not receive the NanoKVM password | Apache-2.0 | Security owner; each dependency PR |
-| AndroidX ProfileInstaller | Install the app's packaged Baseline Profile on Android versions and distribution paths without Play-managed profile installation | App package metadata and local ART profile state only | Apache-2.0 | Performance owner; regenerate and review at each release |
+| AndroidX ProfileInstaller | Install the app's packaged Baseline Profile on Android versions and distribution paths without store-managed profile installation | App package metadata and local ART profile state only | Apache-2.0 | Performance owner; regenerate and review at each release |
 | OkHttp | HTTPS, REST, WebSocket and MJPEG transport to the user-selected NanoKVM origin | `INTERNET`; NanoKVM address, login request, in-memory session cookie, video and input | Apache-2.0 | Protocol owner; each dependency PR |
 | Kotlin Coroutines | Structured asynchronous session, transport and video work | In-process state only | Apache-2.0 | App maintainers; each dependency PR |
 | Kotlin Serialization JSON | Encode and decode NanoKVM API envelopes | NanoKVM requests and responses | Apache-2.0 | Protocol owner; each dependency PR |

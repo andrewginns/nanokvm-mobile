@@ -35,8 +35,8 @@ release gate. Maintainers run this gate locally and retain the exact command,
 source commit, dirty-tree status, output hashes, and relevant reports in a
 private evidence archive. These unsigned outputs are not post-signing release
 artifacts or checksums. The debug-signed benchmark and R8 mapping outputs must
-also remain private test evidence. A public pre-release is created only through
-the exact-source evidence and protected-signing process in `DISTRIBUTION.md`;
+also remain private test evidence. A public release is created only through the
+exact-source evidence and protected-signing process in `DISTRIBUTION.md`;
 development build output is never uploaded as though it were publishable.
 
 ### Debug signing and update compatibility
@@ -297,8 +297,8 @@ The modernization working tree based on `782e3b0` was independently reviewed
 for architecture/lifecycle, platform/security/cancellation, UI/accessibility/
 performance, and post-remediation regressions, then passed its final local
 implementation gate. This is unsigned, uncommitted development evidence, not a
-release approval. Hosted CI remains intentionally disabled during active
-development; these checks were run locally with JDK 21 and SDK 37.
+release approval. These checks were run locally with JDK 21 and SDK 37; hosted
+CI is not part of the repository's release process.
 
 - the complete strict Gradle matrix passed 361 tasks in 10 minutes 36 seconds:
   503/503 JVM tests across 75 suites, six zero-finding debug/release lint
@@ -371,8 +371,8 @@ invariant so future automated work does not silently select the sandbox key.
 The dirty 0.3.2/code-9 working tree based on commit `782e3b0` completed the
 prepared lifecycle, state, presentation, certificate, and transport remediation
 tranche. This is local development evidence, not approval of a production
-release. Hosted CI remains
-intentionally disabled during active development.
+release. Verification is local; hosted CI is not part of the repository's
+release process.
 
 The exact-source strict gate used JDK 21, SDK 37, strict dependency verification,
 one worker, no parallel execution, no configuration cache, and in-process Kotlin

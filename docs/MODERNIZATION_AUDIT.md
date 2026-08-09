@@ -17,7 +17,7 @@ in favour of maintainability, security, reliability, and testable ownership.
 | Application | GPL-3.0-or-later, direct-LAN Android client for a user-selected NanoKVM |
 | Platform | minSdk 26, compile/target SDK 37, JDK 21 build runtime, Java/Kotlin bytecode 17 |
 | Modules | `app`, `protocol`, `video`, and non-shipping `macrobenchmark` |
-| Field telemetry | None; channel-provided aggregate Vitals are unavailable before distribution |
+| Field telemetry | None; channel-provided aggregate health metrics are unavailable before distribution |
 
 Scores follow the guide:
 
@@ -36,7 +36,7 @@ known at this checkpoint. P1 items below block public distribution.
 | Key | Evidence available in the repository | Limits at this checkpoint |
 | --- | --- | --- |
 | E1 — platform/build | [app build](../app/build.gradle.kts), [settings](../settings.gradle.kts), [version catalogue](../gradle/libs.versions.toml), [wrapper properties](../gradle/wrapper/gradle-wrapper.properties), [manifest](../app/src/main/AndroidManifest.xml), and [NSC](../app/src/main/res/xml/network_security_config.xml); the local JDK 21 strict gate passed at this checkpoint | Repeat and retain the gate against the eventual release-source freeze, then retain signed-candidate evidence |
-| E2 — supply chain | [verification metadata](../gradle/verification-metadata.xml), [dependency inventory](DEPENDENCIES.md), [SBOM task](../app/build.gradle.kts), and [build verification recipe](BUILD_VERIFICATION.md); the local strict gate verified the dependency graph and generated the canonical SBOM | Hosted automation is intentionally disabled during active development; signed artifact, vulnerability review, post-signing checksums/provenance, and isolated-environment comparison remain open |
+| E2 — supply chain | [verification metadata](../gradle/verification-metadata.xml), [dependency inventory](DEPENDENCIES.md), [SBOM task](../app/build.gradle.kts), and [build verification recipe](BUILD_VERIFICATION.md); the local strict gate verified the dependency graph and generated the canonical SBOM | Verification is local and hosted automation is not part of the release process; signed artifact, vulnerability review, post-signing checksums/provenance, and isolated-environment comparison remain open |
 | E3 — architecture/state | [AppContainer](../app/src/main/java/org/nanokvm/mobile/AppContainer.kt), [AppViewModel](../app/src/main/java/org/nanokvm/mobile/ui/AppViewModel.kt), [ProfileRepository](../app/src/main/java/org/nanokvm/mobile/data/ProfileRepository.kt), [typed console feature contracts](../app/src/main/java/org/nanokvm/mobile/runtime/ConsoleBackend.kt), [session draft owner](../app/src/main/java/org/nanokvm/mobile/ui/screens/ConsoleSessionDraftOwner.kt), [automation state owner](../app/src/main/java/org/nanokvm/mobile/ui/screens/AutomationDialogController.kt), and [backend](../app/src/main/java/org/nanokvm/mobile/runtime/NanoKvmConsoleBackend.kt) | Focused contracts, semantic FIFO app notices, separate latest status/sequenced action feedback, explicit snapshot handles, and session-bound owners reduce coupling. JVM tests cover cancellation-ignoring input/video callbacks, late authentication, transient storage failure, and 64 repeated lifecycle cycles; an API 37 out-of-process restart restores only non-secret draft state. Real Keystore and physical Surface/HID evidence remain open |
 | E4 — trust/credentials | [CertificateInspector](../protocol/src/main/java/org/nanokvm/protocol/CertificateInspector.kt), [EndpointTrustPreflight](../protocol/src/main/java/org/nanokvm/protocol/EndpointTrustPreflight.kt), [SavedCredentialStore](../app/src/main/java/org/nanokvm/mobile/security/SavedCredentialStore.kt), and [request-ID coordinator](../app/src/main/java/org/nanokvm/mobile/security/CredentialAuthenticationCoordinator.kt) | Old/new pin comparison, connect-once, and explicit replacement are implemented; real Keystore/traffic/device recovery results remain open |
 | E5 — bounds/control/reconnect | [protocol sources](../protocol/src/main/java/org/nanokvm/protocol), [video sources](../video/src/main/java/org/nanokvm/video), [ReconnectPolicy](../app/src/main/java/org/nanokvm/mobile/runtime/ReconnectPolicy.kt), and [ControlCommandGate](../app/src/main/java/org/nanokvm/mobile/runtime/ControlCommandGate.kt); REST execution/read/decode is internally dispatched, cancellation cancels active calls and inspection sockets, retries/redirects and WebSocket compression are disabled, clipboard/share text and tokens are rejected before retained use at their bounds, unused input server messages are discarded, direct-H.264 oversize cancels immediately, and raw slow/fragmented plus compressed-header fixtures characterize the pinned OkHttp behavior | OkHttp still allocates a complete uncompressed WebSocket message before application limits; API 37/physical heap-PSS and long real-appliance results remain open |
@@ -134,7 +134,7 @@ repositories + runtime StateFlow -> AppUiState -> lifecycle-aware Compose
 | PERF-10 | 1 | P1 partial | Parser/decoder queues, retained operator output/editor text, accepted clipboard/share text, profile fields/pins, certificate display metadata, and session tokens are bounded; hot text validation avoids encoded copies. WebSocket compression is refused, slow fragmentation is characterized, and rejection terminates transport. The Android heap/PSS fixture was deliberately not invoked at this checkpoint; the first complete uncompressed allocation, physical memory/leaks, low-memory, and long-session behavior remain open. [E5] |
 | PERF-11 | N/A | — | No durable/background job is required. Reassess if background work is introduced; verify traffic stops today. |
 | PERF-12 | 1 | P1 partial | Heartbeat ownership and no wake lock are evident. Network volume, metered policy, background stop, and physical power evidence are open. [E5] |
-| PERF-13 | 0 | P2 open/conditional | No field exposure or Vitals exists. Review aggregate channel Vitals only after distribution; do not mark passing before data exists. [E10] |
+| PERF-13 | 0 | P2 open/conditional | No field exposure or channel health metrics exist. Review aggregate channel metrics only after distribution; do not mark passing before data exists. [E10] |
 | PERF-14 | 0 | P2 open | No three-run controlled trend or active relative-plus-absolute threshold exists. [E7] |
 
 Provisional thresholds remain report-only until three stable physical reference
@@ -160,7 +160,7 @@ numbers if device/run variance shows they are inappropriate.
 | SEC-11 | N/A | — | No PendingIntent. Reassess on notification/widget/service introduction. |
 | SEC-12 | N/A | — | No WebView. Reassess if web content is embedded. |
 | SEC-13 | 1 | P1 partial | No APK secret is trusted; token origin, firmware assumptions, command serialization, and no replay/retry are documented/tested. Real adverse appliance evidence is open. [E4, E5, E8] |
-| SEC-14 | N/A | — | Play Integrity adds no meaningful boundary for this open-source local client without a developer backend. Reassess on backend entitlement. |
+| SEC-14 | N/A | — | Remote attestation adds no meaningful boundary for this open-source local client without a developer backend. Reassess on backend entitlement. |
 | SEC-15 | 2 | P1 evidenced | Exact dependencies, repository restrictions, wrapper and artifact hashes, dependency inventory, SBOM task, and minified variants exist. Signed release retention and vulnerability review remain TEST-10. [E1, E2] |
 | SEC-16 | 1 | P1 partial | Threats map to applicable MASTG v2 IDs and dispositions. Actual signed/minified device results are not retained. [E8] |
 | SEC-17 | 1 | P1 partial | Privacy, data inventory, manifest, and dependencies are reconciled in docs; observed traffic and distribution-channel disclosure remain open. [E8] |
@@ -231,7 +231,7 @@ translations/long-string coverage as those presentation paths evolve. Do not
 reopen the architecture without a reproduced defect.
 
 Explicit non-goals remain Hilt, per-action use cases, extra feature modules,
-Room/offline command queues, broad screenshot matrices, Play Integrity, and
+Room/offline command queues, broad screenshot matrices, remote attestation, and
 background-service infrastructure: the current app has no evidence that those
 would improve this direct-LAN KVM.
 
@@ -247,7 +247,7 @@ would improve this direct-LAN KVM.
 | 8 | Bound or explicitly disposition WebSocket first allocation — protocol/security owner | 3–5 days investigation/implementation | Transport spike/alternative assessment; physical memory fixture | Keep current parser/downstream limits and hostile-endpoint warning; hold distribution if observed impact violates availability budget | Oversize input/H.264 cannot exceed approved peak memory before rejection, or signed risk acceptance records measured bound/affected devices |
 | 9 | Pin-rotation device evidence — app/security owner | 1 day | Orders 2/4; certificate-recovery fixture | Retain the implemented fail-closed old/new review flow | Old/new identity, expiry, rejection, connect-once, replacement, and recovery journeys pass without automatic trust |
 | 10 | Reproducibility and channel launch — release owner | 2–3 days | Orders 1–9; selected channel | Do not claim reproducibility or submit to F-Droid; withdraw mismatched artifact | Two isolated unsigned builds reconciled; public corresponding source and verification recipe match signed release |
-| 11 | Field evidence review — reliability owner | 28–90 days after exposure | Actual Play/channel distribution with aggregate metrics, or issue-report process | Pause rollout/withdraw and publish advisory for severe regression | Vitals by version/OS/device reviewed where available; top crash/ANR/startup/frame issues have owners and verified dispositions |
+| 11 | Field evidence review — reliability owner | 28–90 days after exposure | Actual public distribution with aggregate metrics, or issue-report process | Pause rollout/withdraw and publish advisory for severe regression | Health metrics by version/OS/device reviewed where available; top crash/ANR/startup/frame issues have owners and verified dispositions |
 
 ## 30/60/90 evidence trend
 
@@ -292,10 +292,10 @@ be traced to exact public source and signing identity.
 - Hilt, a domain/use-case layer, one module/ViewModel per screen, Room, and
   offline command queues add no current value.
 - WorkManager, foreground services, notifications, deep links, PendingIntents,
-  WebView, Play Integrity, and anti-tamper controls have no corresponding
+  WebView, remote attestation, and anti-tamper controls have no corresponding
   component today.
 - Third-party analytics/crash/performance SDKs will not be added. Use retained
-  local lab evidence, opt-in issue reports, and aggregate Android Vitals only if a
+  local lab evidence, opt-in issue reports, and aggregate channel health metrics only if a
   future channel provides them.
 
 Revisit every N/A when a new exported component, inbound link, WebView, cloud

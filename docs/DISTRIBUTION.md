@@ -292,6 +292,31 @@ targets and accept the disclosed gaps. Dynamic signed hashes and smoke results
 belong in the release assets/record so the frozen source tag is not changed
 after signing.
 
+## Stable direct-GitHub release lane
+
+An unchanged production-signed pre-release may be promoted to a stable GitHub
+release without rebuilding or replacing its assets when all of the following
+are true:
+
+- the source tag, commit, APK bytes, APK digest, signing identity, and retained
+  release evidence are unchanged;
+- the public-candidate controls above were satisfied for those exact bytes;
+- the release owner records successful physical-device and real-appliance use,
+  including the Android/app version, NanoKVM application version, approximate
+  duration, and observed outcome;
+- no known P0/P1 correctness, security, credential, input-release, data-loss,
+  licence, or corresponding-source defect remains undispositioned;
+- each applicable blocking checklist item is closed, marked not applicable, or
+  explicitly dispositioned by the release owner with the remaining scope stated
+  in the release notes; and
+- the release, security policy, changelog, and support documentation consistently
+  identify the binary as stable and preserve its signing/update warnings.
+
+Stable status is a release-owner decision about the documented supported scope,
+not a claim of universal Android, hardware, accessibility, destructive-action,
+or endurance coverage. Wider unexecuted matrices remain visible limitations and
+must be reconsidered for later binary releases.
+
 ## Reproducibility
 
 Before claiming reproducibility, build the unsigned release artifact twice in
@@ -307,18 +332,19 @@ source and build recipe.
 
 ## Publication, rollback, and field evidence
 
-Stable publication, marking a release **Latest**, or describing a binary as
-production-approved requires every blocking item in `RELEASE_CHECKLIST.md` to
-be closed. Earlier public testing is permitted only through the pre-release
-candidate lane above. If a signing, trust, credential, unintended-input,
-data-loss, or GPL source-link problem appears after publication, stop promotion,
-preserve evidence, publish a clear advisory, and withdraw or supersede the
-artifact through the distribution channel. Never reuse a version code for
-changed bytes, even when the earlier artifact was shared only as a development
-build.
+Stable publication or marking a release **Latest** requires the stable lane
+above and a completed candidate record in `RELEASE_CHECKLIST.md`. Applicable
+blocking items must be closed or explicitly dispositioned; optional wider
+coverage must not be presented as completed when it is not. Earlier public
+testing uses the pre-release candidate lane. If a signing, trust, credential,
+unintended-input, data-loss, or GPL source-link problem appears after
+publication, preserve evidence, publish a clear advisory, and withdraw or
+supersede the artifact through the distribution channel. Never reuse a version
+code for changed bytes, even when the earlier artifact was shared only as a
+development build.
 
 The app has no internal telemetry. After distribution, use opt-in issue reports
-and channel-provided aggregate Android Vitals only where available. Field
-crash/ANR/startup/slow-frame review is therefore a conditional gate for Play or
-another channel that supplies those aggregate metrics, not evidence that exists
-today.
+and channel-provided aggregate health metrics only where available. Field
+crash/ANR/startup/slow-frame review is therefore a conditional gate for any
+distribution channel that supplies those aggregate metrics, not evidence that
+exists today.
