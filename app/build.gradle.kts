@@ -3,11 +3,18 @@ import groovy.json.JsonSlurper
 import org.cyclonedx.model.Component
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -55,10 +62,31 @@ val bundledWebRtcNotices = layout.projectDirectory
 val bundledWebRtcWrapperLicense = layout.projectDirectory
     .file("src/main/assets/open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt")
     .asFile
+val bundledApacheLicense = layout.projectDirectory
+    .file("src/main/assets/open_source_licenses/APACHE-2.0.txt")
+    .asFile
+val bundledProtobufLicense = layout.projectDirectory
+    .file("src/main/assets/open_source_licenses/PROTOBUF-4.28.2-LICENSE.txt")
+    .asFile
+val bundledIjgNotice = layout.projectDirectory
+    .file("src/main/assets/open_source_licenses/README.ijg")
+    .asFile
+val bundledRuntimeComponentLicenses = layout.projectDirectory
+    .file("src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md")
+    .asFile
 val expectedWebRtcNoticesSha256 =
     "d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e"
 val expectedWebRtcWrapperLicenseSha256 =
     "e6b282fe6c0fb353928923470457f31b44cbab203effd60c0cde4a5bb96c8aec"
+val expectedApacheLicenseSha256 =
+    "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+val expectedProtobufLicenseSha256 =
+    "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
+val expectedIjgNoticeSha256 =
+    "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+val expectedRuntimeComponentLicensesSha256 =
+    "536db15041cb08129b58a6ccab1d294dc691c27ef13b0cf0569b23d3a2890f8a"
+val runtimeComponentLicenseIndexVersion = project.version.toString()
 
 val generateBundledAboutAssets by tasks.registering(Sync::class) {
     group = "build"
@@ -72,20 +100,38 @@ val generateBundledAboutAssets by tasks.registering(Sync::class) {
     }
 }
 
-val verifyBundledAboutAssets by tasks.registering {
-    group = "verification"
-    description = "Verifies the complete pinned WebRTC notices and bundled project documents."
-    notCompatibleWithConfigurationCache(
-        "The integrity check reads script-scoped document mappings.",
-    )
-    dependsOn(generateBundledAboutAssets)
-    inputs.files(bundledAboutDocuments.keys)
-    inputs.file(bundledWebRtcNotices)
-    inputs.file(bundledWebRtcWrapperLicense)
-    inputs.property("expectedWebRtcNoticesSha256", expectedWebRtcNoticesSha256)
-    inputs.property("expectedWebRtcWrapperLicenseSha256", expectedWebRtcWrapperLicenseSha256)
+@CacheableTask
+abstract class VerifyBundledAboutAssets : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val sourceDocuments: ConfigurableFileCollection
 
-    doLast {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val generatedDocumentsDirectory: DirectoryProperty
+
+    @get:Input
+    abstract val bundledDocumentNames: MapProperty<String, String>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val pinnedLicenceFiles: ConfigurableFileCollection
+
+    @get:Input
+    abstract val expectedSha256ByFileName: MapProperty<String, String>
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val runtimeComponentLicenceIndex: RegularFileProperty
+
+    @get:Input
+    abstract val runtimeComponentLicenceIndexVersion: Property<String>
+
+    @get:Input
+    abstract val resolvedRuntimeCoordinates: SetProperty<String>
+
+    @TaskAction
+    fun verify() {
         fun sha256(file: File): String = file.inputStream().use { input ->
             val digest = MessageDigest.getInstance("SHA-256")
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -99,31 +145,98 @@ val verifyBundledAboutAssets by tasks.registering {
             }
         }
 
-        require(bundledWebRtcNotices.isFile) {
-            "The complete pinned WebRTC notice bundle is missing: $bundledWebRtcNotices"
+        val pinnedByName = pinnedLicenceFiles.files.associateBy(File::getName)
+        val expectedHashes = expectedSha256ByFileName.get()
+        require(pinnedByName.keys == expectedHashes.keys) {
+            "Pinned licence/notice files do not match the reviewed hash inventory."
         }
-        val actualWebRtcHash = sha256(bundledWebRtcNotices)
-        require(actualWebRtcHash == expectedWebRtcNoticesSha256) {
-            "The pinned WebRTC notice bundle has SHA-256 $actualWebRtcHash; " +
-                "expected $expectedWebRtcNoticesSha256 for v144.7559.09."
-        }
-        require(bundledWebRtcWrapperLicense.isFile) {
-            "The pinned WebRTC wrapper licence is missing: $bundledWebRtcWrapperLicense"
-        }
-        val actualWrapperHash = sha256(bundledWebRtcWrapperLicense)
-        require(actualWrapperHash == expectedWebRtcWrapperLicenseSha256) {
-            "The pinned WebRTC wrapper licence has SHA-256 $actualWrapperHash; " +
-                "expected $expectedWebRtcWrapperLicenseSha256 for v144.7559.09."
+        expectedHashes.forEach { (fileName, expectedHash) ->
+            val file = pinnedByName.getValue(fileName)
+            require(file.isFile) { "A pinned licence/notice file is missing: $file" }
+            val actualHash = sha256(file)
+            require(actualHash == expectedHash) {
+                "$fileName has SHA-256 $actualHash; expected $expectedHash."
+            }
         }
 
-        val outputDirectory = bundledAboutAssetsDirectory.get().asFile.resolve("about")
-        bundledAboutDocuments.forEach { (source, bundledName) ->
+        val runtimeIndex = runtimeComponentLicenceIndex.get().asFile
+        val runtimeIndexText = runtimeIndex.readText(Charsets.UTF_8)
+        val expectedVersion = runtimeComponentLicenceIndexVersion.get()
+        require("for version $expectedVersion." in runtimeIndexText) {
+            "The runtime component licence index does not identify project version $expectedVersion."
+        }
+        val coordinatePattern = Regex("^- `([^`]+:[^`]+:[^`]+)`$")
+        val documentedCoordinates = runtimeIndexText
+            .lineSequence()
+            .mapNotNull { line -> coordinatePattern.matchEntire(line)?.groupValues?.get(1) }
+            .toList()
+        require(documentedCoordinates.size == documentedCoordinates.toSet().size) {
+            "The runtime component licence index contains duplicate coordinates."
+        }
+        val documentedCoordinateSet = documentedCoordinates.toSet()
+        val resolvedCoordinateSet = resolvedRuntimeCoordinates.get()
+        require(documentedCoordinateSet == resolvedCoordinateSet) {
+            val missing = (resolvedCoordinateSet - documentedCoordinateSet).sorted()
+            val stale = (documentedCoordinateSet - resolvedCoordinateSet).sorted()
+            "Runtime component licence index drift. Missing: $missing; stale: $stale"
+        }
+
+        val bundledNames = bundledDocumentNames.get()
+        val outputDirectory = generatedDocumentsDirectory.get().asFile.resolve("about")
+        sourceDocuments.files.forEach { source ->
+            val bundledName = bundledNames.getValue(source.name)
             val bundled = outputDirectory.resolve(bundledName)
             require(source.isFile && bundled.isFile && source.readBytes().contentEquals(bundled.readBytes())) {
                 "Bundled About document $bundledName does not exactly match $source."
             }
         }
     }
+}
+
+val resolvedRuntimeCoordinateProvider = providers.provider {
+    configurations
+        .getByName("releaseRuntimeClasspath")
+        .incoming
+        .resolutionResult
+        .allComponents
+        .mapNotNull { component ->
+            (component.id as? ModuleComponentIdentifier)?.let { identifier ->
+                "${identifier.group}:${identifier.module}:${identifier.version}"
+            }
+        }
+        .toSortedSet()
+}
+
+val verifyBundledAboutAssets = tasks.register<VerifyBundledAboutAssets>("verifyBundledAboutAssets") {
+    group = "verification"
+    description = "Verifies bundled project documents and complete runtime licence materials."
+    dependsOn(generateBundledAboutAssets)
+    sourceDocuments.from(bundledAboutDocuments.keys)
+    generatedDocumentsDirectory.set(bundledAboutAssetsDirectory)
+    bundledDocumentNames.set(bundledAboutDocuments.mapKeys { (source, _) -> source.name })
+    pinnedLicenceFiles.from(
+        bundledWebRtcNotices,
+        bundledWebRtcWrapperLicense,
+        bundledApacheLicense,
+        bundledProtobufLicense,
+        bundledIjgNotice,
+        bundledRuntimeComponentLicenses,
+    )
+    expectedSha256ByFileName.set(
+        mapOf(
+            bundledWebRtcNotices.name to expectedWebRtcNoticesSha256,
+            bundledWebRtcWrapperLicense.name to expectedWebRtcWrapperLicenseSha256,
+            bundledApacheLicense.name to expectedApacheLicenseSha256,
+            bundledProtobufLicense.name to expectedProtobufLicenseSha256,
+            bundledIjgNotice.name to expectedIjgNoticeSha256,
+            bundledRuntimeComponentLicenses.name to expectedRuntimeComponentLicensesSha256,
+        ),
+    )
+    runtimeComponentLicenceIndex.set(
+        layout.projectDirectory.file("src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md"),
+    )
+    runtimeComponentLicenceIndexVersion.set(runtimeComponentLicenseIndexVersion)
+    resolvedRuntimeCoordinates.set(resolvedRuntimeCoordinateProvider)
 }
 
 @CacheableTask
@@ -475,14 +588,8 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 13
+        versionCode = 14
         versionName = project.version.toString()
-
-        buildConfigField(
-            "String",
-            "RELEASE_SOURCE_URL",
-            "\"https://github.com/andrewginns/nanokvm-mobile/tree/v${project.version}\"",
-        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -502,10 +609,22 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField(
+                "String",
+                "SOURCE_URL",
+                "\"https://github.com/andrewginns/nanokvm-mobile/tree/main\"",
+            )
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            buildConfigField(
+                "String",
+                "SOURCE_URL",
+                "\"https://github.com/andrewginns/nanokvm-mobile/tree/v${project.version}\"",
+            )
         }
         create("benchmark") {
             initWith(getByName("release"))
@@ -513,6 +632,11 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             isProfileable = true
+            buildConfigField(
+                "String",
+                "SOURCE_URL",
+                "\"https://github.com/andrewginns/nanokvm-mobile/tree/main\"",
+            )
         }
     }
 

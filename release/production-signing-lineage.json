@@ -5,5 +5,9 @@
   "signingCertificateSha256": "b8c56ca6a229c85cd829da21cf697219e2d1a1d5f94d658719ebfa9e909075fd",
   "firstProductionVersionName": "0.3.6",
   "firstProductionVersionCode": 13,
-  "previousProduction": null
+  "previousProduction": {
+    "versionName": "0.3.6",
+    "versionCode": 13,
+    "apkSha256": "a255cb7a432dd418cc21dfcc86017c5d46b8c322c820c5345c11d40fbba79387"
+  }
 }

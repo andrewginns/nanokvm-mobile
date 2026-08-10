@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="about_version">Version %1$s · code %2$d</string>
-    <string name="about_source_heading">Exact release source</string>
-    <string name="about_source_action">Open source for v%1$s</string>
-    <string name="about_source_open_failed">Android could not open the source link. The exact URL remains selectable above.</string>
+    <string name="about_source_heading">Source reference</string>
+    <string name="about_source_action">Open source repository</string>
+    <string name="about_source_open_failed">Android could not open the source link. The URL remains selectable above.</string>
     <string name="about_signing_heading">Installed signing identity</string>
     <string name="about_signing_certificate">Installed certificate %1$d of %2$d · SHA-256&#10;%3$s</string>
     <string name="about_signing_unavailable">Android could not read the installed APK signing certificate.</string>
@@ -13,8 +13,12 @@
     <string name="about_document_gpl">GNU GPL v3-or-later terms</string>
     <string name="about_document_project_notice">Project notice</string>
     <string name="about_document_third_party">Third-party notices</string>
+    <string name="about_document_runtime_components">Resolved runtime component licences</string>
+    <string name="about_document_apache">Apache License 2.0</string>
+    <string name="about_document_protobuf">Protocol Buffers 4.28.2 licence</string>
     <string name="about_document_webrtc_wrapper">WebRTC Android wrapper licence · v144.7559.09</string>
     <string name="about_document_webrtc">Complete WebRTC notices · v144.7559.09</string>
+    <string name="about_document_ijg">Independent JPEG Group notice</string>
     <string name="about_document_privacy">Privacy notice</string>
     <string name="about_document_security">Security policy</string>
     <string name="about_document_unavailable">This bundled document could not be opened.</string>

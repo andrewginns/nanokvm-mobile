@@ -1,5 +1,24 @@
 # Third-party notices
 
+## Android and Kotlin runtime components
+
+The exact external components resolved for `releaseRuntimeClasspath` are
+listed in
+`app/src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md`. That
+index is verified against the resolved graph during every app build and is
+available offline from the app's About screen.
+
+AndroidX, Kotlin, KotlinX, OkHttp, Okio, JSpecify, and related runtime
+components in that index are distributed under Apache License 2.0. The complete
+terms are preserved at
+`app/src/main/assets/open_source_licenses/APACHE-2.0.txt` and are bundled in the
+APK. The external protobuf component's BSD-3-Clause terms are reproduced in the
+unmodified `PROTOBUF-4.28.2-LICENSE.txt` bundled in the APK.
+
+The canonical CycloneDX SBOM published with each release is the complete
+machine-readable resolved release-runtime graph. It complements, but does not
+replace, these licence texts and notices.
+
 ## WebRTC SDK Android wrapper
 
 Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:144.7559.09`
@@ -32,7 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## WebRTC
 
-Source: <https://webrtc.googlesource.com/src/+/refs/branch-heads/7559>
+Exact source: <https://github.com/webrtc-sdk/webrtc/tree/b1800a61db8320af5c14456c13622d8b85b1ed39>
 
 Copyright (c) 2011, The WebRTC project authors. All rights reserved.
 
@@ -59,12 +78,22 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-WebRTC incorporates further third-party components. The complete notice bundle
+WebRTC incorporates further third-party components. The generated notice bundle
 for the exact pinned wrapper release is preserved byte-for-byte at
 `app/src/main/assets/open_source_licenses/WEBRTC.md` and is included in the
 application for offline review. Its provenance is the upstream
 [`v144.7559.09` notice file](https://github.com/webrtc-sdk/android/blob/v144.7559.09/Licenses/WEBRTC.md),
 and its SHA-256 is
 `d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e`.
-Review and replace both the pinned dependency and this bundle together when
-updating WebRTC.
+
+That generated file references, but does not itself contain, libjpeg-turbo's
+`README.ijg`. The exact referenced file is bundled separately at
+`app/src/main/assets/open_source_licenses/README.ijg` from libjpeg-turbo commit
+[`6383cf609c1f63c18af0f59b2738caa0c6c7e379`](https://chromium.googlesource.com/chromium/deps/libjpeg_turbo/+/6383cf609c1f63c18af0f59b2738caa0c6c7e379/README.ijg);
+its SHA-256 is
+`75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6`.
+As required there: this software is based in part on the work of the Independent
+JPEG Group.
+
+Review and replace the pinned dependency, both notice files, and their source
+revisions together when updating WebRTC.

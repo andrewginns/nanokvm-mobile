@@ -1,109 +1,77 @@
 # Contributing
 
-Thank you for helping improve NanoKVM Mobile.
+Issues and pull requests are welcome. NanoKVM Mobile controls real keyboard,
+mouse, power, network, update, and root-level appliance functions, so changes
+that affect trust, credentials, remote input, or destructive operations need
+extra care.
 
-## Before changing code
+## Set up the project
 
-1. Discuss substantial UX, protocol, trust, storage, or distribution changes in
-   an issue first.
-2. Use JDK 21 and the checked-in Gradle wrapper. The project emits Java 17
-   bytecode, but JDK 17 is not the supported build runtime.
-3. Keep secrets and appliance data out of source, fixtures, screenshots, traces,
-   and build logs. Never commit passwords, JWTs, private keys, signing keys,
-   private network inventories, or another person's console capture.
-4. Treat `main` as post-0.3.6 development. Changed distributable bytes require a
-   new Android version code; do not rename an old-version APK and present it as
-   an update.
+Use JDK 21, Android SDK platform 37, and the checked-in Gradle wrapper. The
+project emits Java 17 bytecode. Follow the build steps in the [README](README.md)
+and run Gradle with strict dependency verification.
 
-## Engineering invariants
+Before starting a substantial UX, protocol, storage, security, or distribution
+change, open an issue describing the intended behavior and compatibility scope.
 
-- Every held HID key or mouse button must have a guaranteed release on gesture
-  cancellation, lifecycle loss, reconnect, disconnect, and backend shutdown.
-- Trust inspection happens before password collection or saved-password unlock.
-  The inspection-only TLS client must never carry credentials, tokens, or
-  application traffic.
-- NanoKVM origin, authenticated signaling, and application control traffic must
-  remain HTTPS-only. Cleartext must remain disabled in the manifest and Network
-  Security Config; initial access-point setup stays outside the app. Explicit
-  WebRTC STUN/TURN ICE traffic is the documented exception.
-- WebRTC signaling remains bound to the authenticated NanoKVM origin. Treat
-  appliance-supplied ICE server URLs and credentials as untrusted bounded input,
-  and document any resulting STUN/TURN network disclosure.
-- Remote input and destructive controls are never persisted or replayed.
-  GPIO/power/reset calls remain confirmed, serialized, generation-scoped, and
-  non-retrying.
-- Mutable password buffers and staged credentials have one explicit owner.
-  Genuine backgrounding cancels non-prompt secret work; a system-prompt result
-  received while stopped must clear its buffer and must never connect.
-- New endpoint parsers require boundary, oversize, cancellation, and slow-input
-  tests. Document transport-layer allocation limits that occur before parsing.
-- Root terminal, serial, script, update, network, Tailscale, virtual-media, and
-  PicoClaw writes require the same latest-snapshot or session-generation binding,
-  explicit consequence review, secret redaction, and no-replay discipline as
-  existing destructive controls.
+Never commit credentials, signing keys, private addresses, certificate
+fingerprints, unredacted logs, or another person's console capture. Examples
+and screenshots must use reserved addresses and synthetic data.
 
-## Protocol and parity changes
+## Design and safety boundaries
 
-Protocol work must cite a stable upstream NanoKVM tag/commit and the exact WebUI
-client and server route used as the contract. Do not treat upstream `main`, a
-single appliance response, or a write probe as a stable capability contract.
+Start with the [architecture](docs/ARCHITECTURE.md),
+[security design](docs/SECURITY.md), and
+[NanoKVM parity ledger](docs/WEBUI_PARITY.md). In particular:
 
-For every added or changed endpoint:
+- trust inspection must complete before a password is collected or unlocked;
+- authenticated application traffic remains HTTPS-only, apart from the
+  documented WebRTC ICE path;
+- every held HID key or mouse button must be released after cancellation,
+  lifecycle loss, reconnect, disconnect, and shutdown;
+- remote input and appliance mutations are never automatically replayed after
+  an ambiguous response; and
+- persistent, disruptive, or destructive actions require an explicit review
+  of their target and consequence.
 
-- update the applicable protocol contract note and
-  [parity ledger](docs/WEBUI_PARITY.md), including firmware floor, hardware or
-  runtime gate, risk class, and open evidence;
-- add request/response goldens, bounds, malformed/future-value behavior,
-  authentication expiry, cancellation, and retry/replay tests as applicable;
-- use safe reads and version evidence for discovery—never invoke a destructive
-  write merely to find out whether it exists; and
-- add or update the named appliance case in
-  [docs/APPLIANCE_TEST_PLAN.md](docs/APPLIANCE_TEST_PLAN.md).
+Protocol changes must cite a stable upstream NanoKVM tag or commit and update
+the relevant contract note, parity row, tests, and appliance case. Capability
+discovery uses safe reads; never invoke a destructive write to discover support.
 
-UI work must keep visible text in Android string resources and preserve semantic
-labels, keyboard focus, minimum target sizes, contrast, RTL, large-text, and
-compact/expanded behavior. A screenshot is useful review context but does not
-replace Compose semantics, contrast, and device-flow checks.
+UI changes must keep visible text in Android resources and preserve semantic
+labels, keyboard focus, minimum target sizes, contrast, RTL behavior, large
+text, and compact/expanded layouts.
 
-## Verification
+## Verify the change
 
-Run the strict repository gate before opening a pull request:
+Run the smallest relevant tests while developing. Before requesting review,
+run the full local gate:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:reproducibleSbom
+.\gradlew.bat --no-problems-report --no-configuration-cache --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
 ```
 
-This repository uses local verification rather than GitHub-hosted CI, so a pull
-request does not replace the documented local gate. Record the source commit and
-summarize the commands and device coverage you actually ran.
+The full gate disables the configuration cache because its metadata checks read
+and compare complete generated documents. The repository intentionally uses
+local verification rather than hosted CI. Record the source commit, exact
+commands, and device or NanoKVM coverage you actually ran. See
+[Testing](docs/TESTING.md) for instrumentation, profile, benchmark, and
+appliance commands.
 
-When a booted emulator or device is available, run the applicable device and
-Macrobenchmark commands in [docs/TESTING.md](docs/TESTING.md). Do not refresh
-`gradle/verification-metadata.xml` implicitly. Dependency changes must include a
-reviewed verification-metadata diff and an updated
-[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+Dependency updates must include a reviewed
+`gradle/verification-metadata.xml` diff and an updated
+[dependency inventory](docs/DEPENDENCIES.md). Do not generate or trust new
+checksums implicitly.
 
-An ordinary debug APK is signed with the build account's local Android debug
-key. It cannot update an installation signed by a different key. Record the
-public certificate fingerprint for any APK used as shared test evidence; never
-copy the private key into the repository or attach it to an issue or pull
-request.
+Only an APK that is actually shared or published needs a new Android
+`versionCode` for changed bytes. A normal source change on `main` does not need
+an immediate version bump. Never relabel different bytes with an already
+distributed version/code.
 
-Changes to startup or profile-catalog code must regenerate the versioned
-Baseline and Startup Profiles using the procedure in
-[docs/BUILD_VERIFICATION.md](docs/BUILD_VERIFICATION.md). Do not hand-edit the
-generated profile rules.
-
-Changes affecting a release gate must update the evidence status in
-[docs/MODERNIZATION_AUDIT.md](docs/MODERNIZATION_AUDIT.md) and
-[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). A refactor or a test
-definition is not a passing result until the corresponding evidence has been
-run and retained.
-
-Before requesting review, complete the pull-request template. Clearly separate
-implemented source, locally observed behavior, retained appliance/device proof,
-and work that remains open. Never mark a partial parity row Supported solely
-because its happy-path UI exists.
+Complete the pull-request template and distinguish implemented source,
+locally observed behavior, retained evidence, and anything still untested.
+Release-specific checks apply only when preparing a public APK; they are in the
+[release checklist](docs/RELEASE_CHECKLIST.md).
 
 By contributing, you agree that your contribution is licensed under
 GPL-3.0-or-later, the same terms as the project.

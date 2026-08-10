@@ -1,49 +1,35 @@
-# Testing and evidence
+# Testing
 
-NanoKVM Mobile treats a test definition, a local passing run, and retained
-release evidence as different states. `MODERNIZATION_AUDIT.md` reaches score 2
-only when a repeatable result is attached or retained in the maintainer's local
-evidence or release record.
+Use JDK 21 and Android SDK platform 37. The project emits Java 17 bytecode.
+Run Gradle with the checked-in wrapper and strict dependency verification; do
+not refresh `gradle/verification-metadata.xml` as a side effect of testing.
 
-## Test layers
+## Local build gate
 
-- **JVM unit and integration tests:** password and API vectors, endpoint/trust
-  policy, cookie origin, parser boundaries, HID reports, reconnect policy,
-  command serialization, ViewModel attempt ownership, credential staging,
-  profile codec, viewport math, WebRTC's bounded double-JSON signaling and
-  candidate ordering/teardown, H.264 queues, fallback policy, and MJPEG parsing.
-- **Android instrumentation:** launcher/profile-catalogue semantics, real
-  DataStore corruption/reset, profile editing, certificate review, IME focus,
-  gesture/control geometry, credential opt-in, configuration restoration,
-  generation-bound action invalidation, and background/foreground behavior.
-  The `video` module also creates a real EGL-backed native WebRTC peer and waits
-  for a local offer, catching missing permissions, native-library loading
-  failures, and process aborts. These tests normally run against `debug`; they
-  do not satisfy the signed-production-candidate gate.
-- **Macrobenchmark/profile generation:** the separate `macrobenchmark` module
-  drives the target out of process. It generates versioned Baseline and Startup
-  Profiles and defines cold startup/frame runs with no compilation and with the
-  packaged Baseline Profile.
-- **Manual Android/device assurance:** API behavior, accessibility services,
-  hardware keyboard/mouse, Keystore behavior, process death, window resizing,
-  display security, and signed/minified candidate smoke.
-- **Real NanoKVM assurance:** trust, login, first frame, H.264/MJPEG, input,
-  fallback/reconnect, and long-session behavior. GPIO/power tests require a
-  disposable target and a separate explicit decision.
-
-## Supported build runtime and local gate
-
-Use JDK 21 and Android SDK platform 37. Java/Kotlin bytecode targets version 17.
-Run all Gradle commands with strict dependency verification:
+Before requesting review, run:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
+.\gradlew.bat --no-problems-report --no-configuration-cache --dependency-verification=strict test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
 ```
 
-This verifies repository tests and unsigned release-like artifacts. It does not
-sign a production candidate or execute device/manual gates.
+The metadata tasks deliberately disable Gradle's configuration cache for this
+gate. It runs JVM tests and release lint, builds the unsigned release APK/AAB
+and benchmark targets, verifies packaged Baseline Profiles, and creates the
+canonical CycloneDX SBOM. Important outputs include:
 
-## Device commands
+- `app/build/outputs/apk/release/app-release-unsigned.apk`;
+- `app/build/outputs/bundle/release/app-release.aab`;
+- `app/build/outputs/apk/benchmark/app-benchmark.apk`;
+- `app/build/reports/cyclonedx/nanokvm-mobile.cdx.json`; and
+- `app/build/outputs/mapping/release/`.
+
+These are local engineering artifacts. They are not production-signed APKs and
+must not be uploaded as a public release.
+
+For a fast source-build check, use the debug command in the
+[README](../README.md#build-from-source).
+
+## Android tests
 
 With a booted emulator or USB device:
 
@@ -51,15 +37,18 @@ With a booted emulator or USB device:
 .\gradlew.bat --no-problems-report --dependency-verification=strict :app:connectedDebugAndroidTest :video:connectedDebugAndroidTest
 ```
 
-The `video` task is intentionally included: it creates a real native WebRTC
-peer and is the regression gate for the process-abort failure previously seen
-when selecting WebRTC. It does not connect to a NanoKVM or prove ICE/frame
-continuity on an appliance. This normal device command does not include the
-protocol module's hostile-ingress heap/PSS fixture; run and record that fixture
-only as a separate, intentional memory investigation.
+The video test creates a native WebRTC peer and catches native-library or
+process-abort regressions. It does not prove an appliance video session.
 
-With a supported API 33+ profile-generation device, regenerate versioned rules
-when startup or profile-catalog code changes:
+Choose Android versions based on the change. At minimum, exercise the oldest
+supported behavior affected by the change and the current target API. A public
+APK also needs a representative physical phone; an emulator does not prove
+hardware input, Keystore, decoder, thermal, or OEM behavior.
+
+## Baseline Profiles and performance
+
+Regenerate versioned Baseline and Startup Profiles when launcher or profile
+catalog journeys change:
 
 ```powershell
 .\gradlew.bat --no-problems-report --dependency-verification=strict :app:generateBaselineProfile :app:verifyReleaseProfiles
@@ -71,119 +60,55 @@ With an API 36+ benchmark device:
 .\gradlew.bat --no-problems-report --dependency-verification=strict -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark :macrobenchmark:connectedBenchmarkAndroidTest
 ```
 
-The focused non-secret process-restart regression can be run independently:
+Run the focused process-death/profile-draft regression when startup, profile
+generation, or saved-state behavior changes:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict `
-    '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.mobile.macrobenchmark.ProcessRestartInstrumentedTest' `
-    :macrobenchmark:connectedBenchmarkAndroidTest
+.\gradlew.bat --no-problems-report --dependency-verification=strict '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.mobile.macrobenchmark.ProcessRestartInstrumentedTest' :macrobenchmark:connectedBenchmarkAndroidTest
 ```
 
-Emulator results are diagnostic. Do not establish production performance
-thresholds from an unlocked x86_64 emulator.
+Treat emulator timings as diagnostic. Performance claims need repeated runs on
+a named physical device with the APK hash, build mode, thermal state, and
+measurement method recorded.
 
-## Required release matrix
+`scripts/verify-reproducible-release.ps1` compares two clean builds in one
+worktree. It is a repeatability smoke test, not proof of isolated-environment
+reproducibility.
 
-| Lane | Current local evidence | Required evidence before distribution |
-| --- | --- | --- |
-| API 26 | No retained current-commit result is claimed here | Run debug installation and instrumentation locally and retain the current-commit result |
-| API 29 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 31 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 33 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 34 | No retained current-commit result is claimed here | Retain clipboard, share-target, IME, and lifecycle results for the current commit |
-| API 35 / Android 15 | No retained current-commit result is claimed here | Run instrumentation locally for the current commit and separately run the signed/minified candidate through profile creation, trust, credential, IME, rotation, video/input, reconnect, and background journeys |
-| API 36 / Android 16 | No retained current-commit result is claimed here | Run instrumentation locally and retain the current-commit result |
-| API 37 | The 2026-07-22 0.3.6 pre-release checkpoint passed 98/98 app instrumentation tests, 1/1 real-native WebRTC peer test, 2/2 strict Baseline Profile generators, 1/1 real process-restart test, and all four executed startup Macrobenchmarks; the two profile generators or four startup benchmarks were intentionally skipped when the complementary rule filter was selected | This emulator checkpoint remains diagnostic and does not replace the other API levels, physical ARM, real-appliance negotiation, real Keystore, accessibility, or signed-candidate critical journeys |
-| Representative physical ARM | Not automated | Required for signed-candidate smoke, startup/frame comparison, real Keystore, input/video, thermal/OEM behavior, memory, and power/network observations |
-| Real NanoKVM | Requires local hardware and private credentials | Run at least 30 continuous minutes each on direct H.264 and forced/fallback MJPEG. If WebRTC is enabled and supported for the candidate, also run 30 minutes and force negotiation/ICE/decoder failure, retaining proof of the fresh WebRTC to H.264 to MJPEG chain; otherwise record WebRTC as an explicit capability-gated exclusion. Include keyboard, pointer, reconnect, foreground loss, frame continuity, memory, and input-release checks |
+## Real NanoKVM checks
 
-## Manual functional and accessibility gates
+For ordinary changes, run the relevant safe cases in
+[APPLIANCE_TEST_PLAN.md](APPLIANCE_TEST_PLAN.md). A public APK should cover on a
+real NanoKVM:
 
-Retain device/build/OS/window/input details and pass/fail notes for:
+- certificate review or saved-pin validation, login, and first video frame;
+- H.264 and MJPEG, plus WebRTC when selected or affected;
+- keyboard, pointer, HID release, foreground recovery, reconnect, and fallback;
+- saved-credential behavior when authentication/storage changed; and
+- every changed persistent or destructive feature on a disposable or
+  recovery-capable target.
 
-- portrait, landscape, split-screen/resizable window, gesture navigation, and
-  three-button navigation;
-- compact, medium, and expanded widths, plus 200% font/display scale, long
-  strings, RTL, dark/light theme, and IME open/closed;
-- on a physical device with a voice-capable IME, confirm the remote-input field
-  does not force incognito mode, the microphone remains available when enabled
-  in that IME, and one dictated phrase is committed exactly once to the intended
-  remote host without surviving keyboard close, reconnect, or foreground loss;
-- TalkBack reading/action order, Switch Access or equivalent switch-style
-  traversal, hardware keyboard focus/activation, mouse/trackpad scrolling, and
-  accessibility scanner/UI-check results;
-- dedicated scroll-pad swipes in all four directions on the intended host OS;
-  verify Shift+wheel left/right compatibility in both a browser with horizontal
-  overflow and a spreadsheet, because NanoKVM has no native horizontal wheel axis;
-- system biometric and device-credential success, cancellation, expiry,
-  lockout/invalidation, deletion, rotation, background, and process death;
-- profile DataStore unavailable/corrupt/reset behavior, including explicit
-  confirmation that reset removes user-saved records, pins, and credentials
-  before returning to an empty connection catalog;
-- `FLAG_SECURE`, Recents preview, backup/restore-to-another-device, filesystem,
-  Keystore, logcat, and observed-network-traffic checks; and
-- signed/minified production candidate trust, login, first-frame, video input,
-  credential save/unlock/remove, reconnect, and destructive-control guards.
+Do not infer support for an untested hardware model, firmware version, Android
+version, accessibility service, or destructive operation. Record the actual
+scope and any exclusions.
 
-TalkBack/switch, API 35, physical ARM, signed-production-candidate, and real
-appliance long-session gates are open until their results are attached. Source
-tests or emulator screenshots do not close them.
+## Manual UI and privacy checks
 
-An unretained 2026-07-18 API 37 Material/adaptive diagnostic additionally exercised
-system/light/dark appearance, 200% text, RTL, IME-open portrait, live
-portrait-to-landscape resize into the expanded supporting pane, Android 17
-local-network permission, reviewed private-certificate pinning, login, first
-frame, and MJPEG console continuity against a trusted LAN NanoKVM. The emulator
-was restored to its normal locale, text scale, and rotation afterwards. This is
-useful implementation context, not a current-commit or release result: this
-document does not retain its source commit, APK hash, signing digest, or artifact
-archive. It also is not physical-device, assistive-technology, or endurance
-evidence.
+For changed screens, check compact and expanded widths, portrait/landscape or
+resizing, keyboard open/closed, 200% font/display scale, light/dark theme,
+focus order, target size, contrast, RTL layout, semantic labels, and an
+accessibility service where practical.
 
-## Performance evidence
+For security/privacy-sensitive changes, verify the merged manifest and Network
+Security Config, cleartext denial, trust/pin behavior, log redaction, secure
+screen behavior, backup exclusions, local-network denial/revocation, and that
+no credential or private endpoint appears in retained evidence.
 
-The repository contains generated Baseline and Startup Profile sources,
-Macrobenchmark code for cold startup without compilation plus cold/warm/hot
-startup with the Baseline Profile, frame timing, and a fully-drawn report tied
-to the renderable terminal profile-catalog state. The evidence set is not
-complete until it also includes:
+## Optional hostile-ingress diagnostic
 
-- connect-to-first-rendered-video-frame, 30-second console interaction,
-  reconnect/foreground recovery, WebRTC-to-H.264-to-MJPEG and
-  H.264-to-MJPEG fallback CUJs;
-- frame P50/P90/P95/P99, memory/PSS/leak checks, network volume, and power/thermal
-  context on controlled physical ARM hardware; and
-- three stable reference runs before regression thresholds become blocking.
-
-An earlier 2026-07-18 API 37 emulator diagnostic contains the four named
-compilation/startup modes and frame traces. The 2026-07-22 pre-release checkpoint
-regenerated and verified 18,523 Baseline and 16,133 Startup rules, then retained
-the four startup modes (including the no-compilation cold-start run) and their
-Perfetto traces. Emulator timing and jank values are diagnostic only;
-production benefit and regression thresholds require controlled physical ARM
-evidence.
-
-## WebSocket ingress evidence
-
-`OkHttpWebSocketIngressBehaviorTest` is an intentional dependency tripwire. A
-raw peer controls slow RFC 6455 fragment boundaries and confirms that OkHttp
-5.4.0 accumulates the complete uncompressed message before listener delivery.
-It also proves production handshakes omit compression, unsolicited negotiation
-fails, and an RSV1 frame with a declared 8 MiB body fails from its header without
-waiting for that body. Input and direct-H.264 integration tests verify exact
-boundary acceptance, HID release/command rejection, immediate H.264 cancellation,
-and normal fallback notification.
-
-`WebSocketIngressMemoryInstrumentedTest` can repeat an 8 MiB slow-fragment case
-on Android and emit Java-heap and PSS samples. It was deliberately **not
-invoked** for the 2026-07-20 checkpoint, so no Android memory sample or
-termination result is claimed. When it is intentionally run, retain API level,
-ABI, device/emulator, build identity, samples, and termination result. A
-representative physical run and explicit availability budget remain required
-before accepting the residual uncompressed first-allocation risk.
-
-This fixture is intentionally opt-in and must not be added to the routine device
-gate. Its exact class-filtered command is:
+The protocol module contains an opt-in Android memory fixture for an 8 MiB slow
+fragmented WebSocket message. It is intentionally excluded from the routine
+gate:
 
 ```powershell
 .\gradlew.bat --no-problems-report --dependency-verification=strict `
@@ -191,19 +116,19 @@ gate. Its exact class-filtered command is:
     :protocol:connectedDebugAndroidTest
 ```
 
+Run it only as an intentional heap/PSS investigation on an appropriate target.
+
 ## Evidence record
 
-For each manual or benchmark run, retain:
+For a device, appliance, benchmark, or release run, record:
 
 - source commit and dirty-tree status;
-- artifact version, signing certificate digest, and APK/AAB SHA-256;
-- device model/ABI, Android/API level, security patch, refresh rate, navigation
-  mode, window size, font/display scale, and IME/input devices;
-- NanoKVM hardware/application version, configured transport, network topology,
-  and whether the endpoint used system trust or a reviewed leaf pin;
-- exact command or manual script, start/end time, result, logs/traces/screenshots,
-  and redactions; and
-- finding owner, disposition, and rerun link.
+- artifact version/code, APK SHA-256, and signing-certificate digest;
+- device model/ABI and Android/API version;
+- NanoKVM hardware and application version, transport, and trust mode;
+- exact command or manual cases, result, and redacted evidence; and
+- any excluded or failed scope and its disposition.
 
-Release-specific artifact handling is defined in `RELEASE_CHECKLIST.md` and
-`DISTRIBUTION.md`.
+Release packaging and signing are described in
+[Distribution](DISTRIBUTION.md) and the
+[release checklist](RELEASE_CHECKLIST.md).

@@ -38,7 +38,7 @@ class AboutDialogInstrumentedTest {
                         releaseInfo = AboutReleaseInfo(
                             versionName = "0.3.6",
                             versionCode = 13,
-                            exactSourceUrl = sourceUrl,
+                            sourceUrl = sourceUrl,
                             signingCertificateSha256 = listOf("AA".repeat(32)),
                             isDevelopmentBuild = false,
                         ),
@@ -73,7 +73,7 @@ class AboutDialogInstrumentedTest {
     }
 
     @Test
-    fun exactPinnedWebRtcLicenceMaterialsArePackaged() {
+    fun exactRuntimeLicenceMaterialsArePackaged() {
         BundledAboutDocument.entries.forEach { document ->
             val length = composeRule.activity.assets
                 .open(document.assetPath)
@@ -87,6 +87,18 @@ class AboutDialogInstrumentedTest {
         val wrapperLicense = composeRule.activity.assets
             .open("open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt")
             .use { it.readBytes() }
+        val apacheLicense = composeRule.activity.assets
+            .open("open_source_licenses/APACHE-2.0.txt")
+            .use { it.readBytes() }
+        val protobufLicense = composeRule.activity.assets
+            .open("open_source_licenses/PROTOBUF-4.28.2-LICENSE.txt")
+            .use { it.readBytes() }
+        val ijgNotice = composeRule.activity.assets
+            .open("open_source_licenses/README.ijg")
+            .use { it.readBytes() }
+        val runtimeComponentLicenses = composeRule.activity.assets
+            .open("open_source_licenses/RUNTIME_COMPONENT_LICENSES.md")
+            .use { it.readBytes() }
 
         assertEquals(788_358, completeNotices.size)
         assertEquals(
@@ -97,6 +109,26 @@ class AboutDialogInstrumentedTest {
         assertEquals(
             "e6b282fe6c0fb353928923470457f31b44cbab203effd60c0cde4a5bb96c8aec",
             sha256(wrapperLicense),
+        )
+        assertEquals(11_358, apacheLicense.size)
+        assertEquals(
+            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            sha256(apacheLicense),
+        )
+        assertEquals(1_732, protobufLicense.size)
+        assertEquals(
+            "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+            sha256(protobufLicense),
+        )
+        assertEquals(12_799, ijgNotice.size)
+        assertEquals(
+            "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6",
+            sha256(ijgNotice),
+        )
+        assertEquals(8_818, runtimeComponentLicenses.size)
+        assertEquals(
+            "536db15041cb08129b58a6ccab1d294dc691c27ef13b0cf0569b23d3a2890f8a",
+            sha256(runtimeComponentLicenses),
         )
     }
 }

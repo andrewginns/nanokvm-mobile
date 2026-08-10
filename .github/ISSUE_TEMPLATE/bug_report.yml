@@ -11,7 +11,7 @@ body:
     attributes:
       label: App version and build
       description: Include version name/code, source commit if self-built, and whether the APK was debug or release signed.
-      placeholder: "0.3.0 (7), commit abc1234, debug APK"
+      placeholder: "Copy version/code from About; add commit and release/debug source if known"
     validations:
       required: true
   - type: input

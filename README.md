@@ -132,9 +132,11 @@ provenance requirements are documented in [Distribution](docs/DISTRIBUTION.md).
 
 ## Build from source
 
-Install Android Studio or JDK 21, Android SDK platform 37, and Android platform
-tools. Configure the SDK through Android Studio, `ANDROID_HOME`, or a local
-untracked `local.properties` file before building.
+Install Android Studio, or install JDK 21 plus the Android SDK command-line
+tools, platform 37, and platform-tools, then accept the SDK licences. Configure
+the SDK through Android Studio, `ANDROID_HOME`, or a local untracked
+`local.properties` file before building. Gradle installs the compatible Android
+Build Tools 36.0.0 package when it is not already present.
 
 ```shell
 git clone https://github.com/andrewginns/nanokvm-mobile.git
@@ -155,10 +157,12 @@ macOS or Linux:
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. It uses the
 local machine's debug certificate and cannot update the published APK. Do not
-share it as an update build.
+share it as an update build. `main` identifies itself as the next development
+version; check out a release tag when you need the exact source for a published
+APK.
 
 The complete maintainer verification commands are in
-[Build verification](docs/BUILD_VERIFICATION.md).
+[Testing](docs/TESTING.md).
 
 ## Privacy, security, and support
 
@@ -168,7 +172,7 @@ stored locally on the Android device; connections go to endpoints selected by
 the user or supplied by the trusted NanoKVM during transport negotiation.
 
 - Read the [privacy notice](PRIVACY.md), [security policy](SECURITY.md), and
-  [security model](docs/SECURITY_MODEL.md).
+  [technical security model](docs/SECURITY.md).
 - Report ordinary defects through
   [GitHub Issues](https://github.com/andrewginns/nanokvm-mobile/issues/new/choose).
 - Report vulnerabilities privately through
@@ -183,3 +187,5 @@ Issues and pull requests are welcome; see [Contributing](CONTRIBUTING.md).
 User-visible changes are recorded in the [changelog](CHANGELOG.md).
 NanoKVM Mobile is licensed under the
 [GNU General Public License v3.0 or later](LICENSE).
+Packaged dependency terms are recorded in the
+[third-party notices](THIRD_PARTY_NOTICES.md).

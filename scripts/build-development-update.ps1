@@ -30,9 +30,20 @@ $repositoryPrefix = $repository.TrimEnd('\', '/') + [IO.Path]::DirectorySeparato
 if ($resolvedKeystore.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw "The development keystore must remain outside the repository: $resolvedKeystore"
 }
+$rootBuild = Get-Content -Raw (Join-Path $repository "build.gradle.kts")
+$appBuild = Get-Content -Raw (Join-Path $repository "app\build.gradle.kts")
+$versionNameMatch = [regex]::Match($rootBuild, '(?m)^\s*version\s*=\s*"([^"]+)"')
+$versionCodeMatch = [regex]::Match($appBuild, '(?m)^\s*versionCode\s*=\s*([0-9]+)')
+if (-not $versionNameMatch.Success -or -not $versionCodeMatch.Success) {
+    throw "Could not determine the source version name/code from the Gradle build files."
+}
+$sourceVersionName = $versionNameMatch.Groups[1].Value
+$sourceVersionCode = [long]$versionCodeMatch.Groups[1].Value
 $builtApk = Join-Path $repository "app\build\outputs\apk\debug\app-debug.apk"
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $repository "dist\NanoKVM-Mobile-0.3.6-update-compatible-debug.apk"
+    $OutputPath = Join-Path $repository (
+        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-update-compatible-debug.apk"
+    )
 }
 $absoluteOutput = [IO.Path]::GetFullPath($OutputPath)
 

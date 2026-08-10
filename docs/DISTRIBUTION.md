@@ -1,350 +1,128 @@
-# Distribution and release artifacts
+# Publishing a signed GitHub APK
 
-NanoKVM Mobile is GPL-3.0-or-later software and is independent of Sipeed. A
-local `assembleRelease` output is an unsigned engineering artifact, not an
-official project release. Distribution requires a traceable source, signing,
-verification, and evidence process.
+NanoKVM Mobile distributes public APKs through GitHub Releases. A local debug,
+benchmark, or unsigned release build is not a publishable artifact.
 
-## Release inputs
+## Signing model
 
-Record these before building:
+Public updates use the long-lived production certificate recorded in
+`release/production-signing-lineage.json`. Keep the private keystore and its
+password outside the repository, logs, release bundle, and normal developer
+backups. Maintain two encrypted recovery copies in separately controlled
+locations.
 
-- annotated source tag and commit, with a clean worktree;
-- version name/code and supported NanoKVM application range;
-- JDK 21 vendor/version, Gradle wrapper version/hash, Android SDK/build-tools,
-  host OS, and build command;
-- reviewed version catalogue, strict verification metadata, resolved dependency
-  graph/SBOM, dependency inventory, licence and vulnerability dispositions;
-- versioned Baseline and Startup Profile sources generated from that commit; and
-- release owner, security reviewer, QA owner, signing operator, and rollback
-  decision maker.
+Do not generate a new key for an ordinary update. Losing or replacing the key
+prevents an in-place update of existing installations. Never recommend
+uninstalling to hide a mismatch: uninstalling removes profiles, certificate
+pins, and protected credentials.
 
-The signing key must not be stored in the repository, build logs, release
-bundle, or ordinary developer backup. Document key custody, access,
-backup/recovery, and certificate rotation/revocation out of band. Record only
-the public signing certificate digest in the release evidence.
+The default Android debug certificate is also unsuitable for publication. It
+is selected from the build process's user home and may differ between tools or
+accounts.
 
-Default Android debug signing is not a distribution identity. Its keystore is
-selected from the build JVM's user-home directory, so Android Studio, an
-ordinary terminal, and a sandboxed build can produce mutually incompatible
-update APKs on the same computer. Verify every artifact with `apksigner`; never
-publish an ambient debug build or promise it as a production update channel.
-During active development, an explicitly selected and retained local identity
-may be used for best-effort updates between named test APKs only when package,
-signer, monotonically increasing version code, and an actual in-place update are
-verified. That development lineage is neither a public release identity nor a
-recoverable compatibility promise. Before the first binary release, freeze the
-application ID and establish one protected, recoverable production signing
-lineage.
+`scripts/new-production-keystore.ps1` exists only for deliberately establishing
+a completely new public signing lineage. It must never be used for an ordinary
+update or as a recovery shortcut when the existing production key is missing.
 
-### Practical signing setup for direct GitHub APKs
+## Prepare a release
 
-Android application signing does not require a public certificate authority.
-For direct GitHub distribution, use one long-lived self-signed application key
-whose private material stays outside this repository. Before the first release,
-place encrypted backups in two separately controlled locations and record who
-can sign, recover, rotate, or revoke the key.
+1. Increase `versionName` and `versionCode`; never reuse a published code for
+   different bytes.
+2. Update the changelog, dependency inventory, privacy/security documents, and
+   third-party notices when affected.
+3. Run the strict build and applicable device/appliance checks in
+   [Testing](TESTING.md) and [the release checklist](RELEASE_CHECKLIST.md).
+4. Commit the public signing-lineage record, freeze a clean source commit, and
+   create an annotated or signed release tag.
 
-Create an account-only NTFS directory once. This example retains access for the
-signing account, local administrators, and Windows itself while removing
-inherited access such as `Users` or `Authenticated Users`:
+For every release after v0.3.6, the lineage record's `previousProduction` entry
+must identify the exact preceding public version name/code and APK SHA-256. The
+signing helper compares that record with the supplied preceding APK before it
+uses the private key.
 
-```powershell
-$signingDirectory = Join-Path $env:LOCALAPPDATA 'NanoKVM Signing'
-New-Item -ItemType Directory -Path $signingDirectory
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$acl = Get-Acl -LiteralPath $signingDirectory
-$acl.SetOwner($identity.User)
-$acl.SetAccessRuleProtection($true, $false)
-$inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-$propagation = [Security.AccessControl.PropagationFlags]::None
-$allow = [Security.AccessControl.AccessControlType]::Allow
-foreach ($sid in @(
-    $identity.User,
-    [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
-    [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
-)) {
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-        $sid,
-        [Security.AccessControl.FileSystemRights]::FullControl,
-        $inheritance,
-        $propagation,
-        $allow
-    ))
-}
-Set-Acl -LiteralPath $signingDirectory -AclObject $acl
-```
+## Build evidence and sign
 
-Create the key interactively with Android Studio's **Generate Signed Bundle or
-APK** flow, or with the guarded JDK 21 helper. The helper deliberately accepts
-no password argument; `keytool` prompts instead of exposing a secret in shell
-history, a process listing, Gradle state, or build output. Generate at least a
-20-character random password in a password manager; do not reuse an account
-password.
-
-```powershell
-.\scripts\new-production-keystore.ps1 `
-    -Keytool 'C:\path\to\jdk-21\bin\keytool.exe' `
-    -KeystorePath "$env:LOCALAPPDATA\NanoKVM Signing\NanoKVM-Mobile-production.keystore" `
-    -KeyAlias nanokvm-release
-```
-
-Record the public certificate SHA-256 reported by the helper in the tracked
-`release/production-signing-lineage.json` file. The first version name/code in
-that record is a one-time bootstrap boundary; later signing requires the actual
-preceding production APK as well as the same certificate.
-
-```json
-{
-  "schemaVersion": 1,
-  "package": "org.nanokvm.mobile",
-  "keyAlias": "nanokvm-release",
-  "signingCertificateSha256": "<64-hex-public-certificate-digest>",
-  "firstProductionVersionName": "0.3.6",
-  "firstProductionVersionCode": 13,
-  "previousProduction": null
-}
-```
-
-For a later release, replace `previousProduction: null` in that release's
-tagged record with the exact preceding release identity:
-
-```json
-"previousProduction": {
-  "versionName": "0.3.6",
-  "versionCode": 13,
-  "apkSha256": "<64-hex-preceding-production-apk-digest>"
-}
-```
-
-The signing helper compares all three fields before it touches the private key.
-
-Commit that public record, then freeze the release source under an annotated or
-signed tag. Generate and review an unsigned evidence manifest before exposing
-the private key. The helper itself runs the authoritative clean strict build
-with the supplied JDK 21 runtime:
+Run the guarded PowerShell helpers from the frozen tag with JDK 21 and Android
+Build Tools 36.0.0. Substitute the actual paths and tag:
 
 ```powershell
 .\scripts\write-unsigned-release-evidence.ps1 `
-    -SourceTag 'v0.3.6' `
+    -SourceTag 'vX.Y.Z' `
     -JavaPath 'C:\path\to\jdk-21\bin\java.exe' `
     -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0'
 ```
 
-The evidence command verifies, copies, and hashes the exact unsigned APK,
-release AAB, benchmark APK, canonical SBOM, merged release manifest, packaged
-Network Security Config, resolved `releaseRuntimeClasspath` dependency graph,
-all five required R8 outputs (`mapping`, `seeds`, `usage`, `configuration`, and
-`resources`), Baseline and Startup Profiles, test/lint reports, strict-build
-log, Gradle wrapper, JDK, and Android signing tools. It also creates and hashes a
-source ZIP directly from the annotated release tag. Except for the separately
-named strict-build log, retained copies are staged and then published together
-under the ignored `dist/*-unsigned-evidence-artifacts/` directory; an existing
-evidence path is never overwritten. Review the reported evidence, source
-archive, and unsigned APK SHA-256 values, then sign only those reviewed bytes:
+Review the generated evidence manifest, source archive, unsigned APK, test and
+lint results, manifest, dependency graph, canonical SBOM, profiles, and R8
+outputs. Then sign only those reviewed bytes:
 
 ```powershell
 .\scripts\sign-production-apk.ps1 `
-    -SourceTag 'v0.3.6' `
-    -UnsignedEvidencePath '.\dist\NanoKVM-Mobile-0.3.6-v13-unsigned-evidence.json' `
-    -ExpectedEvidenceSha256 '<64-hex-reviewed-evidence-digest>' `
+    -SourceTag 'vX.Y.Z' `
+    -UnsignedEvidencePath '.\dist\NanoKVM-Mobile-X.Y.Z-vNN-unsigned-evidence.json' `
+    -ExpectedEvidenceSha256 '<reviewed-evidence-sha256>' `
     -JavaPath 'C:\path\to\jdk-21\bin\java.exe' `
     -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0' `
-    -KeystorePath "$env:LOCALAPPDATA\NanoKVM Signing\NanoKVM-Mobile-production.keystore" `
+    -KeystorePath 'C:\protected\NanoKVM-Mobile-production.keystore' `
     -KeyAlias nanokvm-release `
-    -FirstProductionRelease
+    -PreviousProductionApk 'C:\evidence\previous-release.apk'
 ```
 
-For every later release, replace `-FirstProductionRelease` with
-`-PreviousProductionApk` and the actual preceding production APK. The signer
-rejects repository-local keys, dirty or untagged source, signed or debuggable
-inputs, source/APK version mismatches, changed unsigned bytes or toolchain, an
-unexpected or development certificate, missing v2/v3 signatures, failed
-alignment, and existing output paths. It prompts through `apksigner`; neither
-the keystore password nor key password is accepted on the command line.
+`-FirstProductionRelease` applied only to v0.3.6 and must not be used for a
+normal update. The signer rejects dirty or untagged source, repository-local
+keys, changed evidence, a wrong package/version/signer, debuggable inputs,
+missing v2/v3 signatures, failed alignment, and existing output paths.
 
-The helper emits the signed APK, its checksum manifest, the public signing
-certificate digest, and machine-readable release metadata under ignored
-`dist/`, including the retained verbose `apksigner` verification. These files
-are inputs to the wider evidence and publication process; the helper does not
-close any checklist item by itself. Complete and verify two encrypted,
-separately controlled backups before the first signing operation. Losing the
-private key prevents in-place updates on this distribution channel.
-Development APKs signed with the retained debug identity cannot update into
-this first production lineage. Uninstalling one removes its profiles,
-certificate pins, and protected credentials.
+The tested signed APK must be the uploaded APK. Any rebuild changes the bytes
+and invalidates the signed-candidate checks.
 
-## Build and verify
+The evidence helper does not create or validate corresponding source for
+external runtime components. Before publication, create and review
+`NanoKVM-Mobile-X.Y.Z-runtime-sources.json`. For each resolved component or
+clearly defined dependency family, record:
 
-The evidence helper invokes this clean build gate with JDK 21 and strict
-dependency verification:
+- the Maven coordinate and binary SHA-256, or mark a BOM/platform entry as
+  metadata-only;
+- source kind (`maven-sources`, `upstream-archive`, or `metadata-only`), exact
+  tag/commit and durable URL;
+- source archive SHA-256 and its retained release path; and
+- any exception or disposition.
 
-```powershell
-.\gradlew.bat --no-problems-report --no-daemon --no-parallel --no-configuration-cache --refresh-dependencies --dependency-verification=strict clean test lintRelease assembleRelease bundleRelease assembleBenchmark :app:verifyReleaseProfiles :macrobenchmark:assembleBenchmark :app:verifyReproducibleSbomMetadata
-```
+Map repackaged protobuf to upstream protobuf v28.2 rather than DataStore's stub
+sources, and map the WebRTC wrapper to its exact wrapper tag and underlying
+WebRTC commit. Retain or mirror the exact source archives with the release when
+their continued availability is not otherwise assured. Include the completed
+manifest in `SHA256SUMS`; successful signing alone is not a complete release
+gate.
 
-The repository build produces:
+## Required release assets
 
-- `app/build/outputs/apk/release/app-release-unsigned.apk`;
-- `app/build/outputs/bundle/release/app-release.aab`;
-- `app/build/outputs/apk/benchmark/app-benchmark.apk` for controlled testing
-  only (debug-signed and not distributable);
-- `app/build/reports/cyclonedx/nanokvm-mobile.cdx.json`;
-- `app/build/outputs/mapping/release/` with mapping, seeds, usage, resources,
-  and effective configuration; and
-- generated profile sources plus packaged Baseline Profile metadata.
+Publish these together on the GitHub release:
 
-GitHub-hosted build/test workflows are intentionally not used as an unattended
-release gate. Maintainers run the strict gate locally and retain its command
-output and artifacts privately against the exact commit; public uploads are a
-separate, explicit release-owner action. Before a candidate is signed, run the
-evidence helper to create its exact tagged-source archive, durable build-artifact
-directory, and reviewed unsigned evidence manifest from the frozen release
-commit. Preserve the JSON, its companion artifact directory, and the strict-build
-log as one evidence set. Generate a separate checksum manifest after production
-signing; no development-output hash can identify the final published bytes.
+- the signed APK and its post-signing SHA-256 manifest;
+- the public signing-certificate digest and verification output;
+- complete corresponding source for the exact tag, including build scripts,
+  Gradle wrapper/configuration, generated profiles, and dependency metadata;
+- the reviewed runtime-source manifest and retained source archives, canonical
+  CycloneDX SBOM, project licence, and complete third-party licence/notices;
+- release notes covering Android/NanoKVM compatibility, upgrade behavior,
+  known limitations, security/privacy changes, and actual test scope.
 
-The helper retains and hashes its complete JVM test/release-lint output, merged
-release manifest and packaged Network Security Config, resolved release runtime
-dependency graph, canonical SBOM, all required R8 outputs, generated profiles,
-benchmark APK, unsigned APK, and release AAB. Retain the separate
-vulnerability/licence review, profile-verification interpretation, and
-device/manual evidence alongside that machine-produced set. Local-only storage
-is acceptable during development; production evidence needs named custody,
-integrity hashes, backup, and a durable release-record location. The benchmark
-APK and R8/test details are private evidence, not public release assets.
+Keep private keys, passwords, benchmark APKs, R8 mapping details, and private
+device evidence out of public assets. Preserve them privately when useful for
+diagnosis and release traceability.
 
-## Signing and candidate identity
+GPL-3.0-or-later requires equivalent access to the complete corresponding
+source when the APK is offered. A repository link is useful only when it points
+to the exact durable tag and the linked runtime dependencies' required source
+locations remain available.
 
-Sign the APK/AAB only through the approved release environment. Then record:
+## Verify and respond
 
-- release version and source commit/tag;
-- SHA-256 of each final signed artifact;
-- SHA-256 of the signing certificate and signature verification output;
-- package name, version code/name, minimum/target SDK, and merged permissions;
-- whether the candidate is APK, AAB, or store-generated split APKs; and
-- exact relationship between the tested signed candidate and published bytes.
+From the public release page, download the APK and checksum again and verify
+their bytes, package, version, certificate, signatures, and source link. Confirm
+an update from the preceding public APK on a physical phone.
 
-All signed/minified device, accessibility, security, and real-appliance tests
-must use that candidate or a byte-identical artifact. Rebuilding after QA
-invalidates the sign-off and requires rerunning affected gates.
-
-## Corresponding source and public release bundle
-
-Every binary distribution must point to complete corresponding source for that
-exact version. Publish together, or through a durable link stated alongside the
-binary:
-
-- source archive from the release tag, including all production modules,
-  versioned generated profiles, Gradle wrapper/configuration, verification
-  metadata, and scripts required to build;
-- `LICENSE`, `NOTICE`, public privacy/security documents, and dependency licence
-  inventory;
-- the complete notice/licence bundle required by the exact pinned WebRTC/native
-  dependency graph, retained locally with reviewed provenance and hashes rather
-  than only an external URL;
-- signed APK and/or store/AAB artifact as applicable;
-- canonical CycloneDX SBOM;
-- SHA-256 checksum file generated after signing;
-- public signing-certificate digest and verification instructions;
-- release notes with supported Android/NanoKVM versions, known limitations,
-  migration/rollback notes, and security/privacy changes; and
-- provenance/attestation when the hosting channel supports it.
-
-R8 mapping may contain sensitive implementation metadata. Retain it privately
-for crash/security diagnosis and release traceability unless the release owner
-deliberately publishes it. Its hash and custody location belong in the internal
-release record.
-
-## Public pre-release candidate lane
-
-A production-signed APK may be published for opt-in hobbyist testing as a
-GitHub **pre-release** before the stable-production matrix is complete, but only
-when every requirement below is satisfied:
-
-- the source is clean, frozen under the exact annotated tag, free of private
-  material, and accompanied by one reviewed clean-build evidence set; a
-  reproducibility claim additionally requires the two independently reconciled
-  unsigned builds described below;
-- the long-lived production key is outside the repository, its public lineage
-  is recorded, and two encrypted backups in separately controlled locations
-  have been confirmed before the first signing operation;
-- the signing helper consumes only the reviewed unsigned evidence and emits a
-  non-debuggable, non-profileable, aligned APK with verified v2/v3 signatures,
-  package/version identity, checksum, certificate digest, and release metadata;
-- the exact signed bytes selected for upload install and cold-launch on a
-  supported Android target without a crash, and the in-app About surface shows
-  the expected version, source tag, and signing identity;
-- the complete corresponding-source, licence/notice, dependency inventory,
-  SBOM, APK, checksum, certificate-verification, and release-note bundle is
-  published together;
-- the GitHub release is marked **pre-release**, is not marked **Latest**, and
-  says prominently that it is not stable or production-approved;
-- release notes enumerate every open Android/API, physical ARM, real NanoKVM,
-  accessibility, destructive, endurance, security/privacy, and performance
-  gate, plus the first-production-lineage migration consequence; and
-- no known source/test P0 or P1 correctness, security, credential, input-release,
-  data-loss, or licence/source-link defect remains undispositioned.
-
-This lane does not convert emulator or source evidence into device, appliance,
-accessibility, or field evidence. Testers must use trusted, recovery-capable
-targets and accept the disclosed gaps. Dynamic signed hashes and smoke results
-belong in the release assets/record so the frozen source tag is not changed
-after signing.
-
-## Stable direct-GitHub release lane
-
-An unchanged production-signed pre-release may be promoted to a stable GitHub
-release without rebuilding or replacing its assets when all of the following
-are true:
-
-- the source tag, commit, APK bytes, APK digest, signing identity, and retained
-  release evidence are unchanged;
-- the public-candidate controls above were satisfied for those exact bytes;
-- the release owner records successful physical-device and real-appliance use,
-  including the Android/app version, NanoKVM application version, approximate
-  duration, and observed outcome;
-- no known P0/P1 correctness, security, credential, input-release, data-loss,
-  licence, or corresponding-source defect remains undispositioned;
-- each applicable blocking checklist item is closed, marked not applicable, or
-  explicitly dispositioned by the release owner with the remaining scope stated
-  in the release notes; and
-- the release, security policy, changelog, and support documentation consistently
-  identify the binary as stable and preserve its signing/update warnings.
-
-Stable status is a release-owner decision about the documented supported scope,
-not a claim of universal Android, hardware, accessibility, destructive-action,
-or endurance coverage. Wider unexecuted matrices remain visible limitations and
-must be reconsidered for later binary releases.
-
-## Reproducibility
-
-Before claiming reproducibility, build the unsigned release artifact twice in
-fresh isolated environments from the same tag and recorded toolchain. Compare
-the normalized dependency graph, SBOM, generated profiles, APK/AAB contents,
-and SHA-256 outputs. Investigate every difference and document any signing or
-archive metadata that is intentionally non-reproducible.
-
-Do not describe the project as reproducible and do not submit to F-Droid on that
-basis until the comparison passes and the recipe is retained. Store-managed
-signing must document how users verify the store artifact against the published
-source and build recipe.
-
-## Publication, rollback, and field evidence
-
-Stable publication or marking a release **Latest** requires the stable lane
-above and a completed candidate record in `RELEASE_CHECKLIST.md`. Applicable
-blocking items must be closed or explicitly dispositioned; optional wider
-coverage must not be presented as completed when it is not. Earlier public
-testing uses the pre-release candidate lane. If a signing, trust, credential,
-unintended-input, data-loss, or GPL source-link problem appears after
-publication, preserve evidence, publish a clear advisory, and withdraw or
-supersede the artifact through the distribution channel. Never reuse a version
-code for changed bytes, even when the earlier artifact was shared only as a
-development build.
-
-The app has no internal telemetry. After distribution, use opt-in issue reports
-and channel-provided aggregate health metrics only where available. Field
-crash/ANR/startup/slow-frame review is therefore a conditional gate for any
-distribution channel that supplies those aggregate metrics, not evidence that
-exists today.
+If a signing, trust, credential, unintended-input, data-loss, licence, or source
+defect is found, preserve evidence, publish a clear advisory, and withdraw or
+supersede the artifact. Never replace assets silently or reuse the version code.

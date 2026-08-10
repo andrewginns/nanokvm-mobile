@@ -7,10 +7,10 @@ import org.nanokvm.mobile.BuildConfig
 
 class AboutReleaseInfoTest {
     @Test
-    fun exactSourceUrlIsTiedToTheBuiltVersionTag() {
+    fun developmentSourceUrlUsesTheCurrentMainBranch() {
         assertEquals(
-            "https://github.com/andrewginns/nanokvm-mobile/tree/v" + BuildConfig.VERSION_NAME,
-            BuildConfig.RELEASE_SOURCE_URL,
+            "https://github.com/andrewginns/nanokvm-mobile/tree/main",
+            BuildConfig.SOURCE_URL,
         )
     }
 

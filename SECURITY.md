@@ -1,5 +1,9 @@
 # Security policy
 
+This file covers supported versions and vulnerability reporting. Maintainer
+security boundaries and verification guidance are in the
+[technical security model](docs/SECURITY.md).
+
 ## Supported versions
 
 NanoKVM Mobile 0.3.6 is the current stable, production-signed GitHub release.
@@ -32,42 +36,10 @@ validation, remediation, credit, and disclosure in the private advisory.
 
 ## Security boundaries
 
-The app treats each NanoKVM as a separate trust domain. Certificate acceptance
-is explicit and scoped to one saved connection. A changed fingerprint blocks
-ordinary connection and shows the stored and presented identities. The user
-must explicitly reject it, connect once while preserving the saved pin, or
-replace the saved pin. Rotation is never automatic. Passwords and session
-tokens must not appear in logs, crash messages, screenshots, exports, or source
-control.
-
-Password saving is opt-in. Saved values are AES-GCM encrypted with a
-non-exportable, authentication-bound Android Keystore key and stored only in the
-app's no-backup directory. A candidate replacement is not committed until the
-NanoKVM login succeeds. Profile deletion first verifies removal of the saved
-credential and reports any partial outcome instead of claiming full success.
-
-Changing the host, port, protocol, or username is blocked while a protected
-password exists; the user must explicitly remove it before changing that login
-identity. Power, reset, long-press power, and Ctrl-Alt-Delete are intentionally
-guarded actions. Security fixes for unintended input, TLS bypass, credential
-exposure, or guard bypasses should be treated as release blockers.
-
-The NanoKVM origin, authenticated signaling, and application control traffic
-require HTTPS, and Android cleartext transport is disabled in both the manifest
-and Network Security Config. Initial access-point Wi-Fi setup is deliberately
-outside the app. Private and self-signed appliance certificates remain supported
-through the inspection and pinning flow above. Explicit WebRTC mode has the
-limited ICE-network exception described below.
-
-Optional WebRTC signaling uses the authenticated NanoKVM origin, but native ICE
-negotiation may contact STUN/TURN URLs supplied by the appliance. Those values
-are bounded and validated as ICE URL schemes; users should enable WebRTC only
-for an appliance they trust to choose those network peers.
-
-System and serial terminals are root-equivalent appliance sessions. Script and
-autostart management, offline/online updates, virtual media, DNS/Wi-Fi/Tailscale,
-TLS enablement, and PicoClaw can persist changes or disrupt access. Their
-authorities are foreground/session scoped, mutations are never automatically
-replayed, and disruptive actions require explicit review. A response loss after
-a mutation is indeterminate and must be reconciled with a fresh read rather than
-blindly retried.
+The app treats each NanoKVM as a separate trust domain, requires HTTPS, and
+scopes certificate decisions and optional protected credentials to one saved
+connection. Changed pins fail closed. Root-equivalent, persistent, destructive,
+and unintended-input paths require explicit user intent and are release
+blockers when their trust or recovery behavior is uncertain. The maintained
+threat boundaries, data flows, mitigations, and verification rules are in the
+[technical security model](docs/SECURITY.md).

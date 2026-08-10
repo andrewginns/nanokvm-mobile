@@ -11,9 +11,9 @@ browser-specific presentation detail will be copied into the native app.
 - Compatibility floor: application **2.3.2**. A feature introduced later must
   be hidden or disabled with an explanation; it must not make the console fail.
 - Primary sources are the upstream
-  [WebUI API clients](https://github.com/sipeed/NanoKVM/tree/main/web/src/api),
-  [WebUI desktop controls](https://github.com/sipeed/NanoKVM/tree/main/web/src/pages/desktop),
-  [server routes](https://github.com/sipeed/NanoKVM/tree/main/server/router), and
+  [WebUI API clients](https://github.com/sipeed/NanoKVM/tree/3b2ba7c0c1214f44da9d328f90bbdd025fac0413/web/src/api),
+  [WebUI desktop controls](https://github.com/sipeed/NanoKVM/tree/3b2ba7c0c1214f44da9d328f90bbdd025fac0413/web/src/pages/desktop),
+  [server routes](https://github.com/sipeed/NanoKVM/tree/3b2ba7c0c1214f44da9d328f90bbdd025fac0413/server/router), and
   [Cube user guide](https://wiki.sipeed.com/hardware/en/kvm/NanoKVM/user_guide.html).
 - Re-audit this ledger when the reference application version changes. Record
   the upstream tag/commit in the release evidence; `main` is discovery input,
@@ -147,34 +147,23 @@ review.
 | X-02 | PicoClaw assistant/control surface | P | version `>=2.4.0`, then probe only after explicit feature entry; runtime separately installed | configured extension/provider | R3; explicit broad device/host-control opt-in | P6 | C/U: explicit-entry-only probe, redacted no-replay gateway, destructive confirmations and conspicuous global HID lock/release UI; E/A open |
 | X-03 | Browser on-screen keyboard and cursor cosmetics | X | browser-only presentation | none | R0 | - | Replaced by native IME, modifier accessory, direct touch and trackpad; parity judged by outcomes/accessibility |
 
-## Verification register
+## Evidence records
 
-The feature row records the required proof; this register points to retained
-results for a particular implementation/release. Do not replace `open` with a
-check mark without a durable path, target version, date, and result.
+This ledger defines capability scope and the proof required by each row; it is
+not a log of individual test runs. Retain Android, accessibility, and
+performance results using the evidence record in [Testing](TESTING.md), real
+NanoKVM results against the named cases in the
+[appliance verification plan](APPLIANCE_TEST_PLAN.md), and signed-candidate or
+publication evidence with the [release checklist](RELEASE_CHECKLIST.md) and its
+release assets.
 
-| Phase | Protocol/unit (C/U) | Android UI/device (E) | NanoKVM target (A) | Signed candidate (R) |
-| --- | --- | --- | --- | --- |
-| P0 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint; release matrix open | open: 2.3.2 + 2.4.3 | open |
-| P1 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint; API 26/29/31/33/34 open | open: Cube/PCIe 2.4.3 | open |
-| P2 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint; physical keyboard/external input open | open: long session + fallback | open |
-| P3 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint | open: disposable host/storage | open |
-| P4 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint | open: recovery-capable appliance | open |
-| P5 | Local C/U checkpoint passed; retained release evidence open | API 37 local checkpoint | open: disposable commands/scripts/UART | open |
-| P6 | Local C/U checkpoint passed; retained release evidence open | API 37 functional checkpoint; physical performance open | open: explicitly capable target | open |
+Every retained appliance result identifies the app commit or APK hash, Android
+device/version, NanoKVM hardware and application/image versions, certificate
+mode, applicable case IDs, outcome, and redacted evidence location. Never retain
+passwords, tokens, private topology, clipboard or terminal secrets, or a remote
+framebuffer containing sensitive data.
 
-For each retained appliance result record: app commit/APK hash, Android version
-and device, NanoKVM hardware revision, image/application versions, certificate
-mode, test case IDs, outcome, and links to redacted logs/screenshots. Never put
-passwords, tokens, clipboard contents, terminal commands containing secrets, or
-remote framebuffer captures with sensitive data in the evidence bundle.
-
-The current 2026-07-20 adversarial remediation checkpoint passed 548/548 JVM
-tests across 83 suites, 76/76 app instrumentation tests, the video module's 1/1
-native WebRTC crash regression, and 1/1 real process-restart test on API 37.
-`WebSocketIngressMemoryInstrumentedTest` was not invoked and no Android heap/PSS
-result is claimed. Exact local build evidence, including historical checkpoints,
-is recorded in `BUILD_VERIFICATION.md`. Stable release status does not close a
-parity row by itself; the real-appliance, compatibility-floor, physical-device,
-accessibility, endurance, destructive, signed-journey, and performance cases
-above remain open until their stated evidence is retained.
+Advance a row only when current evidence satisfies its stated exit proof.
+Stable publication or a historical checkpoint does not close missing
+compatibility, physical-device, accessibility, endurance, destructive-action,
+signed-journey, or performance evidence; keep that evidence explicitly open.

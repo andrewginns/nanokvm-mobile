@@ -76,10 +76,11 @@ explicitly entered PicoClaw cases.
 
 ## Android matrix
 
-Retain at least one phone result on API 26, 29, 31, 33, 34, 35, 36, and 37 for
-the clipboard/IME/lifecycle flow, following the full required-device matrix in
-`RELEASE_CHECKLIST.md`. On API 37 also cover portrait, landscape,
-split-screen, keyboard-open viewpad movement/zoom/scroll, system font 200%,
-TalkBack traversal, and an external keyboard/mouse. Run long video and WebRTC
-performance cases on physical hardware; emulator decoder results are not
-release evidence.
+Choose Android versions according to the change. Exercise affected behavior on
+the oldest supported API where it differs and on the current target API. A
+public APK also needs a representative physical phone covering rotation or
+resizing, keyboard-open viewpad movement/zoom/scroll, large text, accessibility
+semantics, and relevant external input. Run long video, WebRTC, Keystore,
+thermal, and performance cases on physical hardware; emulator results do not
+prove those behaviors. Record the actual matrix and do not imply coverage that
+was not run.

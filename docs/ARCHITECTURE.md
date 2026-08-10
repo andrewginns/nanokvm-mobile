@@ -236,7 +236,49 @@ before those checks run. A raw slow-fragment fixture proves cumulative buffering
 before listener delivery and deliberately trips when the pinned OkHttp internals
 change. Parser copies, decoder queues, and post-rejection lifetime are bounded;
 peak first-message allocation from a hostile configured endpoint is not. This
-residual availability risk remains in the threat model and audit.
+residual availability risk remains in the [technical security model](SECURITY.md).
+
+## Presentation, adaptive layout, and accessibility
+
+Material 3 is the local application shell, not a decorative layer over the
+remote display. Profile, trust, and settings surfaces follow the saved System,
+Light, or Dark appearance and may use Android wallpaper-derived colour. The
+live console uses fixed neutral semantic tokens for its canvas, controls,
+status, warnings, errors, and text so wallpaper colour cannot tint the remote
+image or change the meaning of console state.
+
+Console controls derive their presentation from
+`currentWindowAdaptiveInfo()` and the current constraints rather than device
+labels, orientation locks, or cached display metrics:
+
+| Current window | Controls presentation | Console invariant |
+| --- | --- | --- |
+| Compact portrait, at least 480dp high | Modal bottom sheet | The stream remains full size behind transient controls, and the navigation pad docks above an open IME. |
+| Compact landscape, under 480dp high | Dismissible side overlay | Vertical space is preserved, with a labelled scrim and explicit close action. |
+| Medium width | Dismissible side overlay | View and scroll controls use the available console width. |
+| Expanded width, 840dp or wider | Supporting pane | Controls may remain alongside the console. |
+
+The video keeps a permanent composition parent in the main pane while those
+presentations change. Opening, closing, or moving controls must not recreate
+the decoder Surface or reconnect the transport. Editor and catalogue reading
+widths are capped; the remote viewport consumes the main-pane space it is
+assigned.
+
+Colour is never the only status signal; text, shape, iconography, or an
+accessibility state carries the same meaning. Material controls and custom
+gesture alternatives provide at least 48dp targets. Pan, zoom, and
+four-direction scrolling expose accessibility actions in addition to gestures.
+Static labels, content descriptions, and runtime or feature notices live in
+Android resources behind exhaustive semantic mappings.
+
+Non-secret layout and viewport context may survive recreation. Passwords,
+staged credentials, session tokens, certificate decisions, destructive
+approvals, and other secrets must never enter `rememberSaveable`,
+`SavedStateHandle`, or another restorable UI state owner. Automated layout,
+contrast, semantics, and lifecycle tests support these rules, but do not replace
+the physical-device, assistive-technology, long-string, RTL, or real-appliance
+coverage defined in [Testing](TESTING.md) and the
+[release checklist](RELEASE_CHECKLIST.md).
 
 ## Shutdown and performance evidence
 
@@ -255,8 +297,8 @@ Generated Baseline and Startup Profile rules are versioned under
 cold startup runs with no compilation and with the packaged Baseline Profile,
 plus frame timing for cold startup without compilation and cold/warm/hot startup
 with the packaged Baseline Profile. Compose reports fully drawn after the
-profile catalog reaches a renderable terminal state. Current-source profile
-generation and APK/AAB package verification pass on API 37; earlier x86_64
-cold/warm/hot, fully-drawn, and frame traces are diagnostic only. Current-source
-performance measurement, first-frame/console CUJs, physical ARM measurements,
-and stable trend thresholds remain open release evidence.
+profile catalog reaches a renderable terminal state. Regenerate and package-
+verify the profiles when those journeys change. Treat emulator traces as
+diagnostic; performance claims require current-source measurements on a named
+physical ARM device with repeatable first-frame or console journeys and recorded
+thresholds.

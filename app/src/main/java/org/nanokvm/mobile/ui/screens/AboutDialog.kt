@@ -45,7 +45,7 @@ private const val AboutDocumentChunkCharacters = 4_000
 internal data class AboutReleaseInfo(
     val versionName: String,
     val versionCode: Int,
-    val exactSourceUrl: String,
+    val sourceUrl: String,
     val signingCertificateSha256: List<String>,
     val isDevelopmentBuild: Boolean,
 )
@@ -70,6 +70,21 @@ internal enum class BundledAboutDocument(
         "about/THIRD_PARTY_NOTICES.md",
         "about-document-third-party",
     ),
+    RuntimeComponentLicenses(
+        R.string.about_document_runtime_components,
+        "open_source_licenses/RUNTIME_COMPONENT_LICENSES.md",
+        "about-document-runtime-components",
+    ),
+    ApacheLicense(
+        R.string.about_document_apache,
+        "open_source_licenses/APACHE-2.0.txt",
+        "about-document-apache",
+    ),
+    ProtobufLicense(
+        R.string.about_document_protobuf,
+        "open_source_licenses/PROTOBUF-4.28.2-LICENSE.txt",
+        "about-document-protobuf",
+    ),
     WebRtcWrapperLicense(
         R.string.about_document_webrtc_wrapper,
         "open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt",
@@ -79,6 +94,11 @@ internal enum class BundledAboutDocument(
         R.string.about_document_webrtc,
         "open_source_licenses/WEBRTC.md",
         "about-document-webrtc",
+    ),
+    IndependentJpegGroupNotice(
+        R.string.about_document_ijg,
+        "open_source_licenses/README.ijg",
+        "about-document-ijg",
     ),
     Privacy(
         R.string.about_document_privacy,
@@ -99,7 +119,7 @@ internal fun AboutDialog(onDismiss: () -> Unit) {
         AboutReleaseInfo(
             versionName = BuildConfig.VERSION_NAME,
             versionCode = BuildConfig.VERSION_CODE,
-            exactSourceUrl = BuildConfig.RELEASE_SOURCE_URL,
+            sourceUrl = BuildConfig.SOURCE_URL,
             signingCertificateSha256 = installedSigningCertificateSha256(context),
             isDevelopmentBuild = BuildConfig.BUILD_TYPE != "release",
         )
@@ -113,7 +133,7 @@ internal fun AboutDialog(
     onDismiss: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
-    var sourceOpenFailed by rememberSaveable(releaseInfo.exactSourceUrl) { mutableStateOf(false) }
+    var sourceOpenFailed by rememberSaveable(releaseInfo.sourceUrl) { mutableStateOf(false) }
     var selectedDocument by rememberSaveable { mutableStateOf<BundledAboutDocument?>(null) }
 
     AlertDialog(
@@ -168,7 +188,7 @@ internal fun AboutDialog(
                 item {
                     SelectionContainer {
                         Text(
-                            releaseInfo.exactSourceUrl,
+                            releaseInfo.sourceUrl,
                             modifier = Modifier.testTag("about-source-url"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -180,12 +200,12 @@ internal fun AboutDialog(
                     TextButton(
                         onClick = {
                             sourceOpenFailed = runCatching {
-                                uriHandler.openUri(releaseInfo.exactSourceUrl)
+                                uriHandler.openUri(releaseInfo.sourceUrl)
                             }.isFailure
                         },
                         modifier = Modifier.testTag("about-open-source"),
                     ) {
-                        Text(stringResource(R.string.about_source_action, releaseInfo.versionName))
+                        Text(stringResource(R.string.about_source_action))
                     }
                 }
                 if (sourceOpenFailed) {

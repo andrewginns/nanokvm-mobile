@@ -23,6 +23,10 @@ copying the product photograph. The restrained `NanoKVM` label identifies the
 compatible hardware; this project is independent of Sipeed. The final canvas is
 a centre crop followed by a high-quality resize from the retained source.
 
+The Sipeed photograph is not stored or redistributed by this repository. A
+future revision should prefer a project-owned hardware photograph or explicit
+permission so that the visual-reference provenance is unambiguous.
+
 ## Interface screenshots
 
 The four `readme/*.png` phone screenshots were captured from the production
