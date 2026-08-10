@@ -42,7 +42,7 @@ the AAR size is evidence about the dependency, not a claim about delivered size.
 
 | Component | Purpose | Shipped in APK | Licence |
 | --- | --- | --- | --- |
-| Android Gradle Plugin and Gradle Wrapper | Compile, shrink, verify and package Android variants | No | Apache-2.0 |
+| Android Gradle Plugin 9.3.1 and Gradle Wrapper 9.7.0 | Compile, shrink, verify and package Android variants | No | Apache-2.0 |
 | Kotlin Compose and Serialization plugins | Kotlin compilation and generated serializers | No | Apache-2.0 |
 | JUnit 4 and AndroidX Test/Espresso/Compose Test | JVM and device assertions | No | EPL-1.0 / Apache-2.0 |
 | MockWebServer and OkHttp TLS | Deterministic protocol and certificate tests | No | Apache-2.0 |
