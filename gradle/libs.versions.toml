@@ -20,7 +20,7 @@ benchmark = "1.4.1"
 baselineProfilePlugin = "1.5.0-beta01"
 uiautomator = "2.4.0"
 profileInstaller = "1.4.1"
-cyclonedx = "3.3.0"
+cyclonedx = "3.4.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }

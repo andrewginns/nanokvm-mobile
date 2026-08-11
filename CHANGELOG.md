@@ -17,9 +17,9 @@ release, and offline licence documentation.
 
 - Advanced the release to version 0.3.7/code 14 and made development builds
   identify `main` while production builds identify the exact v0.3.7 tag.
-- Updated the Android build plugins and Gradle wrapper, including their
-  strictly verified dependency metadata, without changing the packaged runtime
-  dependency graph.
+- Updated the Android build plugins, Gradle wrapper, and CycloneDX SBOM plugin,
+  including their strictly verified dependency metadata, without changing the
+  packaged runtime dependency graph.
 - Refocused the README and repository visuals on direct GitHub APK installation
   and reproducible source builds.
 - Simplified contributor, testing, release, distribution, architecture, and

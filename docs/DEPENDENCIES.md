@@ -48,7 +48,7 @@ the AAR size is evidence about the dependency, not a claim about delivered size.
 | MockWebServer and OkHttp TLS | Deterministic protocol and certificate tests | No | Apache-2.0 |
 | AndroidX Macrobenchmark and UI Automator | Out-of-process startup measurement against the minified benchmark APK | No | Apache-2.0 |
 | AndroidX Baseline Profile Gradle plugin | Generate, merge, rewrite and package app-specific Baseline and Startup Profiles | No | Apache-2.0 |
-| CycloneDX Gradle plugin | Generate the verified release-runtime software bill of materials | No | Apache-2.0 |
+| CycloneDX Gradle plugin 3.4.0 | Generate the verified release-runtime software bill of materials | No | Apache-2.0 |
 
 The `benchmark` build type is a minified, profileable copy of `release` signed
 with the standard local debug key. It exists only for controlled performance and
