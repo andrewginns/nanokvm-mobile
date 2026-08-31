@@ -136,6 +136,12 @@ class KeyboardReportState {
 
 enum class KeyboardLayout { US, UK }
 
+/** How committed text represents a line break on the remote keyboard. */
+enum class CommittedTextLineBreakMode {
+    ENTER,
+    SHIFT_ENTER,
+}
+
 data class HidKeystroke(
     val usage: HidUsage,
     val modifiers: Set<HidModifier> = emptySet(),
@@ -159,22 +165,48 @@ data class CharacterMapping(
 /** Character-to-physical-key mapping for US ANSI and UK ISO target keyboard layouts. */
 object HidCharacterMapper {
     @JvmStatic
-    fun map(character: Char, layout: KeyboardLayout = KeyboardLayout.US): HidKeystroke? =
-        layoutMap(layout)[character]
+    @JvmOverloads
+    fun map(
+        character: Char,
+        layout: KeyboardLayout = KeyboardLayout.US,
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
+    ): HidKeystroke? = lineBreakStroke(character, lineBreakMode) ?: layoutMap(layout)[character]
 
     @JvmStatic
-    fun mapText(text: String, layout: KeyboardLayout = KeyboardLayout.US): CharacterMapping {
+    @JvmOverloads
+    fun mapText(
+        text: String,
+        layout: KeyboardLayout = KeyboardLayout.US,
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
+    ): CharacterMapping {
         val mapped = mutableListOf<HidKeystroke>()
         val unsupported = mutableListOf<UnsupportedCodePoint>()
         var index = 0
         val keyMap = layoutMap(layout)
         while (index < text.length) {
             val codePoint = text.codePointAt(index)
-            val stroke = if (codePoint <= Char.MAX_VALUE.code) keyMap[codePoint.toChar()] else null
+            val stroke = if (codePoint <= Char.MAX_VALUE.code) {
+                val character = codePoint.toChar()
+                lineBreakStroke(character, lineBreakMode) ?: keyMap[character]
+            } else {
+                null
+            }
             if (stroke == null) unsupported += UnsupportedCodePoint(index, codePoint) else mapped += stroke
             index += Character.charCount(codePoint)
         }
         return CharacterMapping(mapped, unsupported)
+    }
+
+    private fun lineBreakStroke(
+        character: Char,
+        mode: CommittedTextLineBreakMode,
+    ): HidKeystroke? {
+        if (character != '\n' && character != '\r') return null
+        val modifiers = when (mode) {
+            CommittedTextLineBreakMode.ENTER -> emptySet()
+            CommittedTextLineBreakMode.SHIFT_ENTER -> setOf(HidModifier.LEFT_SHIFT)
+        }
+        return HidKeystroke(HidUsage.ENTER, modifiers)
     }
 
     private fun layoutMap(layout: KeyboardLayout): Map<Char, HidKeystroke> = when (layout) {

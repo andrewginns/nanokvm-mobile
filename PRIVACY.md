@@ -41,11 +41,12 @@ data from the app.
   maintainers.
 - The app reads Android clipboard text only after the user chooses the phone
   clipboard action. Plain-text share intents are removed from the Activity
-  intent immediately. Normalized clipboard/share text above 1,024 UTF-8 bytes
-  is rejected before the app retains it; accepted text remains memory-only
-  while the app prepares the destination-bound preview or paced HID operation
-  and is cleared after consumption, cancellation, session invalidation, or
-  genuine backgrounding. Paste/share content is never written to the Android
+  intent immediately. Normalized clipboard/share text above 65,536 UTF-8 bytes
+  is rejected before the app retains it. Accepted text is divided into
+  memory-only ranges of at most 1,024 UTF-8 bytes while the app prepares the
+  destination-bound preview or paced HID operation, and is cleared after
+  consumption, cancellation, session invalidation, or genuine backgrounding.
+  Paste/share content is never written to the Android
   clipboard, and the app cannot read the remote host clipboard. Separately, a
   user may choose to copy a public certificate fingerprint from certificate
   review; that value then enters Android's system clipboard and is subject to

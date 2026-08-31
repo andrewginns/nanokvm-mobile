@@ -14,6 +14,7 @@ class ClipboardPayloadAnalyzerTest {
         assertEquals("A\nB\n😃", payload.text)
         assertEquals(5, payload.characterCount)
         assertEquals(8, payload.utf8ByteCount)
+        assertEquals(1, payload.chunkCount)
         assertEquals(setOf(ClipboardTextWarning.ContainsNewline), payload.warnings)
     }
 
@@ -31,30 +32,151 @@ class ClipboardPayloadAnalyzerTest {
     }
 
     @Test
-    fun `accepts exact utf8 boundary and rejects before retaining one byte over`() {
-        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress("£".repeat(512))
-        val rejected = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress("£".repeat(512) + "a")
+    fun `uses one chunk at exact chunk boundary and two at one byte over`() {
+        val exact = ClipboardPayloadAnalyzer.analyzeDirectPlainText("a".repeat(1_024))
+        val over = ClipboardPayloadAnalyzer.analyzeDirectPlainText("a".repeat(1_025))
 
-        assertTrue(accepted is ClipboardPayloadAnalysis.Accepted)
-        assertEquals(1_024, (accepted as ClipboardPayloadAnalysis.Accepted).payload.utf8ByteCount)
-        assertEquals(ClipboardPayloadAnalysis.TooLarge, rejected)
-        assertThrows(IllegalArgumentException::class.java) {
-            ClipboardPayloadAnalyzer.analyzeDirectPlainText("£".repeat(513))
+        assertEquals(1, exact.chunkCount)
+        assertEquals(listOf(1_024), exact.chunkRanges.map { it.utf8ByteCount })
+        assertEquals(2, over.chunkCount)
+        assertEquals(listOf(1_024, 1), over.chunkRanges.map { it.utf8ByteCount })
+    }
+
+    @Test
+    fun `accepts text over one chunk and exposes bounded contiguous ranges`() {
+        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText(
+            "a".repeat(1_023) + "£" + "b".repeat(1_023) + "😃" + "tail",
+        )
+
+        assertEquals(3, payload.chunkCount)
+        assertEquals(payload.text, payload.textChunks().joinToString(separator = ""))
+        assertEquals(
+            listOf(1_023, 1_024, 9),
+            payload.chunkRanges.map(ClipboardChunkRange::utf8ByteCount),
+        )
+        payload.chunkRanges.forEachIndexed { index, range ->
+            assertTrue(range.startIndex < range.endIndexExclusive)
+            assertTrue(range.utf8ByteCount <= ClipboardPayloadAnalyzer.PASTE_CHUNK_LIMIT_BYTES)
+            assertEquals(
+                range.utf8ByteCount,
+                payload.text.substring(range.startIndex, range.endIndexExclusive)
+                    .toByteArray(Charsets.UTF_8).size,
+            )
+            if (index > 0) {
+                assertEquals(payload.chunkRanges[index - 1].endIndexExclusive, range.startIndex)
+            }
         }
     }
 
     @Test
-    fun `line-ending normalization is included in the allocation-free ingress bound`() {
-        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
-            "a\r\n".repeat(512),
+    fun `does not split surrogate pairs at chunk boundaries`() {
+        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText(
+            "a".repeat(1_020) + "😃" + "😎" + "z",
         )
+
+        assertEquals(2, payload.chunkCount)
+        assertEquals(listOf(1_024, 5), payload.chunkRanges.map { it.utf8ByteCount })
+        assertEquals("a".repeat(1_020) + "😃", payload.textChunks()[0])
+        assertEquals("😎z", payload.textChunks()[1])
+        payload.chunkRanges.drop(1).forEach { range ->
+            assertFalse(payload.text[range.startIndex].isLowSurrogate())
+        }
+    }
+
+    @Test
+    fun `malformed surrogate byte metrics match the retained UTF-8 representation`() {
+        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText("\uD800")
+
+        assertEquals(payload.text.encodeToByteArray().size, payload.utf8ByteCount)
+        assertEquals(
+            payload.text.encodeToByteArray().size,
+            payload.chunkRanges.single().utf8ByteCount,
+        )
+    }
+
+    @Test
+    fun `accepts exact retained utf8 boundary and rejects one byte over`() {
+        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress("£".repeat(32_768))
         val rejected = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
-            "a\r\n".repeat(512) + "a",
+            "£".repeat(32_768) + "a",
         )
 
         assertTrue(accepted is ClipboardPayloadAnalysis.Accepted)
-        assertEquals(1_024, (accepted as ClipboardPayloadAnalysis.Accepted).payload.utf8ByteCount)
+        val payload = (accepted as ClipboardPayloadAnalysis.Accepted).payload
+        assertEquals(ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES, payload.utf8ByteCount)
+        assertEquals(64, payload.chunkCount)
         assertEquals(ClipboardPayloadAnalysis.TooLarge, rejected)
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            ClipboardPayloadAnalyzer.analyzeDirectPlainText("a".repeat(65_537))
+        }
+        assertTrue(error.message.orEmpty().contains("65536-byte retained paste limit"))
+    }
+
+    @Test
+    fun `line-ending normalization is included in retained bound and chunk reconstruction`() {
+        val accepted = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+            "a\r\n".repeat(32_768),
+        )
+        val rejected = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+            "a\r\n".repeat(32_768) + "a",
+        )
+
+        assertTrue(accepted is ClipboardPayloadAnalysis.Accepted)
+        val payload = (accepted as ClipboardPayloadAnalysis.Accepted).payload
+        assertEquals(ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES, payload.utf8ByteCount)
+        assertEquals(64, payload.chunkCount)
+        assertEquals(payload.text, payload.textChunks().joinToString(separator = ""))
+        assertFalse(payload.text.contains('\r'))
+        assertEquals(ClipboardPayloadAnalysis.TooLarge, rejected)
+    }
+
+    @Test
+    fun `oversized ingress is rejected before requesting a retained string`() {
+        val oversized = object : CharSequence {
+            override val length: Int = ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES + 1
+
+            override fun get(index: Int): Char = 'a'
+
+            override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+                error("subSequence must not be called")
+
+            override fun toString(): String = error("toString must not be called")
+        }
+
+        assertEquals(
+            ClipboardPayloadAnalysis.TooLarge,
+            ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(oversized),
+        )
+    }
+
+    @Test
+    fun `ingress snapshots only the indexed bounded text and never trusts a different toString`() {
+        val inconsistent = object : CharSequence {
+            override val length: Int = 1
+
+            override fun get(index: Int): Char = 'a'
+
+            override fun subSequence(startIndex: Int, endIndex: Int): CharSequence = "a"
+
+            override fun toString(): String = "x".repeat(
+                ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES + 1,
+            )
+        }
+
+        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText(inconsistent)
+
+        assertEquals("a", payload.text)
+        assertEquals(1, payload.characterCount)
+        assertEquals(1, payload.utf8ByteCount)
+        assertEquals(listOf("a"), payload.textChunks())
+    }
+
+    @Test
+    fun `empty payload has no empty chunks`() {
+        val payload = ClipboardPayloadAnalyzer.analyzeDirectPlainText("")
+
+        assertEquals(0, payload.chunkCount)
+        assertTrue(payload.chunkRanges.isEmpty())
     }
 
     @Test
@@ -74,6 +196,7 @@ class ClipboardPayloadAnalyzerTest {
         assertFalse(request.toString().contains("Office NanoKVM"))
         assertFalse(request.toString().contains("192.0.2.250"))
         assertTrue(payload.toString().contains("<redacted>"))
+        assertTrue(payload.toString().contains("chunkCount=1"))
         assertTrue(request.toString().contains("sessionGeneration=4"))
         assertTrue(payload.isSensitive)
     }

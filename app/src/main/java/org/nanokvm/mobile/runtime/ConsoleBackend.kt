@@ -20,6 +20,7 @@ interface RemoteInputSink {
     fun mouseButton(button: MouseButton, pressed: Boolean)
     fun scrollWheel(steps: Int)
     fun scrollHorizontal(steps: Int)
+    /** Text is normalized/bounded/chunked; embedded line breaks use Shift+Enter. */
     fun typeCommittedText(text: String, layout: KeyboardLayout = KeyboardLayout.Us)
     fun key(key: RemoteKey, pressed: Boolean)
     fun releaseAllInput()

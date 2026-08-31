@@ -205,8 +205,9 @@ class NanoKvmInputSocket internal constructor(
         text: String,
         layout: KeyboardLayout = KeyboardLayout.US,
         heldModifiers: Set<HidModifier> = emptySet(),
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
     ): CommittedTextResult {
-        val mapping = HidCharacterMapper.mapText(text, layout)
+        val mapping = HidCharacterMapper.mapText(text, layout, lineBreakMode)
         var sent = 0
         for (stroke in mapping.keystrokes) {
             if (!sendKeystroke(stroke, heldModifiers)) {
@@ -234,35 +235,73 @@ class NanoKvmInputSocket internal constructor(
         heldModifiers: Set<HidModifier> = emptySet(),
         pacing: CommittedTextPacing = CommittedTextPacing(),
         onProgress: (PacedCommittedTextProgress) -> Unit = {},
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
+    ): PacedCommittedTextResult = sendPacedCommittedTextChunks(
+        chunks = listOf(text),
+        layout = layout,
+        heldModifiers = heldModifiers,
+        lineBreakMode = lineBreakMode,
+        pacing = pacing,
+        onProgress = onProgress,
+    )
+
+    /**
+     * Types bounded text chunks as one cancellable operation with global preflight and progress.
+     *
+     * Chunk boundaries add no characters and do not reset pacing. Every chunk is mapped before the
+     * first frame is sent, so unsupported text in a later chunk still rejects the whole operation.
+     * Callers own ingress and per-chunk size limits.
+     */
+    suspend fun sendPacedCommittedTextChunks(
+        chunks: List<String>,
+        layout: KeyboardLayout = KeyboardLayout.US,
+        heldModifiers: Set<HidModifier> = emptySet(),
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
+        pacing: CommittedTextPacing = CommittedTextPacing(),
+        onProgress: (PacedCommittedTextProgress) -> Unit = {},
     ): PacedCommittedTextResult {
-        val mapping = HidCharacterMapper.mapText(text, layout)
-        if (mapping.unsupported.isNotEmpty()) {
-            return PacedCommittedTextResult.Unsupported(mapping.unsupported.toList())
+        val stableChunks = chunks.toList()
+        val unsupported = mutableListOf<UnsupportedCodePoint>()
+        var utf16Offset = 0
+        var total = 0
+        for (chunk in stableChunks) {
+            currentCoroutineContext().ensureActive()
+            val mapping = HidCharacterMapper.mapText(chunk, layout, lineBreakMode)
+            total += mapping.keystrokes.size
+            for (item in mapping.unsupported) {
+                unsupported += item.copy(utf16Index = utf16Offset + item.utf16Index)
+            }
+            utf16Offset += chunk.length
         }
+        if (unsupported.isNotEmpty()) return PacedCommittedTextResult.Unsupported(unsupported)
 
         val preservedModifiers = heldModifiers.toSet()
-        val total = mapping.keystrokes.size
         var sent = 0
         currentCoroutineContext().ensureActive()
         onProgress(PacedCommittedTextProgress(sentKeystrokes = 0, totalKeystrokes = total))
 
-        mapping.keystrokes.forEachIndexed { index, stroke ->
-            currentCoroutineContext().ensureActive()
-            if (!sendKeystroke(stroke, preservedModifiers)) {
-                // A failed release is treated as a failed pair; attempt to restore latches without
-                // claiming success. The WebSocket queue is never recreated or retried here.
-                sendKeyboard(HidKeyboardReport.create(preservedModifiers))
-                return PacedCommittedTextResult.ConnectionLost(sentKeystrokes = sent)
-            }
-            sent++
-            onProgress(PacedCommittedTextProgress(sentKeystrokes = sent, totalKeystrokes = total))
-            currentCoroutineContext().ensureActive()
-
-            if (index < mapping.keystrokes.lastIndex) {
-                if (mutableState.value !is InputConnectionState.Connected) {
+        for (chunk in stableChunks) {
+            val keystrokes = HidCharacterMapper.mapText(chunk, layout, lineBreakMode).keystrokes
+            for (stroke in keystrokes) {
+                currentCoroutineContext().ensureActive()
+                if (!sendKeystroke(stroke, preservedModifiers)) {
+                    // A failed release is treated as a failed pair; attempt to restore latches
+                    // without claiming success. The WebSocket queue is never recreated or retried.
+                    sendKeyboard(HidKeyboardReport.create(preservedModifiers))
                     return PacedCommittedTextResult.ConnectionLost(sentKeystrokes = sent)
                 }
-                delay(pacing.intervalMillis)
+                sent++
+                onProgress(
+                    PacedCommittedTextProgress(sentKeystrokes = sent, totalKeystrokes = total),
+                )
+                currentCoroutineContext().ensureActive()
+
+                if (sent < total) {
+                    if (mutableState.value !is InputConnectionState.Connected) {
+                        return PacedCommittedTextResult.ConnectionLost(sentKeystrokes = sent)
+                    }
+                    delay(pacing.intervalMillis)
+                }
             }
         }
 

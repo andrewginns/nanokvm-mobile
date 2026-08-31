@@ -122,8 +122,10 @@ provenance requirements are documented in [Distribution](docs/DISTRIBUTION.md).
 - WebRTC is attempted first only when explicitly selected and may contact
   appliance-supplied ICE/STUN/TURN endpoints before falling back to H.264 or
   MJPEG.
-- Phone clipboard and share-target text is typed as USB HID input; it is not a
-  shared or bidirectional host clipboard.
+- Phone clipboard and share-target text is previewed, split into bounded
+  1,024-byte UTF-8 chunks when needed, and typed as one USB HID operation.
+  Pasted line breaks use Shift+Enter. This is not a shared or bidirectional
+  host clipboard, and the remote application still decides what shortcuts do.
 - Horizontal scrolling uses Shift+wheel compatibility because NanoKVM exposes
   one wheel axis, so behavior depends on the remote operating system and app.
 - Virtual-media URLs are fetched by the appliance, not downloaded to the phone.

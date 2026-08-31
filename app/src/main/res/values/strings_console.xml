@@ -163,7 +163,7 @@
     <string name="console_clipboard_preview_title">Type phone clipboard?</string>
     <string name="console_clipboard_keyboard_layout">Target keyboard layout: %1$s</string>
     <string name="console_clipboard_destination">Destination: %1$s (%2$s)</string>
-    <string name="console_clipboard_size">%1$s · %2$s</string>
+    <string name="console_clipboard_size">%1$s · %2$s · %3$s</string>
     <plurals name="console_clipboard_character_count">
         <item quantity="one">%1$d character</item>
         <item quantity="other">%1$d characters</item>
@@ -172,19 +172,24 @@
         <item quantity="one">%1$d UTF-8 byte</item>
         <item quantity="other">%1$d UTF-8 bytes</item>
     </plurals>
+    <plurals name="console_clipboard_chunk_count">
+        <item quantity="one">%1$d chunk</item>
+        <item quantity="other">%1$d chunks</item>
+    </plurals>
     <string name="console_clipboard_sensitive_hidden">Sensitive clipboard text is hidden</string>
+    <string name="console_clipboard_preview_truncated">Preview shortened; the full text will be typed after confirmation.</string>
     <string name="console_clipboard_reveal_sensitive">Reveal text</string>
     <string name="console_clipboard_hide_sensitive">Hide text</string>
-    <string name="console_clipboard_hid_explanation">NanoKVM will type this as keyboard input into the currently focused remote field. It is not a shared or bidirectional clipboard.</string>
+    <string name="console_clipboard_hid_explanation">NanoKVM will type this as keyboard input into the currently focused remote field. Text is processed in chunks of at most 1,024 UTF-8 bytes as one cancellable operation. It is not a shared or bidirectional clipboard.</string>
     <string name="console_clipboard_type_remote">Type into remote</string>
-    <string name="console_clipboard_warning_newline">Contains line breaks that may submit a form or command.</string>
+    <string name="console_clipboard_warning_newline">Line breaks will be typed as Shift+Enter. The remote application decides how that shortcut behaves.</string>
     <string name="console_clipboard_warning_tab">Contains tabs that may move remote focus.</string>
     <string name="console_clipboard_warning_control">Contains other control characters.</string>
     <string name="console_clipboard_error_title">Clipboard unavailable</string>
     <string name="console_clipboard_unavailable">Android could not read the clipboard. Keep NanoKVM in the foreground and try again.</string>
     <string name="console_clipboard_empty">The Android clipboard does not contain direct plain text.</string>
     <string name="console_clipboard_rejected">Only one direct plain-text clipboard item can be typed. Rich text, links, files, and shared content providers are not opened.</string>
-    <string name="console_clipboard_too_long">Clipboard text exceeds NanoKVM’s 1,024-byte paste limit and was not retained.</string>
+    <string name="console_clipboard_too_long">Clipboard text exceeds NanoKVM’s %1$d-byte retained paste limit and was not retained.</string>
     <string name="console_clipboard_connect_first">Connect to NanoKVM before typing clipboard text.</string>
     <string name="console_clipboard_session_changed">The NanoKVM session changed. Review the clipboard destination again.</string>
 

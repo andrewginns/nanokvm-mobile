@@ -41,6 +41,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import org.nanokvm.mobile.clipboard.ClipboardPayload
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalysis
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.protocol.AbsoluteMouseReport
 import org.nanokvm.protocol.ApiResponseException
@@ -48,6 +51,7 @@ import org.nanokvm.protocol.AuthenticationExpiredException
 import org.nanokvm.protocol.CertificateFingerprint
 import org.nanokvm.protocol.CertificateInspection
 import org.nanokvm.protocol.CertificateTrustSource as ProtocolCertificateTrustSource
+import org.nanokvm.protocol.CommittedTextLineBreakMode
 import org.nanokvm.protocol.EndpointTrustPreflight
 import org.nanokvm.protocol.EndpointTrustPreflightResult
 import org.nanokvm.protocol.GpioAction
@@ -110,6 +114,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     private val workerDispatcher: CoroutineDispatcher,
     private val reconnectPolicy: ReconnectPolicy,
     private val webRtcRuntimeProvider: WebRtcRuntimeProvider? = null,
+    private val pacedPasteSender: PacedPasteSender = InputSocketPacedPasteSender,
 ) : ConsoleBackend,
     Phase3Controls,
     AdministrationControls,
@@ -688,6 +693,21 @@ internal class NanoKvmConsoleBackend internal constructor(
 
     override fun typeCommittedText(text: String, layout: KeyboardLayout) {
         if (text.isEmpty()) return
+        val payload = when (
+            val analysis = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(text)
+        ) {
+            is ClipboardPayloadAnalysis.Accepted -> analysis.payload
+            ClipboardPayloadAnalysis.TooLarge -> {
+                mutableSession.update {
+                    it.withActionFeedback(
+                        ConsoleMessage.ClipboardTextOutsideByteLimit(
+                            ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES,
+                        ),
+                    )
+                }
+                return
+            }
+        }
         queueKeyboardCommandAfterPaste {
             val socket: NanoKvmInputSocket?
             val heldModifiers: Set<HidModifier>
@@ -695,16 +715,23 @@ internal class NanoKvmConsoleBackend internal constructor(
                 socket = input
                 heldModifiers = keyboardState.modifiersSnapshot()
             }
-            val result = socket?.sendCommittedText(
-                text,
-                layout.toProtocolLayout(),
-                heldModifiers,
-            ) ?: return@queueKeyboardCommandAfterPaste
-            if (result.unsupported.isNotEmpty()) {
+            val activeSocket = socket ?: return@queueKeyboardCommandAfterPaste
+            var unsupportedCount = 0
+            for (chunk in payload.textChunks()) {
+                val result = activeSocket.sendCommittedText(
+                    text = chunk,
+                    layout = layout.toProtocolLayout(),
+                    heldModifiers = heldModifiers,
+                    lineBreakMode = CommittedTextLineBreakMode.SHIFT_ENTER,
+                )
+                unsupportedCount += result.unsupported.size
+                if (result.connectionLost) break
+            }
+            if (unsupportedCount > 0) {
                 mutableSession.update {
                     it.withActionFeedback(
                         ConsoleMessage.UnsupportedKeyboardCharacters(
-                            result.unsupported.size,
+                            unsupportedCount,
                         ),
                     )
                 }
@@ -797,15 +824,26 @@ internal class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun pasteText(request: ApprovedPasteRequest) {
-        if (request.content.isEmpty() || request.content.encodeToByteArray().size > MAX_PASTE_BYTES) {
-            mutableSession.update {
-                it.withActionFeedback(
-                    ConsoleMessage.ClipboardTextOutsideByteLimit(MAX_PASTE_BYTES),
-                )
+        when (
+            val analysis = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+                request.content,
+            )
+        ) {
+            is ClipboardPayloadAnalysis.Accepted -> {
+                if (analysis.payload.text.isNotEmpty()) {
+                    installApprovedPaste(request, analysis.payload)
+                    return
+                }
             }
-            return
+            ClipboardPayloadAnalysis.TooLarge -> Unit
         }
-        installApprovedPaste(request)
+        mutableSession.update {
+            it.withActionFeedback(
+                ConsoleMessage.ClipboardTextOutsideByteLimit(
+                    ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES,
+                ),
+            )
+        }
     }
 
     override fun cancelPaste() {
@@ -5333,7 +5371,10 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    private fun installApprovedPaste(request: ApprovedPasteRequest) {
+    private fun installApprovedPaste(
+        request: ApprovedPasteRequest,
+        payload: ClipboardPayload,
+    ) {
         var rejectionMessage: ConsoleMessage.ActionFeedback =
             ConsoleMessage.ClipboardSessionChanged
         val operation = synchronized(stateLock) {
@@ -5357,7 +5398,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                 null
             } else {
                 val ownership = pasteOperations.start(
-                    request.content.codePointCount(0, request.content.length),
+                    payload.characterCount,
                 )
                 if (ownership == null) {
                     rejectionMessage = ConsoleMessage.ClipboardTypingAlreadyActive
@@ -5366,6 +5407,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                     val created = ActivePasteOperation(
                         token = ownership.token,
                         request = request,
+                        payload = payload,
                         activeSession = activeSession,
                         activeInput = activeInput,
                         commandEpoch = commandAcceptanceEpoch,
@@ -5411,15 +5453,16 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
 
         // Cancellation is checked before the first character and between every atomic key pair.
-        val result = operation.activeInput.sendPacedCommittedText(
-            text = operation.request.content,
+        val result = pacedPasteSender.send(
+            input = operation.activeInput,
+            chunks = operation.payload.textChunks(),
             layout = operation.request.keyboardLayout.toProtocolLayout(),
-            heldModifiers = emptySet(),
+            lineBreakMode = CommittedTextLineBreakMode.SHIFT_ENTER,
             onProgress = { progress -> updatePacedPasteProgress(operation, progress) },
         )
         val total = synchronized(stateLock) {
             pasteOperations.snapshot(operation.token)?.totalKeystrokes
-                ?: operation.request.content.codePointCount(0, operation.request.content.length)
+                ?: operation.payload.characterCount
         }
         operation.completionMessage = when (result) {
             is PacedCommittedTextResult.Completed -> ConsoleMessage.ClipboardTextTyped
@@ -6163,10 +6206,35 @@ internal class NanoKvmConsoleBackend internal constructor(
         const val CONTROL_RESET_HID = "reset-hid"
         const val CONTROL_GPIO = "gpio"
         const val CONTROL_CTRL_ALT_DELETE = "ctrl-alt-delete"
-        const val MAX_PASTE_BYTES = 1_024
         const val PHASE3_TRANSFER_POLL_MILLIS = 2_500L
         val MJPEG_PAINT = Paint(Paint.FILTER_BITMAP_FLAG)
     }
+}
+
+internal fun interface PacedPasteSender {
+    suspend fun send(
+        input: NanoKvmInputSocket,
+        chunks: List<String>,
+        layout: ProtocolKeyboardLayout,
+        lineBreakMode: CommittedTextLineBreakMode,
+        onProgress: (PacedCommittedTextProgress) -> Unit,
+    ): PacedCommittedTextResult
+}
+
+private object InputSocketPacedPasteSender : PacedPasteSender {
+    override suspend fun send(
+        input: NanoKvmInputSocket,
+        chunks: List<String>,
+        layout: ProtocolKeyboardLayout,
+        lineBreakMode: CommittedTextLineBreakMode,
+        onProgress: (PacedCommittedTextProgress) -> Unit,
+    ): PacedCommittedTextResult = input.sendPacedCommittedTextChunks(
+        chunks = chunks,
+        layout = layout,
+        heldModifiers = emptySet(),
+        lineBreakMode = lineBreakMode,
+        onProgress = onProgress,
+    )
 }
 
 /**
@@ -6505,6 +6573,7 @@ private fun ReconnectFailure.isAuthenticationExpiry(): Boolean =
 private class ActivePasteOperation(
     val token: Long,
     val request: ApprovedPasteRequest,
+    val payload: ClipboardPayload,
     val activeSession: AuthenticatedNanoKvmSession,
     val activeInput: NanoKvmInputSocket,
     val commandEpoch: Long,
