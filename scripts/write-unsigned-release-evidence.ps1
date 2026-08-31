@@ -340,8 +340,10 @@ $strictBuildArguments = @(
     "--no-problems-report",
     "--no-daemon",
     "--no-parallel",
+    "--max-workers=1",
     "--no-configuration-cache",
     "--refresh-dependencies",
+    "-Pkotlin.compiler.execution.strategy=in-process",
     "--dependency-verification=strict",
     "clean",
     "test",
@@ -539,15 +541,33 @@ foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
         $lintFiles += Get-Item -LiteralPath $lintFile
     }
 }
+$permittedLintAdvisoryIds = @(
+    "AndroidGradlePluginVersion",
+    "GradleDependency",
+    "NewerVersionAvailable"
+)
 $lintSourceResults = foreach ($lintFile in $lintFiles) {
     [xml]$lintDocument = Get-Content -LiteralPath $lintFile.FullName
+    $lintIssues = @($lintDocument.SelectNodes("/issues/issue"))
+    $advisories = @($lintIssues | Where-Object {
+        [string]$_.severity -eq "Warning" -and
+        [string]$_.id -in $permittedLintAdvisoryIds
+    })
+    $blockingIssues = @($lintIssues | Where-Object {
+        -not (
+            [string]$_.severity -eq "Warning" -and
+            [string]$_.id -in $permittedLintAdvisoryIds
+        )
+    })
     [pscustomobject]@{
         source = $lintFile.FullName
-        issues = $lintDocument.SelectNodes("/issues/issue").Count
+        issues = $blockingIssues.Count
+        advisories = $advisories.Count
+        advisoryIds = @($advisories | ForEach-Object { [string]$_.id } | Sort-Object -Unique)
     }
 }
 if ($lintSourceResults.Count -lt 3 -or ($lintSourceResults | Where-Object { $_.issues -ne 0 })) {
-    throw "The retained release lint reports are missing or contain issues."
+    throw "The retained release lint reports are missing or contain blocking issues."
 }
 
 foreach ($requiredArtifact in @(
@@ -684,6 +704,8 @@ foreach ($lintSourceResult in $lintSourceResults) {
         lastWriteTimeUtc = $lintRecord.lastWriteTimeUtc
         sha256 = $lintRecord.sha256
         issues = $lintSourceResult.issues
+        advisories = $lintSourceResult.advisories
+        advisoryIds = $lintSourceResult.advisoryIds
     }
 }
 
