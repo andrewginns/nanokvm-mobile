@@ -60,36 +60,51 @@ class ClipboardPayload internal constructor(
     val characterCount: Int,
     val utf8ByteCount: Int,
     val warnings: Set<ClipboardTextWarning>,
+    internal val chunkRanges: List<ClipboardChunkRange>,
 ) {
+    val chunkCount: Int
+        get() = chunkRanges.size
+
+    /** Immutable text slices whose concatenation is exactly [text]. */
+    internal fun textChunks(): List<String> = chunkRanges.map { range ->
+        text.substring(range.startIndex, range.endIndexExclusive)
+    }
+
     override fun toString(): String =
         "ClipboardPayload(text=<redacted>, isSensitive=$isSensitive, " +
             "characterCount=$characterCount, utf8ByteCount=$utf8ByteCount, " +
-            "warnings=$warnings)"
+            "chunkCount=$chunkCount, warnings=$warnings)"
 }
 
+/** A non-empty UTF-16 range whose normalized text fits in one remote paste chunk. */
+internal data class ClipboardChunkRange(
+    val startIndex: Int,
+    val endIndexExclusive: Int,
+    val utf8ByteCount: Int,
+)
+
 object ClipboardPayloadAnalyzer {
-    const val SERVER_PASTE_LIMIT_BYTES = 1_024
+    const val PASTE_CHUNK_LIMIT_BYTES = 1_024
+    const val MAX_RETAINED_PASTE_BYTES = 64 * 1_024
 
     /**
-     * Applies the remote paste limit before copying or retaining text from an Android ingress.
+     * Applies the retained-paste limit before copying or retaining text from an Android ingress.
      * Counting stops as soon as the normalized UTF-8 representation is known to be too large.
      */
     fun analyzeDirectPlainTextAtIngress(
         text: CharSequence,
         isSensitive: Boolean = false,
     ): ClipboardPayloadAnalysis {
-        val metrics = text.boundedNormalizedMetrics(SERVER_PASTE_LIMIT_BYTES)
+        val snapshot = text.boundedNormalizedSnapshot(MAX_RETAINED_PASTE_BYTES)
             ?: return ClipboardPayloadAnalysis.TooLarge
-        val normalized = text.toString()
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
         return ClipboardPayloadAnalysis.Accepted(
             ClipboardPayload(
-                text = normalized,
+                text = snapshot.text,
                 isSensitive = isSensitive,
-                characterCount = metrics.characterCount,
-                utf8ByteCount = metrics.utf8ByteCount,
-                warnings = metrics.warnings,
+                characterCount = snapshot.characterCount,
+                utf8ByteCount = snapshot.utf8ByteCount,
+                warnings = snapshot.warnings,
+                chunkRanges = snapshot.text.chunkRanges(PASTE_CHUNK_LIMIT_BYTES),
             ),
         )
     }
@@ -101,11 +116,59 @@ object ClipboardPayloadAnalyzer {
     ): ClipboardPayload = when (val analysis = analyzeDirectPlainTextAtIngress(text, isSensitive)) {
         is ClipboardPayloadAnalysis.Accepted -> analysis.payload
         ClipboardPayloadAnalysis.TooLarge -> throw IllegalArgumentException(
-            "Clipboard text exceeds the ${SERVER_PASTE_LIMIT_BYTES}-byte remote paste limit",
+            "Clipboard text exceeds the ${MAX_RETAINED_PASTE_BYTES}-byte retained paste limit",
         )
     }
 
-    private fun CharSequence.boundedNormalizedMetrics(limit: Int): ClipboardTextMetrics? {
+    private fun String.chunkRanges(limit: Int): List<ClipboardChunkRange> {
+        if (isEmpty()) return emptyList()
+
+        return buildList {
+            var chunkStart = 0
+            var chunkUtf8ByteCount = 0
+            var index = 0
+            while (index < length) {
+                val first = this@chunkRanges[index]
+                val codePoint = if (
+                    first.isHighSurrogate() &&
+                    index + 1 < length &&
+                    this@chunkRanges[index + 1].isLowSurrogate()
+                ) {
+                    Character.toCodePoint(first, this@chunkRanges[index + 1])
+                } else {
+                    first.code
+                }
+                val consumedChars = Character.charCount(codePoint)
+                val codePointUtf8ByteCount = codePoint.utf8ByteCount()
+
+                if (chunkUtf8ByteCount + codePointUtf8ByteCount > limit) {
+                    add(
+                        ClipboardChunkRange(
+                            startIndex = chunkStart,
+                            endIndexExclusive = index,
+                            utf8ByteCount = chunkUtf8ByteCount,
+                        ),
+                    )
+                    chunkStart = index
+                    chunkUtf8ByteCount = 0
+                }
+
+                chunkUtf8ByteCount += codePointUtf8ByteCount
+                index += consumedChars
+            }
+
+            add(
+                ClipboardChunkRange(
+                    startIndex = chunkStart,
+                    endIndexExclusive = length,
+                    utf8ByteCount = chunkUtf8ByteCount,
+                ),
+            )
+        }
+    }
+
+    private fun CharSequence.boundedNormalizedSnapshot(limit: Int): ClipboardTextSnapshot? {
+        val normalized = StringBuilder(length.coerceAtMost(limit))
         var characterCount = 0
         var utf8ByteCount = 0
         var containsNewline = false
@@ -129,6 +192,7 @@ object ClipboardPayloadAnalyzer {
 
             utf8ByteCount += normalizedCodePoint.utf8ByteCount()
             if (utf8ByteCount > limit) return null
+            normalized.appendCodePoint(normalizedCodePoint)
             characterCount++
             when {
                 normalizedCodePoint == '\n'.code -> containsNewline = true
@@ -138,7 +202,8 @@ object ClipboardPayloadAnalyzer {
             index += consumedChars
         }
 
-        return ClipboardTextMetrics(
+        return ClipboardTextSnapshot(
+            text = normalized.toString(),
             characterCount = characterCount,
             utf8ByteCount = utf8ByteCount,
             warnings = buildSet {
@@ -152,11 +217,13 @@ object ClipboardPayloadAnalyzer {
     private fun Int.utf8ByteCount(): Int = when {
         this < 0x80 -> 1
         this < 0x800 -> 2
+        this in Character.MIN_SURROGATE.code..Character.MAX_SURROGATE.code -> 1
         this <= 0xffff -> 3
         else -> 4
     }
 
-    private data class ClipboardTextMetrics(
+    private data class ClipboardTextSnapshot(
+        val text: String,
         val characterCount: Int,
         val utf8ByteCount: Int,
         val warnings: Set<ClipboardTextWarning>,

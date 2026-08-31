@@ -18,6 +18,7 @@ import org.nanokvm.mobile.ui.ShareNotice
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalysis
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
+import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
 import org.nanokvm.mobile.platform.AndroidClipboardGateway
 
 class MainActivity : FragmentActivity() {
@@ -113,6 +114,14 @@ class MainActivity : FragmentActivity() {
                 is ClipboardReadResult.Available -> ClipboardPayloadAnalysis.Accepted(
                     clipboardResult.payload,
                 )
+                is ClipboardReadResult.Rejected -> if (
+                    clipboardResult.reason == ClipboardRejectionReason.TooLarge
+                ) {
+                    ClipboardPayloadAnalysis.TooLarge
+                } else {
+                    viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
+                    return
+                }
                 null -> {
                     val directText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
                     if (directText == null || directText is Spanned || directText.isEmpty()) {

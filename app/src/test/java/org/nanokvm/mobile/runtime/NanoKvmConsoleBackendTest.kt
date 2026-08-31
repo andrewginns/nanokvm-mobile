@@ -15,15 +15,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.data.HostProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.nanokvm.protocol.InMemorySessionTokenStore
 import org.nanokvm.protocol.ApiResponseException
 import org.nanokvm.protocol.AuthenticationExpiredException
+import org.nanokvm.protocol.CommittedTextLineBreakMode
 import org.nanokvm.protocol.InvalidApiResponseException
 import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmClient
 import org.nanokvm.protocol.NanoKvmEndpoint
+import org.nanokvm.protocol.KeyboardLayout as ProtocolKeyboardLayout
+import org.nanokvm.protocol.PacedCommittedTextProgress
+import org.nanokvm.protocol.PacedCommittedTextResult
 import org.nanokvm.protocol.NanoKvmServerCapabilities
 import org.nanokvm.protocol.VmInfo
 import org.nanokvm.video.H264FrameDropReason
@@ -32,6 +37,119 @@ import org.nanokvm.video.NanoKvmVideoStatus
 import org.nanokvm.video.NanoKvmVideoTransport
 
 class NanoKvmConsoleBackendTest {
+    @Test
+    fun `paste requests accept multiple chunks and reject outside the retained bound`() =
+        runBlocking {
+            val backend = NanoKvmConsoleBackend(
+                workerDispatcher = Dispatchers.Unconfined,
+                reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+            )
+            fun request(content: String) = ApprovedPasteRequest(
+                profileId = "profile",
+                authority = "nanokvm.example:443",
+                sessionGeneration = 1L,
+                content = content,
+                keyboardLayout = KeyboardLayout.Us,
+            )
+
+            backend.pasteText(request("a".repeat(1_025)))
+            assertEquals(
+                ConsoleMessage.ClipboardSessionChanged,
+                backend.session.value.lastActionFeedback?.content,
+            )
+
+            backend.pasteText(
+                request("a".repeat(ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES + 1)),
+            )
+            assertEquals(
+                ConsoleMessage.ClipboardTextOutsideByteLimit(
+                    ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES,
+                ),
+                backend.session.value.lastActionFeedback?.content,
+            )
+
+            backend.closeAndAwait()
+        }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `approved multi-chunk paste keeps one operation and requests Shift Enter`() = runTest {
+        val capturedChunks = mutableListOf<String>()
+        var capturedLayout: ProtocolKeyboardLayout? = null
+        var capturedLineBreakMode: CommittedTextLineBreakMode? = null
+        val observedProgress = mutableListOf<RemotePasteProgress>()
+        lateinit var backend: NanoKvmConsoleBackend
+        val sender = PacedPasteSender { _, chunks, layout, lineBreakMode, onProgress ->
+            capturedChunks += chunks
+            capturedLayout = layout
+            capturedLineBreakMode = lineBreakMode
+            val total = chunks.sumOf { chunk ->
+                chunk.codePointCount(0, chunk.length)
+            }
+            listOf(0, total).forEach { sent ->
+                onProgress(PacedCommittedTextProgress(sent, total))
+                observedProgress += requireNotNull(backend.session.value.pasteProgress)
+            }
+            PacedCommittedTextResult.Completed(total)
+        }
+        val client = NanoKvmClient.create(
+            endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+            tokenStore = InMemorySessionTokenStore("paste-token"),
+        )
+        backend = NanoKvmConsoleBackend(
+            workerDispatcher = StandardTestDispatcher(testScheduler),
+            reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+            pacedPasteSender = sender,
+        )
+        backend.setPrivateField(
+            "authenticatedSession",
+            AuthenticatedNanoKvmSession(
+                client = client,
+                profileId = "paste-profile",
+                authority = "nanokvm.example:443",
+                vmInfo = VmInfo(application = "2.4.3"),
+                capabilities = reflectedEmptyCapabilities(),
+            ),
+        )
+        backend.setPrivateField("input", client.newInputSocket())
+        backend.setPrivateField("acceptingCommands", true)
+        @Suppress("UNCHECKED_CAST")
+        val mutableSession = backend.privateField("mutableSession") as
+            MutableStateFlow<BackendSession>
+        mutableSession.value = BackendSession(
+            connection = ConnectionState.Connected,
+            sessionGeneration = 7L,
+        )
+        val content = "a".repeat(1_024) + "\nb"
+
+        try {
+            backend.pasteText(
+                ApprovedPasteRequest(
+                    profileId = "paste-profile",
+                    authority = "nanokvm.example:443",
+                    sessionGeneration = 7L,
+                    content = content,
+                    keyboardLayout = KeyboardLayout.Uk,
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(content, capturedChunks.joinToString(separator = ""))
+            assertEquals(listOf(1_024, 2), capturedChunks.map { it.encodeToByteArray().size })
+            assertEquals(ProtocolKeyboardLayout.UK, capturedLayout)
+            assertEquals(CommittedTextLineBreakMode.SHIFT_ENTER, capturedLineBreakMode)
+            assertEquals(listOf(0, 1_026), observedProgress.map { it.sentKeystrokes })
+            assertTrue(observedProgress.all { it.totalKeystrokes == 1_026 })
+            assertEquals(null, backend.session.value.pasteProgress)
+            assertEquals(
+                ConsoleMessage.ClipboardTextTyped,
+                backend.session.value.lastActionFeedback?.content,
+            )
+        } finally {
+            backend.closeAndAwait()
+        }
+    }
+
     @Test
     fun `host controls reject foreign identity and generation before queueing`() = runBlocking {
         val client = NanoKvmClient.create(

@@ -63,6 +63,23 @@ class PacedCommittedTextTest {
     }
 
     @Test
+    fun `unsupported code point in a later chunk rejects every chunk before sending`() =
+        runBlocking {
+            val frames = LinkedBlockingQueue<ObservedFrame>()
+            val input = openInput(frames)
+
+            val result = input.sendPacedCommittedTextChunks(listOf("first", "a😃b"))
+
+            assertEquals(
+                PacedCommittedTextResult.Unsupported(
+                    listOf(UnsupportedCodePoint(utf16Index = 6, codePoint = 0x1F603)),
+                ),
+                result,
+            )
+            assertNull(frames.poll(150, TimeUnit.MILLISECONDS))
+        }
+
+    @Test
     fun `paced text reports progress and restores held modifiers after every character`() =
         runBlocking {
             val frames = LinkedBlockingQueue<ObservedFrame>()
@@ -117,14 +134,88 @@ class PacedCommittedTextTest {
         }
 
     @Test
-    fun `coroutine cancellation after a pair prevents the next character`() = runBlocking {
+    fun `paste line break sends Shift Enter while default committed text stays plain Enter`() =
+        runBlocking {
+            val frames = LinkedBlockingQueue<ObservedFrame>()
+            val input = openInput(frames)
+
+            assertEquals(
+                PacedCommittedTextResult.Completed(1),
+                input.sendPacedCommittedText(
+                    text = "\n",
+                    lineBreakMode = CommittedTextLineBreakMode.SHIFT_ENTER,
+                ),
+            )
+            assertFrame(
+                frames,
+                HidKeyboardReport.create(
+                    modifiers = setOf(HidModifier.LEFT_SHIFT),
+                    keys = listOf(HidUsage.ENTER),
+                ).toWireFrame(),
+            )
+            assertFrame(frames, HidKeyboardReport.released().toWireFrame())
+
+            val defaultResult = input.sendCommittedText("\n")
+            assertEquals(1, defaultResult.sentKeystrokes)
+            assertFrame(
+                frames,
+                HidKeyboardReport.create(keys = listOf(HidUsage.ENTER)).toWireFrame(),
+            )
+            assertFrame(frames, HidKeyboardReport.released().toWireFrame())
+            Unit
+        }
+
+    @Test
+    fun `chunks preserve global progress and pacing without adding boundary input`() = runBlocking {
+        val frames = LinkedBlockingQueue<ObservedFrame>()
+        val input = openInput(frames)
+        val progress = mutableListOf<PacedCommittedTextProgress>()
+
+        val result = input.sendPacedCommittedTextChunks(
+            chunks = listOf("a", "B"),
+            pacing = CommittedTextPacing(intervalMillis = 40),
+            onProgress = progress::add,
+        )
+
+        assertEquals(PacedCommittedTextResult.Completed(2), result)
+        assertEquals(
+            listOf(
+                PacedCommittedTextProgress(0, 2),
+                PacedCommittedTextProgress(1, 2),
+                PacedCommittedTextProgress(2, 2),
+            ),
+            progress,
+        )
+        assertFrame(
+            frames,
+            HidKeyboardReport.create(keys = listOf(HidUsage.A)).toWireFrame(),
+        )
+        val firstRelease = assertFrame(frames, HidKeyboardReport.released().toWireFrame())
+        val secondPress = assertFrame(
+            frames,
+            HidKeyboardReport.create(
+                modifiers = setOf(HidModifier.LEFT_SHIFT),
+                keys = listOf(HidUsage.B),
+            ).toWireFrame(),
+        )
+        assertFrame(frames, HidKeyboardReport.released().toWireFrame())
+        assertTrue(
+            "Chunk boundary did not retain inter-character pacing",
+            TimeUnit.NANOSECONDS.toMillis(secondPress.receivedAtNanos - firstRelease.receivedAtNanos) >=
+                30,
+        )
+        assertNull(frames.poll(100, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun `coroutine cancellation at a chunk boundary prevents the next chunk`() = runBlocking {
         val frames = LinkedBlockingQueue<ObservedFrame>()
         val input = openInput(frames)
         val firstPairComplete = CompletableDeferred<Unit>()
 
         val operation = async {
-            input.sendPacedCommittedText(
-                text = "ab",
+            input.sendPacedCommittedTextChunks(
+                chunks = listOf("a", "b"),
                 pacing = CommittedTextPacing(intervalMillis = 250),
                 onProgress = { progress ->
                     if (progress.sentKeystrokes == 1) firstPairComplete.complete(Unit)
@@ -145,27 +236,28 @@ class PacedCommittedTextTest {
     }
 
     @Test
-    fun `connection loss after a pair returns partial progress without retrying`() = runBlocking {
-        val frames = LinkedBlockingQueue<ObservedFrame>()
-        val frameCount = intArrayOf(0)
-        val input = openInput(frames) { webSocket, _ ->
-            frameCount[0]++
-            if (frameCount[0] == 2) webSocket.cancel()
+    fun `connection loss at a chunk boundary returns partial progress without retrying`() =
+        runBlocking {
+            val frames = LinkedBlockingQueue<ObservedFrame>()
+            val frameCount = intArrayOf(0)
+            val input = openInput(frames) { webSocket, _ ->
+                frameCount[0]++
+                if (frameCount[0] == 2) webSocket.cancel()
+            }
+
+            val result = input.sendPacedCommittedTextChunks(
+                chunks = listOf("a", "b"),
+                pacing = CommittedTextPacing(intervalMillis = 250),
+            )
+
+            assertEquals(PacedCommittedTextResult.ConnectionLost(1), result)
+            assertFrame(
+                frames,
+                HidKeyboardReport.create(keys = listOf(HidUsage.A)).toWireFrame(),
+            )
+            assertFrame(frames, HidKeyboardReport.released().toWireFrame())
+            assertNull(frames.poll(300, TimeUnit.MILLISECONDS))
         }
-
-        val result = input.sendPacedCommittedText(
-            text = "ab",
-            pacing = CommittedTextPacing(intervalMillis = 250),
-        )
-
-        assertEquals(PacedCommittedTextResult.ConnectionLost(1), result)
-        assertFrame(
-            frames,
-            HidKeyboardReport.create(keys = listOf(HidUsage.A)).toWireFrame(),
-        )
-        assertFrame(frames, HidKeyboardReport.released().toWireFrame())
-        assertNull(frames.poll(300, TimeUnit.MILLISECONDS))
-    }
 
     @Test
     fun `pacing interval is bounded`() {

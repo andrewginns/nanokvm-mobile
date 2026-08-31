@@ -30,6 +30,17 @@ release, and offline licence documentation.
 - No permissions, network endpoints, telemetry, data collection, or NanoKVM
   protocol behavior changed in this release.
 
+## [Unreleased]
+
+### Changed
+
+- Clipboard and plain-text share payloads may now contain up to 65,536
+  normalized UTF-8 bytes. They are divided on Unicode-scalar boundaries into
+  chunks of at most 1,024 bytes and typed as one destination-bound,
+  cancellable operation with global preflight and progress.
+- Line breaks in approved clipboard/share text and multiline IME commits are
+  emitted as Shift+Enter; physical and editor-action Enter remain unchanged.
+
 ## [0.3.6] - 2026-07-23 (stable GitHub release)
 
 Android version code: **13**. This is the first release signed with the protected

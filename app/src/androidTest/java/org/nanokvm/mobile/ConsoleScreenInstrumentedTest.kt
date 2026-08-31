@@ -467,6 +467,30 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun multiChunkClipboardShowsBoundedPreviewAndShiftEnterDisclosure() {
+        val text = "a".repeat(2_100) + "\nnext"
+        val clipboard = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText(text),
+            )
+        }
+        renderConsole(clipboardGateway = clipboard)
+
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithText("3 chunks", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Line breaks will be typed as Shift+Enter",
+            substring = true,
+        ).assertIsDisplayed()
+        composeRule.onNodeWithTag("clipboard-preview-truncated").assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+
+        composeRule.runOnIdle { assertEquals(listOf(text), backend.pastedText) }
+    }
+
+    @Test
     fun sharedPlainTextOpensTheSamePreviewWithoutAutomaticTyping() {
         val shared = ClipboardPayloadAnalyzer.analyzeDirectPlainText("shared remote text")
         var consumed = false

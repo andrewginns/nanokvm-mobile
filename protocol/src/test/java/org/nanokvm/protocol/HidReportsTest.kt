@@ -71,6 +71,27 @@ class HidReportsTest {
     }
 
     @Test
+    fun `committed text line breaks default to Enter and support paste-only Shift Enter`() {
+        val defaultLineBreaks = HidCharacterMapper.mapText("\n\r").keystrokes
+        val pasteLineBreaks = HidCharacterMapper.mapText(
+            text = "\n\r",
+            lineBreakMode = CommittedTextLineBreakMode.SHIFT_ENTER,
+        ).keystrokes
+
+        assertEquals(
+            listOf(HidKeystroke(HidUsage.ENTER), HidKeystroke(HidUsage.ENTER)),
+            defaultLineBreaks,
+        )
+        assertEquals(
+            listOf(
+                HidKeystroke(HidUsage.ENTER, setOf(HidModifier.LEFT_SHIFT)),
+                HidKeystroke(HidUsage.ENTER, setOf(HidModifier.LEFT_SHIFT)),
+            ),
+            pasteLineBreaks,
+        )
+    }
+
+    @Test
     fun `relative mouse clamps signed axes and frames message type`() {
         val report = RelativeMouseReport.create(
             buttons = setOf(MouseButton.LEFT, MouseButton.RIGHT),

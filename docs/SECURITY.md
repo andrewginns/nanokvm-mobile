@@ -98,9 +98,20 @@ framebuffer, terminal, chat, script output, or operator history.
 Android clipboard and share-target text is typed as USB HID input. It is not a
 shared host clipboard and the app cannot read the controlled host's clipboard.
 Only direct plain text is accepted; provider-backed, URI, intent, and rich
-content is rejected rather than dereferenced. Normalized input above 1,024 UTF-8
-bytes is rejected before retention. Accepted text is previewed with its target
-and keyboard layout and is never sent automatically.
+content is rejected rather than dereferenced. Normalized input above 65,536
+UTF-8 bytes is rejected before retention. Accepted text is split on
+Unicode-scalar boundaries into exact ranges of at most 1,024 bytes and every
+range is preflighted before the first character is sent. The ranges are then
+typed as one destination-bound, cancellable operation with global progress and
+no retry or replay.
+
+The confirmation surface shows the destination, target keyboard layout, total
+size, chunk count, unsupported-character warnings, and a bounded preview;
+accepted text is never sent automatically. Pasted line breaks are emitted as
+Shift+Enter. Multiline IME commits use the same normalization, overall bound,
+chunk plan, and safer line-break mapping because Android does not reliably
+identify their source. Physical Enter and editor-action Enter remain unchanged,
+and the remote application ultimately decides how Shift+Enter behaves.
 
 Paced typing and held HID state have one owner and an explicit cancellation
 path. Backgrounding, disconnect, reconnect, destination change, transport

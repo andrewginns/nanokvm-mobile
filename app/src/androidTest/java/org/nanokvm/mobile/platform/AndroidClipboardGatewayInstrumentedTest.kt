@@ -95,9 +95,21 @@ class AndroidClipboardGatewayInstrumentedTest {
     }
 
     @Test
-    fun rejectsOversizedPlainTextWithoutRetainingIt() {
+    fun acceptsPlainTextOverOneChunk() {
+        val result = AndroidClipboardGateway {
+            ClipData.newPlainText("chunked", "a".repeat(1_025))
+        }.readDirectPlainText()
+
+        assertTrue(result is ClipboardReadResult.Available)
+        val payload = (result as ClipboardReadResult.Available).payload
+        assertEquals(1_025, payload.utf8ByteCount)
+        assertEquals(2, payload.chunkCount)
+    }
+
+    @Test
+    fun rejectsPlainTextOverRetainedLimitWithoutRetainingIt() {
         assertRejected(
-            ClipData.newPlainText("oversized", "a".repeat(1_025)),
+            ClipData.newPlainText("oversized", "a".repeat(65_537)),
             ClipboardRejectionReason.TooLarge,
         )
     }

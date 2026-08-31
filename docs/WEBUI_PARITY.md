@@ -83,7 +83,7 @@ signed release candidate. `open` is required work, not a passing result.
 | I-08 | HID release-all and reset | S | base; `/api/hid/reset` | host HID USB | R1; explicit reset | P2 | C/U: release ordering/reset route tests; E/A open |
 | I-09 | Server HID mode selection | P | probe `/api/hid/mode`; 2.4.3 reference | compatible firmware | R2; warn that input may stop | P2 | C/U: NORMAL/HID_ONLY UI, unknown read-only state, one-shot readback, and input-WebSocket recycle; E/A open |
 | I-10 | Saved shortcut list, leader key, record/add/delete | P | shortcuts `>=2.3.2`; leader key `>=2.3.4` | host HID USB | R2; review sequence before save/run | P2 | C/U: exact 190-code map, bounded CRUD, physical recorder, latest-snapshot delete, incremental HID run/final release, and foreground native surface; E/A open |
-| I-11 | Android clipboard to host by HID typing | P | base `/api/hid/paste` or paced input WebSocket | host HID USB | R1; preview destination/layout, then confirm | P1 | C/U: strict direct-text gateway, sensitive preview, destination-bound layout preflight, cancellable paced typing, progress, and session binding; API 26/29/31/33/34/37 E/A open |
+| I-11 | Android clipboard to host by HID typing | P | paced input WebSocket; REST paste remains bounded separately | host HID USB | R1; preview destination/layout, then confirm | P1 | C/U: strict direct-text gateway, 64 KiB retained bound, scalar-safe ≤1,024-byte chunks, bounded sensitive preview, global layout preflight/progress, Shift+Enter paste line breaks, cancellable pacing, and session binding; API 26/29/31/33/34/37 E/A open |
 | I-12 | True host-to-Android/bidirectional shared clipboard | X | no NanoKVM WebUI/server capability | would require a paired host agent | R3; separate threat model and pairing | - | Explicitly out of agentless parity scope; see clipboard boundary below |
 | I-13 | Android plain-text share target into paste preview | P | Android intent capability + I-11 | host HID USB | R1; never auto-send | P1 | C/U/E: strict plain-text route enters the same preview and never auto-types; open: connected cold-start/process-death matrix on supported APIs |
 | I-14 | Mouse jiggler | P | state/write floor `>=2.2.6` | host HID USB | R2; persistent-state review | P4 | C/U: off/relative/absolute, unknown read-only state, readback and confirmed UI; E/A open |
@@ -100,6 +100,16 @@ clipboard to remote", never "shared clipboard". Genuine two-way clipboard
 support is a separate future product requiring a paired host agent, scoped
 credentials, loop suppression, origin/sequence metadata, and its own security
 review.
+
+The mobile paste flow uses the input WebSocket so one reviewed operation can be
+cancelled between HID pairs. Text above 1,024 bytes is processed as sequential
+bounded chunks with no inserted separator; all chunks are preflighted before
+typing begins. Line breaks are sent as Shift+Enter, but the remote application
+controls whether that shortcut inserts a line or performs another action.
+Multiline IME commits use the same mapping because Android does not reliably
+distinguish clipboard-panel commits from composition or dictation. They are
+normalized and chunked at the same bounds; physical and editor-action Enter
+remain plain Enter.
 
 ## Virtual media and Wake-on-LAN
 

@@ -116,6 +116,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.clipboard.ClipboardPayload
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
 import org.nanokvm.mobile.clipboard.ClipboardTextWarning
@@ -378,7 +379,10 @@ internal fun ConsoleScreen(
     val pasteUnavailableMessage = stringResource(R.string.console_clipboard_unavailable)
     val pasteEmptyMessage = stringResource(R.string.console_clipboard_empty)
     val pasteRejectedMessage = stringResource(R.string.console_clipboard_rejected)
-    val pasteTooLargeMessage = stringResource(R.string.console_clipboard_too_long)
+    val pasteTooLargeMessage = stringResource(
+        R.string.console_clipboard_too_long,
+        ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES,
+    )
     val pasteDisconnectedMessage = stringResource(R.string.console_clipboard_connect_first)
     val pasteSessionChangedMessage = stringResource(R.string.console_clipboard_session_changed)
     val currentPasteTarget = PasteTargetBinding(
@@ -1901,6 +1905,19 @@ private fun ClipboardPasteDialog(
 ) {
     val payload = request.payload
     val previewHidden = payload.isSensitive && !revealSensitive
+    val previewText = remember(payload, previewHidden) {
+        if (previewHidden) {
+            ""
+        } else if (payload.characterCount <= CLIPBOARD_PREVIEW_MAX_CODE_POINTS) {
+            payload.text
+        } else {
+            payload.text.substring(
+                0,
+                payload.text.offsetByCodePoints(0, CLIPBOARD_PREVIEW_MAX_CODE_POINTS),
+            )
+        }
+    }
+    val previewTruncated = previewText.length < payload.text.length
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.console_clipboard_preview_title)) },
@@ -1926,6 +1943,11 @@ private fun ClipboardPasteDialog(
                             R.plurals.console_clipboard_utf8_byte_count,
                             payload.utf8ByteCount,
                             payload.utf8ByteCount,
+                        ),
+                        pluralStringResource(
+                            R.plurals.console_clipboard_chunk_count,
+                            payload.chunkCount,
+                            payload.chunkCount,
                         ),
                     ),
                     style = MaterialTheme.typography.labelMedium,
@@ -1953,12 +1975,20 @@ private fun ClipboardPasteDialog(
                         text = if (previewHidden) {
                             stringResource(R.string.console_clipboard_sensitive_hidden)
                         } else {
-                            payload.text
+                            previewText
                         },
                         modifier = Modifier.padding(12.dp),
                         maxLines = 6,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (!previewHidden && previewTruncated) {
+                    Text(
+                        text = stringResource(R.string.console_clipboard_preview_truncated),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("clipboard-preview-truncated"),
                     )
                 }
                 if (payload.isSensitive) {
@@ -2018,6 +2048,8 @@ private fun ClipboardTextWarning.stringResourceId(): Int = when (this) {
     ClipboardTextWarning.ContainsOtherControlCharacter ->
         R.string.console_clipboard_warning_control
 }
+
+private const val CLIPBOARD_PREVIEW_MAX_CODE_POINTS = 2_048
 
 @Composable
 private fun ConsoleControlSideSurface(

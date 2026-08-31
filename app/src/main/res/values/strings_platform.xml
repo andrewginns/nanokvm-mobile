@@ -26,7 +26,7 @@
     <string name="credential_prompt_use_password">Use password instead</string>
     <string name="credential_prompt_not_now">Not now</string>
     <string name="share_plain_text_only">NanoKVM can review one direct plain-text share. Rich text, files, links supplied through content providers, and empty shares are not opened.</string>
-    <string name="share_text_too_long">Shared text exceeds NanoKVM’s 1,024-byte paste limit and was not retained.</string>
+    <string name="share_text_too_long">Shared text exceeds NanoKVM’s 65,536-byte retained paste limit and was not retained.</string>
     <string name="share_text_empty">Shared text is empty.</string>
     <string name="share_choose_connection">Choose a NanoKVM connection to review the shared text. Nothing will be sent automatically.</string>
 </resources>

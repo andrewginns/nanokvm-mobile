@@ -173,6 +173,14 @@ keyboard and mouse reports release held state. Foreground reconnect is bounded
 to transient failures and never persists or replays HID, paste, GPIO, power, or
 reset actions.
 
+Approved clipboard/share text is normalized and bounded to 65,536 UTF-8 bytes,
+then represented as contiguous Unicode-scalar-safe ranges of at most 1,024
+bytes. The backend independently rebuilds that plan before creating one
+session-bound paste operation. The input layer preflights every range before
+the first character, maintains global pacing/progress across boundaries, and
+maps paste and multiline IME-commit line breaks to Shift+Enter without changing
+physical or editor-action Enter input.
+
 The NanoKVM mouse report exposes one wheel axis. The dedicated scroll pad sends
 up/down through that native wheel and implements left/right as a documented
 Shift+wheel compatibility gesture. Each horizontal step is serialized as a
