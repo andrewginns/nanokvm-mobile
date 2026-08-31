@@ -85,7 +85,7 @@ val expectedProtobufLicenseSha256 =
 val expectedIjgNoticeSha256 =
     "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
 val expectedRuntimeComponentLicensesSha256 =
-    "536db15041cb08129b58a6ccab1d294dc691c27ef13b0cf0569b23d3a2890f8a"
+    "8cceff22fb402485e807d4d6e4909cfb9dfaff80c966d5520435e9081fe7b5b1"
 val runtimeComponentLicenseIndexVersion = project.version.toString()
 
 val generateBundledAboutAssets by tasks.registering(Sync::class) {
@@ -588,7 +588,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 14
+        versionCode = 15
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

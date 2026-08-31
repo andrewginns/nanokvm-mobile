@@ -7,6 +7,26 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.8] - 2026-08-31 (public GitHub pre-release candidate)
+
+Android version code: **15**. This release improves large clipboard, share, and
+multiline keyboard input while preserving the existing production signing
+lineage and direct-GitHub update path.
+
+### Changed
+
+- Advanced the release to version 0.3.8/code 15 so its distributable bytes do
+  not reuse the published v0.3.7/code-14 identity.
+- Clipboard and plain-text share payloads may now contain up to 65,536
+  normalized UTF-8 bytes. They are divided on Unicode-scalar boundaries into
+  chunks of at most 1,024 bytes and typed as one destination-bound,
+  cancellable operation with global preflight and progress.
+- Line breaks in approved clipboard/share text and multiline IME commits are
+  emitted as Shift+Enter; physical and editor-action Enter remain unchanged.
+  The controlled application ultimately decides how Shift+Enter behaves.
+- No permissions, network endpoints, telemetry, data collection, persistent
+  storage, runtime dependencies, or appliance API contracts changed.
+
 ## [0.3.7] - 2026-08-10 (stable GitHub release)
 
 Android version code: **14**. This maintenance release keeps the NanoKVM
@@ -29,17 +49,6 @@ release, and offline licence documentation.
   documents.
 - No permissions, network endpoints, telemetry, data collection, or NanoKVM
   protocol behavior changed in this release.
-
-## [Unreleased]
-
-### Changed
-
-- Clipboard and plain-text share payloads may now contain up to 65,536
-  normalized UTF-8 bytes. They are divided on Unicode-scalar boundaries into
-  chunks of at most 1,024 bytes and typed as one destination-bound,
-  cancellable operation with global preflight and progress.
-- Line breaks in approved clipboard/share text and multiline IME commits are
-  emitted as Shift+Enter; physical and editor-action Enter remain unchanged.
 
 ## [0.3.6] - 2026-07-23 (stable GitHub release)
 
