@@ -27,6 +27,9 @@ lineage and direct-GitHub update path.
 - Release evidence now retains dependency-update availability warnings as
   explicit advisories while every other Android Lint finding remains blocking,
   avoiding an automatic runtime-dependency expansion during a focused release.
+- Production signing verifies the keystore's single-link custody directly from
+  a read-only Windows file handle instead of relying on administrator-only
+  `fsutil` output.
 - No permissions, network endpoints, telemetry, data collection, persistent
   storage, runtime dependencies, or appliance API contracts changed.
 
