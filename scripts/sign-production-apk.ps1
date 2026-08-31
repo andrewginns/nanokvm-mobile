@@ -221,15 +221,64 @@ function Assert-SingleHardLink {
         [string]$Path
     )
 
-    $fsutil = (Get-Command "fsutil.exe" -ErrorAction Stop).Source
-    $hardLinkResult = Invoke-NativeCapture `
-        -FilePath $fsutil `
-        -Arguments @("hardlink", "list", $Path)
-    $hardLinks = @($hardLinkResult.Output -split "`r?`n" | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    if ($hardLinkResult.ExitCode -ne 0 -or $hardLinks.Count -ne 1) {
-        throw "The production keystore must have exactly one filesystem link."
+    if (-not ("NanoKvmRelease.NativeMethods" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace NanoKvmRelease {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ByHandleFileInformation {
+        public uint FileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    public static class NativeMethods {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetFileInformationByHandle(
+            SafeFileHandle file,
+            out ByHandleFileInformation information
+        );
+    }
+}
+'@
+    }
+
+    $stream = [IO.File]::Open(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        $information = New-Object NanoKvmRelease.ByHandleFileInformation
+        $inspected = [NanoKvmRelease.NativeMethods]::GetFileInformationByHandle(
+            $stream.SafeFileHandle,
+            [ref]$information
+        )
+        if (-not $inspected) {
+            $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            $errorMessage = (New-Object ComponentModel.Win32Exception($errorCode)).Message
+            throw "Could not verify the production-keystore link count: $errorMessage ($errorCode)."
+        }
+        if ($information.NumberOfLinks -ne 1) {
+            throw (
+                "The production keystore must have exactly one filesystem link; " +
+                "found $($information.NumberOfLinks)."
+            )
+        }
+    } finally {
+        $stream.Dispose()
     }
 }
 
