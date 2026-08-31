@@ -485,8 +485,21 @@ if ($reviewedTestReports.Count -ne [int]$evidence.tests.suites) {
     throw "The reviewed evidence does not contain every JVM test report."
 }
 $reviewedLint = @($evidence.lint)
-if ($reviewedLint.Count -lt 3 -or ($reviewedLint | Where-Object { [int]$_.issues -ne 0 })) {
-    throw "The reviewed evidence does not contain the required clean release lint results."
+$permittedLintAdvisoryIds = @(
+    "AndroidGradlePluginVersion",
+    "GradleDependency",
+    "NewerVersionAvailable"
+)
+$invalidLintEvidence = @($reviewedLint | Where-Object {
+    $lintReport = $_
+    $advisoryIds = @($lintReport.advisoryIds | ForEach-Object { [string]$_ })
+    [int]$lintReport.issues -ne 0 -or
+    [int]$lintReport.advisories -lt 0 -or
+    ([int]$lintReport.advisories -gt 0 -and $advisoryIds.Count -eq 0) -or
+    @($advisoryIds | Where-Object { $_ -notin $permittedLintAdvisoryIds }).Count -ne 0
+})
+if ($reviewedLint.Count -lt 3 -or $invalidLintEvidence.Count -ne 0) {
+    throw "The reviewed evidence does not contain the required blocking-clean release lint results."
 }
 if (
     $evidence.toolchain.javaSha256 -ne $javaHash -or

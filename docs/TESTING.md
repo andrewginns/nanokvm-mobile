@@ -17,6 +17,13 @@ gate. It runs JVM tests and release lint, builds the unsigned release APK/AAB
 and benchmark targets, verifies packaged Baseline Profiles, and creates the
 canonical CycloneDX SBOM. Important outputs include:
 
+Release evidence treats only `AndroidGradlePluginVersion`, `GradleDependency`,
+and `NewerVersionAvailable` warnings as non-blocking dependency-freshness
+advisories. They remain visible in the retained lint XML and evidence manifest
+so dependency updates can be reviewed separately without expanding a focused
+runtime release. Every other lint finding, including any error or warning under
+another ID, remains blocking.
+
 - `app/build/outputs/apk/release/app-release-unsigned.apk`;
 - `app/build/outputs/bundle/release/app-release.aab`;
 - `app/build/outputs/apk/benchmark/app-benchmark.apk`;

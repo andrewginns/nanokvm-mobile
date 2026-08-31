@@ -24,6 +24,9 @@ lineage and direct-GitHub update path.
 - Line breaks in approved clipboard/share text and multiline IME commits are
   emitted as Shift+Enter; physical and editor-action Enter remain unchanged.
   The controlled application ultimately decides how Shift+Enter behaves.
+- Release evidence now retains dependency-update availability warnings as
+  explicit advisories while every other Android Lint finding remains blocking,
+  avoiding an automatic runtime-dependency expansion during a focused release.
 - No permissions, network endpoints, telemetry, data collection, persistent
   storage, runtime dependencies, or appliance API contracts changed.
 
