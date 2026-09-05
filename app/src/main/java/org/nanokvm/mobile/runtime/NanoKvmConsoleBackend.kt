@@ -531,7 +531,7 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
+    override fun attachVideoSurface(surface: Surface) {
         synchronized(stateLock) { this.surface = surface }
         scope.launch {
             lifecycleMutex.withLock {
@@ -541,8 +541,6 @@ internal class NanoKvmConsoleBackend internal constructor(
             }
         }
     }
-
-    override fun resizeVideoSurface(width: Int, height: Int) = Unit
 
     override fun detachVideoSurface(surface: Surface) {
         synchronized(stateLock) {
@@ -6329,10 +6327,6 @@ internal class SessionBoundVideoListener(
 
     override fun onH264FrameRendered(timestampUs: Long) = ifActive {
         delegate.onH264FrameRendered(timestampUs)
-    }
-
-    override fun onMjpegJpegFrame(jpeg: ByteArray) = ifActive {
-        delegate.onMjpegJpegFrame(jpeg)
     }
 
     override fun onMjpegBitmapFrame(bitmap: Bitmap): Boolean = synchronized(lock) {

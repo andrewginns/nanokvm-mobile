@@ -1,9 +1,7 @@
 package org.nanokvm.video
 
 import android.graphics.Bitmap
-import android.graphics.SurfaceTexture
 import android.view.Surface
-import android.view.TextureView
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import java.util.concurrent.CompletableFuture
@@ -43,8 +41,6 @@ internal fun NanoKvmVideoPreference.transportChain(): List<NanoKvmVideoTransport
 data class NanoKvmVideoConfig(
     val preference: NanoKvmVideoPreference = NanoKvmVideoPreference.AUTO,
     val decoder: H264DecoderConfig = H264DecoderConfig(),
-    val decodeMjpegBitmaps: Boolean = true,
-    val deliverMjpegJpegBytes: Boolean = false,
     val mjpegBitmapOptions: MjpegBitmapDecodeOptions = MjpegBitmapDecodeOptions(),
     val maxMjpegFrameBytes: Int = MjpegMultipartParser.DEFAULT_MAX_FRAME_BYTES,
     val webRtcFirstFrameTimeoutMillis: Long = 7_000L,
@@ -94,8 +90,6 @@ interface NanoKvmVideoListener {
     fun onVideoSizeChanged(width: Int, height: Int) = Unit
     fun onWebRtcFrameRendered(timestampNs: Long) = Unit
     fun onH264FrameRendered(timestampUs: Long) = Unit
-    /** Raw JPEG callback; enabled explicitly with [NanoKvmVideoConfig.deliverMjpegJpegBytes]. */
-    fun onMjpegJpegFrame(jpeg: ByteArray) = Unit
     /**
      * Return true only when the bitmap was posted to the display target; the receiver then owns
      * its lifecycle. Return false when it was not consumed so the session recycles it and can
@@ -179,16 +173,6 @@ class NanoKvmVideoSession(
         decoderReleased.whenComplete { _, _ ->
             if (isCurrent(run)) startMjpeg(run, normalized)
         }
-    }
-
-    /** Binds session lifetime and decoder Surface ownership to a TextureView. */
-    fun bind(textureView: TextureView, config: NanoKvmVideoConfig = NanoKvmVideoConfig()): AutoCloseable {
-        require(config.preference != NanoKvmVideoPreference.MJPEG) {
-            "TextureView binding is only needed for H.264/AUTO"
-        }
-        val binding = TextureViewBinding(textureView, config)
-        binding.attach()
-        return binding
     }
 
     fun stop() {
@@ -745,43 +729,23 @@ class NanoKvmVideoSession(
 
     private fun enqueueMjpegFrame(run: Long, config: NanoKvmVideoConfig, jpeg: ByteArray) {
         if (!isCurrent(run)) return
-        val bitmap = if (config.decodeMjpegBitmaps) {
-            MjpegBitmapDecoder.decode(jpeg, config.mjpegBitmapOptions)
-        } else {
-            null
-        }
+        val bitmap = MjpegBitmapDecoder.decode(jpeg, config.mjpegBitmapOptions) ?: return
         if (!isCurrent(run)) {
-            bitmap?.recycle()
+            bitmap.recycle()
             return
         }
-        val rawJpeg = if (config.deliverMjpegJpegBytes) jpeg else null
-        if (rawJpeg == null && bitmap == null) return
         mjpegFrameDispatcher.offer(
-            MjpegDelivery(run, rawJpeg, bitmap, config.mjpegStallTimeoutMillis),
+            MjpegDelivery(run, bitmap, config.mjpegStallTimeoutMillis),
         )
     }
 
     private fun deliverMjpegFrame(frame: MjpegDelivery) {
         var bitmapTransferred = false
-        var rawDelivered = false
-        var bitmapRendered: Boolean? = null
         try {
             if (!isCurrent(frame.run)) return
-            frame.jpeg?.let {
-                listener.onMjpegJpegFrame(it)
-                rawDelivered = true
-            }
-            // A raw callback may synchronously stop or replace this session.
-            if (!isCurrent(frame.run)) return
-            frame.bitmap?.let { bitmap ->
-                val rendered = listener.onMjpegBitmapFrame(bitmap)
-                bitmapRendered = rendered
-                bitmapTransferred = rendered
-            }
-            // When bitmap display is enabled, raw-byte delivery must not mask a failed Surface
-            // post. A raw-only consumer still gets delivery-based liveness semantics.
-            val delivered = bitmapRendered ?: rawDelivered
-            if (delivered && isCurrent(frame.run)) {
+            bitmapTransferred = listener.onMjpegBitmapFrame(frame.bitmap)
+            // A display callback may synchronously stop or replace this session.
+            if (bitmapTransferred && isCurrent(frame.run)) {
                 onMjpegFrameRendered(frame.run, frame.stallTimeoutMillis)
             }
         } finally {
@@ -793,60 +757,13 @@ class NanoKvmVideoSession(
         recycle(frame.bitmap)
     }
 
-    private fun recycle(bitmap: Bitmap?) {
-        if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
-    }
-
-    private inner class TextureViewBinding(
-        private val textureView: TextureView,
-        private val config: NanoKvmVideoConfig,
-    ) : TextureView.SurfaceTextureListener, AutoCloseable {
-        private var surface: Surface? = null
-        private var attached = false
-
-        fun attach() {
-            if (attached) return
-            attached = true
-            textureView.surfaceTextureListener = this
-            if (textureView.isAvailable) {
-                textureView.surfaceTexture?.let { onSurfaceTextureAvailable(it, textureView.width, textureView.height) }
-            }
-        }
-
-        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-            if (!attached) return
-            surface?.release()
-            Surface(texture).also {
-                surface = it
-                this@NanoKvmVideoSession.start(it, config)
-            }
-        }
-
-        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
-
-        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-            this@NanoKvmVideoSession.stop()
-            surface?.release()
-            surface = null
-            return true
-        }
-
-        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
-
-        override fun close() {
-            if (!attached) return
-            attached = false
-            if (textureView.surfaceTextureListener === this) textureView.surfaceTextureListener = null
-            this@NanoKvmVideoSession.stop()
-            surface?.release()
-            surface = null
-        }
+    private fun recycle(bitmap: Bitmap) {
+        if (!bitmap.isRecycled) bitmap.recycle()
     }
 
     private data class MjpegDelivery(
         val run: Long,
-        val jpeg: ByteArray?,
-        val bitmap: Bitmap?,
+        val bitmap: Bitmap,
         val stallTimeoutMillis: Long,
     )
 }

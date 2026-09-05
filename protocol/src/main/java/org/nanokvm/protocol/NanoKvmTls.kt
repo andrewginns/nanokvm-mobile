@@ -6,7 +6,6 @@ import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
@@ -45,38 +44,6 @@ value class CertificateFingerprint private constructor(val hex: String) {
     }
 }
 
-enum class TofuDecision {
-    TRUSTED_FIRST_USE,
-    TRUSTED_EXISTING,
-    REJECTED_CHANGED,
-}
-
-/**
- * An atomic trust-on-first-use store. Implementations must compare and store in one operation.
- * The key is the endpoint authority (`host:port`).
- */
-fun interface TofuPinStore {
-    fun verifyOrStore(authority: String, observed: CertificateFingerprint): TofuDecision
-}
-
-class InMemoryTofuPinStore : TofuPinStore {
-    private val fingerprints = ConcurrentHashMap<String, CertificateFingerprint>()
-
-    override fun verifyOrStore(
-        authority: String,
-        observed: CertificateFingerprint,
-    ): TofuDecision {
-        val existing = fingerprints.putIfAbsent(authority, observed)
-        return when {
-            existing == null -> TofuDecision.TRUSTED_FIRST_USE
-            existing == observed -> TofuDecision.TRUSTED_EXISTING
-            else -> TofuDecision.REJECTED_CHANGED
-        }
-    }
-
-    fun fingerprint(authority: String): CertificateFingerprint? = fingerprints[authority]
-}
-
 /** TLS trust is always explicit and scoped to one [NanoKvmEndpoint]. */
 sealed interface TlsMode {
     /** Use Android/JVM's normal CA trust and hostname verification. */
@@ -84,32 +51,26 @@ sealed interface TlsMode {
 
     /** Trust exactly one DER certificate fingerprint while retaining hostname verification. */
     data class PinnedCertificate(val fingerprint: CertificateFingerprint) : TlsMode
-
-    /**
-     * Trust the first valid-dated certificate seen for this authority, then reject changes.
-     * The default hostname verifier still checks that the certificate identifies the endpoint.
-     */
-    data class TrustOnFirstUse(
-        val store: TofuPinStore,
-        val onFirstTrust: ((CertificateFingerprint) -> Unit)? = null,
-    ) : TlsMode
 }
 
 internal fun OkHttpClient.Builder.applyTlsMode(
     endpoint: NanoKvmEndpoint,
     mode: TlsMode,
 ): OkHttpClient.Builder {
-    if (mode is TlsMode.SystemTrusted) return this
+    val fingerprint = when (mode) {
+        TlsMode.SystemTrusted -> return this
+        is TlsMode.PinnedCertificate -> mode.fingerprint
+    }
     require(endpoint.isSecure) { "Certificate trust modes can only be used with HTTPS endpoints" }
 
-    val trustManager = EndpointCertificateTrustManager(endpoint, mode)
+    val trustManager = EndpointCertificateTrustManager(endpoint, fingerprint)
     val context = SSLContext.getInstance("TLS")
     context.init(null, arrayOf(trustManager), null)
     return sslSocketFactory(context.socketFactory, trustManager)
 }
 
 /**
- * Replaces CA-chain trust only for an endpoint-scoped full-DER pin or TOFU decision.
+ * Replaces CA-chain trust only for an endpoint-scoped full-DER pin.
  *
  * Certificate validity is checked here and OkHttp's default hostname verifier remains enabled.
  * This custom manager is necessary because platform trust rejects the self-signed certificates
@@ -118,7 +79,7 @@ internal fun OkHttpClient.Builder.applyTlsMode(
 @SuppressLint("CustomX509TrustManager")
 private class EndpointCertificateTrustManager(
     private val endpoint: NanoKvmEndpoint,
-    private val mode: TlsMode,
+    private val fingerprint: CertificateFingerprint,
 ) : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
         throw CertificateException("Client certificates are not supported")
@@ -129,22 +90,10 @@ private class EndpointCertificateTrustManager(
         leaf.checkValidity()
         val observed = CertificateFingerprint.from(leaf)
 
-        when (val configured = mode) {
-            TlsMode.SystemTrusted -> error("System trust must use the platform trust manager")
-            is TlsMode.PinnedCertificate -> if (observed != configured.fingerprint) {
-                throw CertificateException(
-                    "Certificate fingerprint mismatch for ${endpoint.authorityKey}: observed $observed",
-                )
-            }
-            is TlsMode.TrustOnFirstUse -> when (
-                configured.store.verifyOrStore(endpoint.authorityKey, observed)
-            ) {
-                TofuDecision.TRUSTED_FIRST_USE -> configured.onFirstTrust?.invoke(observed)
-                TofuDecision.TRUSTED_EXISTING -> Unit
-                TofuDecision.REJECTED_CHANGED -> throw CertificateException(
-                    "Certificate changed for ${endpoint.authorityKey}: observed $observed",
-                )
-            }
+        if (observed != fingerprint) {
+            throw CertificateException(
+                "Certificate fingerprint mismatch for ${endpoint.authorityKey}: observed $observed",
+            )
         }
     }
 

@@ -6,7 +6,6 @@ import org.nanokvm.protocol.GpioStatus
 import org.nanokvm.protocol.NanoKvmApi
 import org.nanokvm.protocol.NanoKvmClient
 import org.nanokvm.protocol.NanoKvmServerCapabilities
-import org.nanokvm.protocol.PasteLanguage
 import org.nanokvm.protocol.ScreenSetting
 import org.nanokvm.protocol.VmInfo
 
@@ -27,7 +26,6 @@ internal class AuthenticatedNanoKvmSession(
     private val closed = AtomicBoolean(false)
 
     val console = NanoKvmConsoleFeatureGateway(client.api)
-    val clipboard = NanoKvmClipboardFeatureGateway(client.api)
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -81,12 +79,4 @@ internal class NanoKvmConsoleFeatureGateway(
         api.pressGpio(action, durationMillis)
 
     suspend fun gpioStatus(): GpioStatus = api.gpioStatus()
-}
-
-/** Explicit one-way HID typing. This is deliberately not named or modelled as clipboard sync. */
-internal class NanoKvmClipboardFeatureGateway(
-    private val api: NanoKvmApi,
-) {
-    suspend fun typeText(content: String, language: PasteLanguage = PasteLanguage.ENGLISH) =
-        api.paste(content, language)
 }

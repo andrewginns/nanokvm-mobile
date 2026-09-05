@@ -27,8 +27,7 @@ interface RemoteInputSink {
 }
 
 interface VideoSurfaceSink {
-    fun attachVideoSurface(surface: Surface, width: Int, height: Int)
-    fun resizeVideoSurface(width: Int, height: Int)
+    fun attachVideoSurface(surface: Surface)
     fun detachVideoSurface(surface: Surface)
 }
 

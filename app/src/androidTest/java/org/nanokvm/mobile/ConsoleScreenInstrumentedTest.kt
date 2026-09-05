@@ -2721,7 +2721,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     override fun reconnect() = Unit
     override fun cancelReconnect() = Unit
     override fun setForeground(isForeground: Boolean) = Unit
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
+    override fun attachVideoSurface(surface: Surface) {
         attachSurfaceCalls++
         surfaceFillColor?.let { color ->
             runCatching {
@@ -2731,7 +2731,6 @@ private class RecordingConsoleBackend : ConsoleBackend {
             }
         }
     }
-    override fun resizeVideoSurface(width: Int, height: Int) = Unit
     override fun detachVideoSurface(surface: Surface) {
         detachSurfaceCalls++
     }

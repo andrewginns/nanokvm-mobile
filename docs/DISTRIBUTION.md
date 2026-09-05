@@ -52,6 +52,9 @@ Build Tools 36.0.0. Substitute the actual paths and tag:
     -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0'
 ```
 
+The helper retains the APK, AAB, and SBOM produced by its clean build; it does
+not accept substitute artifact paths.
+
 Review the generated evidence manifest, source archive, unsigned APK, test and
 lint results, manifest, dependency graph, canonical SBOM, profiles, and R8
 outputs. Then sign only those reviewed bytes:

@@ -7,6 +7,28 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.9] - 2026-09-05 (public GitHub pre-release candidate)
+
+Android version code: **16**. This maintenance release removes unused internal
+paths while preserving the existing app features, including PicoClaw and
+boot-script management, and the production signing lineage.
+
+### Changed
+
+- Advanced the release to version 0.3.9/code 16 so its distributable bytes do
+  not reuse the published v0.3.8/code-15 identity.
+- Release evidence always retains the APK, bundle, and SBOM produced by its
+  own build; alternative artifact inputs are no longer accepted.
+- Removed unused REST paste, automatic first-use trust, alternate video
+  Surface ownership, raw-JPEG session delivery, and obsolete theme aliases.
+  The app retains reviewed certificate pinning, paced keyboard paste, and
+  bitmap MJPEG rendering.
+- Simplified the video Surface contract so the view alone owns buffer sizing.
+- Runtime licence verification follows dependency coordinates and notice
+  integrity without requiring licence prose changes for every app version.
+- No app permissions, persistent storage, telemetry, data collection, or
+  packaged runtime dependencies changed.
+
 ## [0.3.8] - 2026-08-31 (public GitHub pre-release candidate)
 
 Android version code: **15**. This release improves large clipboard, share, and

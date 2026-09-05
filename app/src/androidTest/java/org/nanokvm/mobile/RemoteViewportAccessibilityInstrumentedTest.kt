@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -293,20 +294,21 @@ class RemoteViewportAccessibilityInstrumentedTest {
             }
         }
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            recordingSurface.attachDimensions.isNotEmpty()
+            recordingSurface.attachedSurfaces.isNotEmpty()
         }
-        assertEquals(listOf(1_366 to 768), recordingSurface.attachDimensions)
+        val surface = recordingSurface.attachedSurfaces.single()
 
         composeRule.runOnIdle {
+            assertEquals(1_366 to 768, surface.bufferDimensions())
             remoteWidth.intValue = 1_024
             remoteHeight.intValue = 600
         }
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            recordingSurface.resizeDimensions.lastOrNull() == (1_024 to 600)
-        }
 
-        assertEquals(1, recordingSurface.attachDimensions.size)
-        assertEquals(0, recordingSurface.detachCount)
+        composeRule.runOnIdle {
+            assertEquals(1_024 to 600, surface.bufferDimensions())
+            assertSame(surface, recordingSurface.attachedSurfaces.single())
+            assertEquals(0, recordingSurface.detachCount)
+        }
     }
 
     private fun renderViewport() {
@@ -398,27 +400,29 @@ private class RecordingRemoteInputSink : RemoteInputSink {
 private const val HID_ABSOLUTE_MIDPOINT = 16_384
 
 private class NoOpVideoSurfaceSink : VideoSurfaceSink {
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) = Unit
-
-    override fun resizeVideoSurface(width: Int, height: Int) = Unit
+    override fun attachVideoSurface(surface: Surface) = Unit
 
     override fun detachVideoSurface(surface: Surface) = Unit
 }
 
 private class RecordingVideoSurfaceSink : VideoSurfaceSink {
-    val attachDimensions = mutableListOf<Pair<Int, Int>>()
-    val resizeDimensions = mutableListOf<Pair<Int, Int>>()
+    val attachedSurfaces = mutableListOf<Surface>()
     var detachCount = 0
 
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) {
-        attachDimensions += width to height
-    }
-
-    override fun resizeVideoSurface(width: Int, height: Int) {
-        resizeDimensions += width to height
+    override fun attachVideoSurface(surface: Surface) {
+        attachedSurfaces += surface
     }
 
     override fun detachVideoSurface(surface: Surface) {
         detachCount += 1
+    }
+}
+
+private fun Surface.bufferDimensions(): Pair<Int, Int> {
+    val canvas = lockCanvas(null)
+    return try {
+        canvas.width to canvas.height
+    } finally {
+        unlockCanvasAndPost(canvas)
     }
 }

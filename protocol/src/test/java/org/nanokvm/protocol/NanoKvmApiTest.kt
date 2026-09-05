@@ -240,13 +240,12 @@ class NanoKvmApiTest {
     }
 
     @Test
-    fun `screen GPIO HID and paste methods use exact wire fields`() = runBlocking {
-        repeat(4) { server.enqueue(jsonResponse("""{"code":0,"msg":"success","data":null}""")) }
+    fun `screen GPIO and HID methods use exact wire fields`() = runBlocking {
+        repeat(3) { server.enqueue(jsonResponse("""{"code":0,"msg":"success","data":null}""")) }
 
         client.api.updateScreen(ScreenSetting.FPS, 30)
         client.api.pressGpio(GpioAction.POWER, 800)
         client.api.resetHid()
-        client.api.paste("Hello", PasteLanguage.ENGLISH)
 
         assertEquals(
             mapOf("type" to "fps", "value" to "30"),
@@ -257,10 +256,6 @@ class NanoKvmApiTest {
             flatJson(server.takeRequest().body.readUtf8()),
         )
         assertEquals("/api/hid/reset", server.takeRequest().path)
-        assertEquals(
-            mapOf("content" to "Hello", "langue" to "en"),
-            flatJson(server.takeRequest().body.readUtf8()),
-        )
     }
 
     @Test
@@ -285,9 +280,6 @@ class NanoKvmApiTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             runBlocking { client.api.pressGpio(GpioAction.RESET, 30_001) }
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { client.api.paste("x".repeat(1025)) }
         }
         assertThrows(IllegalArgumentException::class.java) {
             runBlocking { client.api.temporarilyPauseMjpegFrameDetection(31) }

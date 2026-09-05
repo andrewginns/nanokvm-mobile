@@ -7,12 +7,8 @@ import java.time.Instant
 
 class SensitiveModelRedactionTest {
     @Test
-    fun `session token clipboard and provider key strings are redacted`() {
+    fun `session token and provider key strings are redacted`() {
         assertRedacted(SessionToken("bearer-secret"), "bearer-secret")
-
-        val paste = PasteRequest(content = "clipboard-secret", langue = "en")
-        assertRedacted(paste, "clipboard-secret")
-        assertTrue(paste.toString().contains("langue=en"))
 
         val requestClass = Class.forName("org.nanokvm.protocol.PicoClawModelConfigRequest")
         val constructor = requestClass.declaredConstructors.single { it.parameterCount == 3 }

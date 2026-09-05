@@ -99,23 +99,6 @@ internal data class MjpegFrameDetectionRequest(val enabled: Boolean)
 @Serializable
 internal data class MjpegFrameDetectionPauseRequest(val duration: Int)
 
-enum class PasteLanguage(internal val wireName: String) {
-    ENGLISH("en"),
-    GERMAN("de"),
-    FRENCH("fr"),
-    RUSSIAN("ru"),
-}
-
-@Serializable
-internal data class PasteRequest(
-    val content: String,
-    // The misspelling is part of NanoKVM's public wire contract.
-    val langue: String,
-) {
-    override fun toString(): String =
-        "PasteRequest(content=<redacted>, langue=$langue)"
-}
-
 @Serializable
 internal data class ImageListResponse(
     // Go's encoding/json represents the server's nil slice as null when /data has no images.

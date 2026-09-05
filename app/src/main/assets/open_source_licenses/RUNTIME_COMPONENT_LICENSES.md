@@ -1,7 +1,7 @@
 # Resolved runtime component licences
 
 This index covers every external component in NanoKVM Mobile's resolved
-`releaseRuntimeClasspath` for version 0.3.8. Some BOM/platform entries govern
+`releaseRuntimeClasspath`. Some BOM/platform entries govern
 versions rather than contributing APK bytes. The build fails when the
 checked-in coordinates drift from the resolved graph. The canonical CycloneDX
 SBOM published with a release remains the machine-readable dependency

@@ -44,9 +44,9 @@ val client = NanoKvmClient.create(
 )
 ```
 
-System trust, exact certificate pinning and a host/port-scoped TOFU primitive are available. There
-is intentionally no global `trust all certificates` mode, and the normal hostname verifier remains
-enabled for pinned connections.
+System trust and exact certificate pinning are available. There is intentionally no global
+`trust all certificates` mode, and the normal hostname verifier remains enabled for pinned
+connections.
 
 ## Input WebSocket
 
@@ -108,7 +108,7 @@ exit sequence was sent.
 ## REST surface
 
 `NanoKvmApi` exposes login, VM info, hardware version, stream settings, GPIO status/actions, HID
-reset, server-side batch paste, storage images, HID mode, virtual devices, remote-image transfer and
+reset, storage images, HID mode, virtual devices, remote-image transfer and
 Wake-on-LAN. This surface follows the stable NanoKVM 2.4.3 wire contract. Successful calls return
 decoded models. HTTP 401, non-successful HTTP status, nonzero NanoKVM envelopes and malformed or
 out-of-policy response fields use distinct typed exceptions.
@@ -248,7 +248,7 @@ evidence alone deliberately leaves both `RUNTIME_PROBE_REQUIRED`; it never autho
 
 Run `:protocol:testDebugUnitTest`. Tests cover the fixed OpenSSL encryption vector, REST envelopes
 and host-scoped cookies, redirect leakage, WebSocket cookie/releases, HID golden bytes, US/UK
-mapping, endpoint normalization, certificate fingerprints, TOFU state and one-shot self-signed
+mapping, endpoint normalization, certificate fingerprints and one-shot self-signed
 certificate inspection. Phase-3 tests additionally cover stable route/method/body goldens,
 snapshot-bound image handles, DELETE bodies, field/list bounds, URL/MAC/name normalization,
 forward-compatible read values, legacy WOL behavior and disabled transport replay.

@@ -1158,13 +1158,12 @@ private class BackendTextureView(
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
         texture.setDefaultBufferSize(remoteWidth, remoteHeight)
         outputSurface = Surface(texture).also {
-            videoSurface.attachVideoSurface(it, remoteWidth, remoteHeight)
+            videoSurface.attachVideoSurface(it)
         }
     }
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
         texture.setDefaultBufferSize(remoteWidth, remoteHeight)
-        videoSurface.resizeVideoSurface(remoteWidth, remoteHeight)
     }
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
@@ -1181,9 +1180,6 @@ private class BackendTextureView(
         remoteWidth = normalizedWidth
         remoteHeight = normalizedHeight
         surfaceTexture?.setDefaultBufferSize(remoteWidth, remoteHeight)
-        if (outputSurface != null) {
-            videoSurface.resizeVideoSurface(remoteWidth, remoteHeight)
-        }
     }
 
     fun updateContentTransform(rect: FloatRect, viewport: IntSize) {

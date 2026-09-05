@@ -85,8 +85,7 @@ val expectedProtobufLicenseSha256 =
 val expectedIjgNoticeSha256 =
     "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
 val expectedRuntimeComponentLicensesSha256 =
-    "8cceff22fb402485e807d4d6e4909cfb9dfaff80c966d5520435e9081fe7b5b1"
-val runtimeComponentLicenseIndexVersion = project.version.toString()
+    "838d1d9454954589abdd90717a2cdb5df05a589ac9dbc9ac0c0b8a31bee7cdbc"
 
 val generateBundledAboutAssets by tasks.registering(Sync::class) {
     group = "build"
@@ -125,9 +124,6 @@ abstract class VerifyBundledAboutAssets : DefaultTask() {
     abstract val runtimeComponentLicenceIndex: RegularFileProperty
 
     @get:Input
-    abstract val runtimeComponentLicenceIndexVersion: Property<String>
-
-    @get:Input
     abstract val resolvedRuntimeCoordinates: SetProperty<String>
 
     @TaskAction
@@ -161,10 +157,6 @@ abstract class VerifyBundledAboutAssets : DefaultTask() {
 
         val runtimeIndex = runtimeComponentLicenceIndex.get().asFile
         val runtimeIndexText = runtimeIndex.readText(Charsets.UTF_8)
-        val expectedVersion = runtimeComponentLicenceIndexVersion.get()
-        require("for version $expectedVersion." in runtimeIndexText) {
-            "The runtime component licence index does not identify project version $expectedVersion."
-        }
         val coordinatePattern = Regex("^- `([^`]+:[^`]+:[^`]+)`$")
         val documentedCoordinates = runtimeIndexText
             .lineSequence()
@@ -235,7 +227,6 @@ val verifyBundledAboutAssets = tasks.register<VerifyBundledAboutAssets>("verifyB
     runtimeComponentLicenceIndex.set(
         layout.projectDirectory.file("src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md"),
     )
-    runtimeComponentLicenceIndexVersion.set(runtimeComponentLicenseIndexVersion)
     resolvedRuntimeCoordinates.set(resolvedRuntimeCoordinateProvider)
 }
 
@@ -588,7 +579,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 15
+        versionCode = 16
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

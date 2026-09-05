@@ -95,16 +95,3 @@ object NanoKvmConsoleTheme {
         @ReadOnlyComposable
         get() = LocalConsoleColorScheme.current
 }
-
-// Compatibility aliases keep the migration screen-by-screen and avoid a risky all-at-once change.
-// New console code should use LocalConsoleColorScheme.current and semantic field names.
-val ConsoleBlack = DarkConsoleColorScheme.canvas
-val ConsoleSurface = DarkConsoleColorScheme.controlSurface
-val ConsoleSurfaceRaised = DarkConsoleColorScheme.controlSurfaceElevated
-val ConsoleOutline = DarkConsoleColorScheme.outline
-val ConsoleMint = DarkConsoleColorScheme.active
-val ConsoleMintMuted = Color(0xFF8FE8D2)
-val ConsoleAmber = DarkConsoleColorScheme.warning
-val ConsoleRed = DarkConsoleColorScheme.critical
-val ConsoleText = DarkConsoleColorScheme.onSurface
-val ConsoleTextMuted = DarkConsoleColorScheme.onSurfaceMuted

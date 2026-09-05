@@ -538,18 +538,6 @@ class NanoKvmApi internal constructor(
         postWithoutData("/api/hid/reset")
     }
 
-    /** Server-side batch paste; live IME input should use keyboard WebSocket reports instead. */
-    suspend fun paste(content: String, language: PasteLanguage = PasteLanguage.ENGLISH) {
-        require(content.isNotEmpty()) { "Paste content must not be empty" }
-        require(content.encodeToByteArray().size <= 1024) {
-            "NanoKVM paste content must be at most 1024 UTF-8 bytes"
-        }
-        postWithoutData(
-            "/api/hid/paste",
-            PasteRequest(content = content, langue = language.wireName),
-        )
-    }
-
     /**
      * Reads a bounded saved-shortcut snapshot. Unknown future key codes remain visible but are
      * read-only and cannot be dispatched through [NanoKvmInputSocket.sendSavedHidShortcut].

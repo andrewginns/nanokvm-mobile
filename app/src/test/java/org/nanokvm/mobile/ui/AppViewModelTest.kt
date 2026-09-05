@@ -1408,8 +1408,7 @@ private class FakeConsoleBackend(
     override fun reconnect() = Unit
     override fun cancelReconnect() = Unit
     override fun setForeground(isForeground: Boolean) = Unit
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) = Unit
-    override fun resizeVideoSurface(width: Int, height: Int) = Unit
+    override fun attachVideoSurface(surface: Surface) = Unit
     override fun detachVideoSurface(surface: Surface) = Unit
     override fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton>) = Unit
     override fun moveRelative(deltaX: Int, deltaY: Int, buttons: Set<MouseButton>) = Unit

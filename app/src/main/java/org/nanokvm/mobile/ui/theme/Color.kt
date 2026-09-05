@@ -8,7 +8,6 @@ import androidx.compose.ui.graphics.Color
 // disabled. The live console deliberately uses a separate fixed palette (ConsoleTokens.kt).
 val NanoMint = Color(0xFF006B59)
 val NanoMintLight = Color(0xFF44D7B6)
-val NanoInk = Color(0xFF07110E)
 val NanoPaper = Color(0xFFF5FBF8)
 
 internal val NanoLightColorScheme = lightColorScheme(

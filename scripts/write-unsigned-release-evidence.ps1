@@ -9,9 +9,6 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BuildToolsPath,
 
-    [string]$UnsignedApk,
-    [string]$ReleaseBundle,
-    [string]$Sbom,
     [string]$BuildLogPath,
     [string]$OutputPath
 )
@@ -459,15 +456,9 @@ if ($postBuildGitResult.ExitCode -ne 0 -or $postBuildGitStatus) {
     throw "The strict build changed the tagged source worktree; release evidence was not created."
 }
 
-if (-not $UnsignedApk) {
-    $UnsignedApk = Join-Path $repository "app\build\outputs\apk\release\app-release-unsigned.apk"
-}
-if (-not $ReleaseBundle) {
-    $ReleaseBundle = Join-Path $repository "app\build\outputs\bundle\release\app-release.aab"
-}
-if (-not $Sbom) {
-    $Sbom = Join-Path $repository "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json"
-}
+$UnsignedApk = Join-Path $repository "app\build\outputs\apk\release\app-release-unsigned.apk"
+$ReleaseBundle = Join-Path $repository "app\build\outputs\bundle\release\app-release.aab"
+$Sbom = Join-Path $repository "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json"
 $unsignedApkRecord = Get-ArtifactRecord -Path $UnsignedApk -Repository $repository
 $releaseBundleRecord = Get-ArtifactRecord -Path $ReleaseBundle -Repository $repository
 $sbomRecord = Get-ArtifactRecord -Path $Sbom -Repository $repository

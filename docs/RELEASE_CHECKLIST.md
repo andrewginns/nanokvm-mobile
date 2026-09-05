@@ -1,8 +1,8 @@
 # GitHub APK release checklist
 
 Use this checklist only when publishing new APK bytes. The current stable
-release record is retained with the [v0.3.6 GitHub
-release](https://github.com/andrewginns/nanokvm-mobile/releases/tag/v0.3.6), not
+release record is retained with the [v0.3.7 GitHub
+release](https://github.com/andrewginns/nanokvm-mobile/releases/tag/v0.3.7), not
 as a mutable checklist in `main`.
 
 ## Release identity

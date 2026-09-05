@@ -18,15 +18,4 @@ class NanoKvmTlsTest {
         )
     }
 
-    @Test
-    fun `TOFU store atomically accepts first match and rejects change`() {
-        val store = InMemoryTofuPinStore()
-        val first = CertificateFingerprint.sha256OfDer(byteArrayOf(1))
-        val changed = CertificateFingerprint.sha256OfDer(byteArrayOf(2))
-
-        assertEquals(TofuDecision.TRUSTED_FIRST_USE, store.verifyOrStore("host:443", first))
-        assertEquals(TofuDecision.TRUSTED_EXISTING, store.verifyOrStore("host:443", first))
-        assertEquals(TofuDecision.REJECTED_CHANGED, store.verifyOrStore("host:443", changed))
-        assertEquals(first, store.fingerprint("host:443"))
-    }
 }

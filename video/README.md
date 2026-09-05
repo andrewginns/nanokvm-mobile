@@ -8,17 +8,18 @@
   candidates after the server's `ice-servers` event, applies one answer, and
   sends the protocol heartbeat every 60 seconds. A connection is considered
   streaming only after a frame has actually reached the Android EGL surface.
-- `/api/stream/h264/direct` is decoded to a caller-owned `Surface` (or a bound
-  `TextureView`) using `MediaCodec`. The raw WebSocket envelope is parsed before a
-  key-frame-gated queue of at most three access units. A saturated queue drops the
+- `/api/stream/h264/direct` is decoded to a caller-owned `Surface` using
+  `MediaCodec`. The raw WebSocket envelope is parsed before a key-frame-gated
+  queue of at most three access units. A saturated queue drops the
   whole queued GOP and waits for another key frame; it never keeps a later P-frame
   after discarding one of its dependencies. Compression negotiation is refused;
   an oversized access unit cancels the source immediately and enters the normal
   fallback policy instead of leaving the peer able to send another message.
 - `/api/stream/mjpeg` is parsed as Content-Length multipart data. Callers receive
-  a downsampled `RGB_565` `Bitmap` by default; raw JPEG callbacks are opt-in with
-  `deliverMjpegJpegBytes`. Delivery is latest-frame-only, and superseded/stale
-  bitmaps are recycled before they reach the listener.
+  a downsampled `RGB_565` `Bitmap` by default. Delivery is latest-frame-only, and
+  superseded/stale bitmaps are recycled before they reach the listener. A listener
+  takes ownership by returning true after posting the bitmap; rejected bitmaps
+  are recycled and do not satisfy the rendered-frame watchdog.
 - `AUTO` preserves the lightweight direct H.264 to MJPEG behavior. Selecting
   `WEBRTC` uses independent, one-shot attempts in the order WebRTC, direct
   H.264, then MJPEG. Each failed source is completely torn down before the next
@@ -49,6 +50,10 @@ ships no consumer shrinker rules, so this module also keeps the
 `livekit.org.webrtc` JNI surface intact in minified consumers. A device test creates
 the real native runtime, EGL surface, peer, transceiver, and local offer; fake-peer
 JVM tests alone are not accepted as coverage for this boundary.
+
+MJPEG device tests use a local multipart peer and real Android bitmap decoding to
+check accepted/rejected bitmap ownership, rendered-frame liveness, synchronous
+stop isolation, and the direct H.264-to-MJPEG fallback.
 
 WebRTC is initialized with a no-op injectable logger at `LS_NONE`. This prevents
 the native network monitor, ICE stack, and renderer from writing interface,

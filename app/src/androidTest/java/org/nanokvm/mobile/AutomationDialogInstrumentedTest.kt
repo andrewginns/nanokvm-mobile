@@ -390,8 +390,7 @@ private class AutomationConsoleBridge(
     override fun typeCommittedText(text: String, layout: KeyboardLayout) = Unit
     override fun key(key: RemoteKey, pressed: Boolean) = Unit
     override fun releaseAllInput() = Unit
-    override fun attachVideoSurface(surface: Surface, width: Int, height: Int) = Unit
-    override fun resizeVideoSurface(width: Int, height: Int) = Unit
+    override fun attachVideoSurface(surface: Surface) = Unit
     override fun detachVideoSurface(surface: Surface) = Unit
 }
 
