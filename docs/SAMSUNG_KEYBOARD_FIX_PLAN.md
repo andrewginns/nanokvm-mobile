@@ -116,3 +116,40 @@ the unchanged app stopped at `cat ` after reopening; the repaired app delivered
 `cat `, `cat dog ` and `cat dog fish ` across all three sessions. This verifies
 delivery to the recording sink with the emulator's Gboard, while Samsung One UI
 8.5 and a physical NanoKVM/host remain untested.
+
+## Clipboard follow-up — 7 September 2026
+
+The user also reported a paste problem in v0.3.10, with text beginning
+`Blender Cycles render test`. The exact paste control, full payload and failure
+symptom were not established, so the following is a reproduced app defect,
+not a claim to have reproduced the entire Samsung report.
+
+On API 37, Copy from a standard Android `EditText` put that phrase on the real
+system clipboard as `android.text.SpannableString`, with only `text/plain` and
+no HTML. The app rejected it as rich text solely because it implemented
+`Spanned`. Android's [plain-text clipboard API](https://developer.android.com/reference/android/content/ClipData#newPlainText(java.lang.CharSequence,java.lang.CharSequence))
+accepts a `CharSequence`; its container type does not establish HTML content.
+
+The repair removes this container-type rejection from the clipboard gateway and
+the equivalent direct `EXTRA_TEXT` share path. The existing bounded analyzer
+copies only characters into an immutable plain string, preserves the sensitive
+marker and normalizes newlines. Existing MIME, HTML, URI, Intent, item-count and
+size restrictions at the clipboard boundary remain in place.
+
+Permanent regressions exercise stock Copy through the actual clipboard, a
+mutable styled input with a sensitive marker, oversized spanned input, and the
+direct share fallback with intent cleanup. Private native-editor probes also
+confirmed the served paste callback works after a framework-driven reopen, and
+that context-menu paste during composition reaches the recording sink once
+composition finishes. The latter is not evidence of a Samsung clipboard-button
+flow. Two private backend probes exercised the actual paced sender and HID
+encoding through a recorded WebSocket boundary; no transport defect was found.
+
+Diagnostic APKs, logs and temporary probes remain private under
+`.scratch/native-ime-qa/clipboard-probe/` and `.scratch/clipboard-probe/`.
+The fixed engineering app passed 41 permanent Android cases on API 37: nine
+clipboard gateway, six shared-intent and 26 native-keyboard tests, plus the two
+temporary native paste probes. The initial shared-intent run exposed a test
+assertion that expected null extras where Android retains an empty bundle;
+after correcting that assertion, all six shared-intent cases passed. No
+production behavior was changed for that test correction.

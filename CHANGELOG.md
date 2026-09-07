@@ -7,6 +7,24 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.12] - 2026-09-07 (pre-release candidate)
+
+Android version code: **19**. This candidate includes the keyboard reopening fix
+from v0.3.11 and repairs ordinary copied text being rejected as rich text.
+
+### Fixed
+
+- Accept direct `text/plain` clipboard content carried in Android's span
+  container, including text copied from a standard Android text field. Copy
+  only the bounded plain characters; preserve newline normalization and the
+  sensitive-content marker.
+- Apply the same handling to direct plain-text shares. Keep existing HTML,
+  URI, Intent, MIME, item-count and size checks at the clipboard boundary.
+- Add regressions for actual Android Copy, immutable span-free payloads,
+  sensitive markers, size limits and shared-intent cleanup.
+- No permissions, dependencies, persistent storage, telemetry, or appliance
+  API contracts changed.
+
 ## [0.3.11] - 2026-09-07 (pre-release candidate)
 
 Android version code: **18**. This candidate fixes native keyboard input stopping

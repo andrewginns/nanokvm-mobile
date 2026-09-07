@@ -4,7 +4,6 @@ import android.content.ClipDescription
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
-import android.text.Spanned
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -124,7 +123,7 @@ class MainActivity : FragmentActivity() {
                 }
                 null -> {
                     val directText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
-                    if (directText == null || directText is Spanned || directText.isEmpty()) {
+                    if (directText == null || directText.isEmpty()) {
                         viewModel.reportShareNotice(ShareNotice.PlainTextOnly)
                         return
                     }

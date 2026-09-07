@@ -5,7 +5,6 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.text.Spanned
 import androidx.core.content.getSystemService
 import org.nanokvm.mobile.clipboard.ClipboardEmptyReason
 import org.nanokvm.mobile.clipboard.ClipboardGateway
@@ -50,7 +49,7 @@ class AndroidClipboardGateway internal constructor(
 
         val description = clip.description
         val mimeTypes = description.mimeTypes()
-        if (item.htmlText != null || item.text is Spanned || mimeTypes.any(::isHtmlMimeType)) {
+        if (item.htmlText != null || mimeTypes.any(::isHtmlMimeType)) {
             return ClipboardReadResult.Rejected(ClipboardRejectionReason.RichText)
         }
         if (mimeTypes.size != 1 || !mimeTypes.single().equals(MIME_TEXT_PLAIN, ignoreCase = true)) {

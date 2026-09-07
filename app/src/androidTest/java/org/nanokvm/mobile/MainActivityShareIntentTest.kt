@@ -2,6 +2,7 @@ package org.nanokvm.mobile
 
 import android.content.ClipData
 import android.content.Intent
+import android.text.SpannableStringBuilder
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -27,6 +28,28 @@ class MainActivityShareIntentTest {
                 .setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, SECRET),
         )
+    }
+
+    @Test
+    fun spannedExtraTextIsNormalizedAndScrubbedWithoutClipData() {
+        val sharedIntent = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, SpannableStringBuilder("$SECRET\r\nnext\rline"))
+            .putExtra("android.content.extra.IS_SENSITIVE", true)
+
+        assertShareIntentDiscarded(
+            Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java),
+            newIntent = sharedIntent,
+        ) { state ->
+            val payload = requireNotNull(state.pendingSharedPaste)
+            assertEquals("$SECRET\nnext\nline", payload.text)
+            assertTrue(payload.isSensitive)
+        }
+
+        assertNull(sharedIntent.action)
+        assertNull(sharedIntent.type)
+        assertNull(sharedIntent.clipData)
+        assertTrue(sharedIntent.extras?.isEmpty != false)
     }
 
     @Test
@@ -79,6 +102,7 @@ class MainActivityShareIntentTest {
 
     private fun assertShareIntentDiscarded(
         launchIntent: Intent,
+        newIntent: Intent? = null,
         assertState: (AppUiState) -> Unit = {},
     ) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -93,6 +117,16 @@ class MainActivityShareIntentTest {
                 ?: throw AssertionError("MainActivity was not launched")
             activity = launched
             instrumentation.waitForIdleSync()
+
+            if (newIntent != null) {
+                instrumentation.runOnMainSync {
+                    // Starting an Activity can migrate EXTRA_TEXT into ClipData. Deliver directly
+                    // to exercise the EXTRA_TEXT fallback without that framework conversion.
+                    assertNull(newIntent.clipData)
+                    instrumentation.callActivityOnNewIntent(launched, newIntent)
+                }
+                instrumentation.waitForIdleSync()
+            }
 
             val retainedReference = AtomicReference<Intent>()
             val stateReference = AtomicReference<AppUiState>()
