@@ -138,6 +138,9 @@ internal class NativeImeView(context: Context) : EditText(context) {
     private fun restoreImeFocus() {
         if (!keepImeFocus || !isAttachedToWindow) return
         if (!hasFocus()) requestFocus()
+        // Showing the same served view can reuse the connection retired when we hid it.
+        // Renew it without disturbing a live connection's composition on later focus restores.
+        if (connection == null) inputMethod.restartInput(this)
         inputMethod.showSoftInput(this, 0)
     }
 

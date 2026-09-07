@@ -7,6 +7,24 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.11] - 2026-09-07 (pre-release candidate)
+
+Android version code: **18**. This candidate fixes native keyboard input stopping
+after dismissal and reopening, and preserves the production signing lineage.
+
+### Fixed
+
+- Renew the Android input connection when reopening an editor whose previous
+  connection was retired. Showing the keyboard alone could leave it visible and
+  focused while no typed text reached the host.
+- Preserve a live connection and its composition during subsequent focus
+  restores; suggestions, corrections and the existing HID queue remain intact.
+- Add a real Gboard regression covering three typing sessions separated by
+  hide/reopen cycles, without creating or repairing the connection in test code.
+  Keep the previous explicit fresh-connection test for stale-callback rejection.
+- No permissions, runtime dependencies, persistent storage, telemetry, data
+  collection, or appliance API contracts changed.
+
 ## [0.3.10] - 2026-09-07 (private testing candidate)
 
 Android version code: **17**. This candidate repairs native keyboard corrections

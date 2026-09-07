@@ -53,7 +53,7 @@ Use only synthetic phrases with the recording sink displayed in a test-only UI. 
 
 Video/HID provides no host document/caret readback. Host-side formatting or independent input can change context beyond the app's knowledge. Report separately what passed against the recording sink, the actual transport implementation and the native emulator keyboard. Samsung One UI 8.5 and a real NanoKVM/host remain follow-up validation when available.
 
-## Completion record
+## Original correction repair validation
 
 Native Gboard 17.2.2.895242737-preload-x86_64 was exercised on the API 37 emulator with Auto-correction enabled, using accessibility-derived key bounds. The recording sink and actual editor agreed at each captured boundary:
 
@@ -78,6 +78,41 @@ The API 36 first-boot attempt was interrupted during startup before any test ran
 
 Samsung One UI 8.5, the minimum supported API 26, voice transcription and a physical NanoKVM/host were not validated. These remain explicit follow-ups, rather than prerequisites for this completed emulator-based repair. Host-side text/caret transformations still cannot be read back through HID/video.
 
-This task does not publish an APK or replace an existing signed installation. Engineering builds were used only on disposable emulators; future APK handoff must follow AGENTS.md and the repository signing/upgrade checks.
+These correction tests used engineering builds only on disposable emulators. The subsequent v0.3.10/code-17 APK was signed, checked as an in-place update from v0.3.9 and published as a prerelease. APK handoff continues to require AGENTS.md and the repository signing/upgrade checks.
 
 Touch, forms, PicoClaw and boot-script features remain outside this focused keyboard repair.
+
+## Reopen regression follow-up — 7 September 2026
+
+The user reported that v0.3.10 types normally until the keyboard is dismissed.
+After reopening, the keyboard appears but sends no text. Keeping it open avoids
+the failure. The original reopen test missed this because its helper explicitly
+created a new input connection after reopening; the live fixture also restarted
+input before manual testing.
+
+A new regression drives the installed Gboard through real on-screen taps without
+either helper. On the unchanged app, the first session delivered `cat `. After
+the production Hide control and reopening the retained editor, typing `wrold`
+and Space left the host at `cat ` and the editor empty, despite the IME being
+visible and focused. Baseline evidence is retained privately under
+`.scratch/native-ime-qa/reopen-0310/baseline/`.
+
+Hiding retires the editor's connection, but Android can retain the same served
+view when `showSoftInput` is called again. The repair requests `restartInput`
+after restoring focus only when no live connection remains. Later focus restores
+leave an existing composition alone. This uses Android's existing
+[input restart API](https://developer.android.com/reference/android/view/inputmethod/InputMethodManager#restartInput(android.view.View))
+and requires no new state machine, keyboard implementation or transport changes.
+
+The installed-keyboard regression checks three typing sessions without assuming
+which words Gboard will autocorrect. Its learned vocabulary can change that choice;
+the deterministic input-connection cases continue to verify correction semantics.
+The former test is retained under a name that
+explicitly describes its fresh-connection scope; it still verifies that stale
+callbacks cannot send text.
+
+Replaying the final test APK against both app builds confirmed the difference:
+the unchanged app stopped at `cat ` after reopening; the repaired app delivered
+`cat `, `cat dog ` and `cat dog fish ` across all three sessions. This verifies
+delivery to the recording sink with the emulator's Gboard, while Samsung One UI
+8.5 and a physical NanoKVM/host remain untested.

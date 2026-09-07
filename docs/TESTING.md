@@ -54,6 +54,15 @@ input sink and compares completed edits with Android's standard `EditText`.
 Run it on a disposable emulator; it does not connect to a NanoKVM or prove a
 particular vendor keyboard's behavior.
 
+`gboardContinuesTypingAfterRepeatedReopen` also drives the installed English
+Gboard through three typing sessions separated by hide and reopen cycles,
+using real on-screen key taps. It does not assume which words Gboard will autocorrect;
+that choice depends on its settings and learned vocabulary. It waits for the IME
+and its entrance animation, but never creates an `InputConnection` or calls
+`restartInput` itself. It skips explicitly when Gboard is not the selected IME.
+The separate stale-connection test deliberately creates a fresh connection and
+must not be treated as proof that Android renews its connection after reopening.
+
 For on-screen keyboard QA, install the debug app and Android test APK on that
 emulator, then run this opt-in live fixture with its explicit serial:
 

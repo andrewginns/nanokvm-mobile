@@ -3,11 +3,16 @@ package org.nanokvm.mobile
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.graphics.Rect
 import android.os.SystemClock
+import android.provider.Settings
 import android.text.InputType
 import android.util.Xml
+import android.util.Log
 import android.view.KeyEvent
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
@@ -16,16 +21,19 @@ import android.widget.EditText
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.ViewCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.filters.SdkSuppress
 import java.io.File
@@ -34,6 +42,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.nanokvm.mobile.runtime.KeyboardLayout
@@ -385,7 +394,7 @@ class NativeKeyboardInstrumentedTest {
     }
 
     @Test
-    fun hidingAndReopeningKeyboardInvalidatesThePreviousConnection() {
+    fun hiddenConnectionRejectsLateCallbacksAndAnExplicitFreshConnectionCanType() {
         renderKeyboard()
         lateinit var old: InputConnection
         composeRule.runOnIdle { old = connection(); visible.value = false }
@@ -399,6 +408,100 @@ class NativeKeyboardInstrumentedTest {
             assertTrue(connection().commitText("fresh", 1))
             assertEquals("fresh", sink.remoteText.value)
         }
+    }
+
+    @Test
+    fun gboardContinuesTypingAfterRepeatedReopen() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val ime = Settings.Secure.getString(
+            instrumentation.targetContext.contentResolver,
+            Settings.Secure.DEFAULT_INPUT_METHOD,
+        )
+        assumeTrue("This installed-keyboard regression requires English Gboard", ime?.startsWith("com.google.android.inputmethod.latin/") == true)
+        val automation = instrumentation.uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+        try {
+            renderKeyboard()
+            // Never request a test InputConnection or restartInput here: Android and the
+            // installed keyboard must retain/recreate their own connection on reopen.
+            listOf("cat" to "cat ", "dog" to "cat dog ", "fish" to "cat dog fish ")
+                .forEachIndexed { index, (typed, expected) ->
+                    if (index > 0) {
+                        composeRule.onNodeWithContentDescription(
+                            composeRule.activity.getString(R.string.console_hide_native_keyboard),
+                        ).performScrollTo().performClick()
+                        composeRule.waitForIdle()
+                        composeRule.onNodeWithText("Reopen test keyboard").performClick()
+                        awaitEditor()
+                    }
+                    awaitInstalledKeyboardReady()
+                    typed.forEach { tapInstalledKeyboardKey(it.toString()) }
+                    tapInstalledKeyboardKey("Space")
+                    fun state() = composeRule.runOnIdle {
+                        val focus = composeRule.activity.currentFocus
+                        "host=[${sink.remoteText.value}], editor=[${(focus as? EditText)?.text}], " +
+                            "focused=${focus?.hasFocus()}, visible=${visible.value}"
+                    }
+                    Log.i("NativeImeReopenQa", "Cycle $index expected [$expected]; ${state()}")
+                    try {
+                        composeRule.waitUntil(timeoutMillis = 5_000L) { sink.remoteText.value == expected }
+                    } catch (failure: Throwable) {
+                        throw AssertionError("Installed keyboard cycle $index expected [$expected]; ${state()}", failure)
+                    }
+                }
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+    }
+
+    private fun awaitInstalledKeyboardReady() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.runOnIdle {
+                val view = editor()
+                val inputMethod = view.context.getSystemService(InputMethodManager::class.java)
+                inputMethod.isActive(view) && inputMethod.isAcceptingText &&
+                    ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+        }
+        // IME insets can become visible before the keyboard's entrance animation ends.
+        // Let its observed touchscreen targets settle without repairing its connection.
+        SystemClock.sleep(350L)
+    }
+
+    private fun tapInstalledKeyboardKey(label: String) {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun findBounds(node: AccessibilityNodeInfo): Rect? {
+            if (node.isVisibleToUser && node.contentDescription?.toString().equals(label, ignoreCase = true)) {
+                return Rect().also(node::getBoundsInScreen).takeUnless(Rect::isEmpty)
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(::findBounds)?.let { return it }
+            }
+            return null
+        }
+        var bounds: Rect? = null
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            bounds = automation.windows.asSequence()
+                .filter { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                .mapNotNull { it.root?.let(::findBounds) }
+                .firstOrNull()
+            bounds != null
+        }
+        val key = checkNotNull(bounds)
+        val downTime = SystemClock.uptimeMillis()
+        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+            val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, key.exactCenterX(), key.exactCenterY(), 0)
+            event.source = InputDevice.SOURCE_TOUCHSCREEN
+            try {
+                assertTrue("Could not tap installed keyboard key $label", automation.injectInputEvent(event, true))
+            } finally {
+                event.recycle()
+            }
+        }
+        SystemClock.sleep(100L)
     }
 
     private fun compareWithReference(sequence: (InputConnection) -> Unit) {
@@ -478,6 +581,9 @@ class NativeKeyboardInstrumentedTest {
             NanoKvmTheme(useDynamicColor = false) {
                 Column {
                     Text("Native IME test host: [${sink.remoteText.value}]", Modifier.testTag("native-ime-host-text"))
+                    if (!visible.value) {
+                        Button(onClick = { visible.value = true }) { Text("Reopen test keyboard") }
+                    }
                     ConsoleKeyboard(
                         input = sink,
                         visible = visible.value,
