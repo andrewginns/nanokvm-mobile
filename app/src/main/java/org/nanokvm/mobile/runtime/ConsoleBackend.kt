@@ -22,8 +22,47 @@ interface RemoteInputSink {
     fun scrollHorizontal(steps: Int)
     /** Text is normalized/bounded/chunked; embedded line breaks use Shift+Enter. */
     fun typeCommittedText(text: String, layout: KeyboardLayout = KeyboardLayout.Us)
+    /**
+     * Enqueues one bounded suffix replacement before suspending for its result. Submitted means
+     * the HID reports were queued, not that the host acknowledged its text or caret position.
+     * The caller owns recent-text eligibility and invalidates [context] when its target changes.
+     */
+    suspend fun applyTextEdit(
+        deleteBefore: Int,
+        insertText: String,
+        layout: KeyboardLayout,
+        context: RemoteTextEditContext,
+    ): RemoteTextEditResult {
+        context.invalidate()
+        return RemoteTextEditResult.Rejected(RemoteTextEditRejection.Unavailable)
+    }
+    /** A soft-key pair ordered after edits and canceled when their typing context failed. */
+    fun tapKey(key: RemoteKey, context: RemoteTextEditContext) {
+        if (!context.isValid) return
+        key(key, true)
+        key(key, false)
+    }
     fun key(key: RemoteKey, pressed: Boolean)
+    /** Guard a physical down that follows pending text; its matching up remains a safety release. */
+    fun key(key: RemoteKey, pressed: Boolean, context: RemoteTextEditContext) {
+        if (!pressed || context.isValid) key(key, pressed)
+    }
     fun releaseAllInput()
+}
+
+sealed interface RemoteTextEditResult {
+    data object Submitted : RemoteTextEditResult
+    data class Rejected(val reason: RemoteTextEditRejection) : RemoteTextEditResult
+    data object Stale : RemoteTextEditResult
+    /** Some reports may already have reached the host. Never retry this edit. */
+    data object Unknown : RemoteTextEditResult
+}
+
+enum class RemoteTextEditRejection {
+    InvalidRange,
+    UnsupportedText,
+    ModifierConflict,
+    Unavailable,
 }
 
 interface VideoSurfaceSink {

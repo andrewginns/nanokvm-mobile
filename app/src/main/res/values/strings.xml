@@ -166,4 +166,7 @@
     <string name="certificate_replace_saved_action">Replace saved certificate</string>
     <string name="certificate_connect_once_changed_action">Connect once with new certificate</string>
     <string name="certificate_changed_security_note">Replacing the saved certificate is permanent for this connection profile. Connecting once keeps the previous pin for the next connection.</string>
+    <string name="console_keyboard_recovery_title">Review text that may not have been sent</string>
+    <string name="console_keyboard_recovery_copy">Copy text</string>
+    <string name="console_keyboard_recovery_discard">Discard</string>
 </resources>

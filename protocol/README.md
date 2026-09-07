@@ -76,6 +76,15 @@ never drop release reports. The client removes WebSocket compression negotiation
 unsolicited compression extension, and limits a close handshake to two seconds. An oversized input
 server message stops command acceptance and queues safety releases before closing.
 
+`sendTextEdit` applies a bounded recent-suffix correction as one ordered sequence
+of Backspace and insertion pairs. It preflights the complete insertion before
+deleting anything and rejects held modifiers and embedded controls other than
+line breaks. Backspace and Tab remain explicit key actions. Unsupported committed text is also
+rejected in full by `sendCommittedText`. A successful result means the reports
+were queued; the protocol has no remote text or caret acknowledgement. Failed or
+partially canceled corrections are never replayed, and callers must discard
+their previous assumption about the remote suffix.
+
 Video WebSockets should share the exact client TLS policy and use the authenticated request helper:
 
 ```kotlin

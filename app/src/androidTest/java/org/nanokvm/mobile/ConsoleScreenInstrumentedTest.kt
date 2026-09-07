@@ -101,6 +101,8 @@ import org.nanokvm.mobile.runtime.PicoClawSupport
 import org.nanokvm.mobile.runtime.PicoClawUiState
 import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.RemoteKey
+import org.nanokvm.mobile.runtime.RemoteTextEditContext
+import org.nanokvm.mobile.runtime.RemoteTextEditResult
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoStreamDescriptor
 import org.nanokvm.mobile.runtime.VideoTransportPreference
@@ -169,7 +171,7 @@ class ConsoleScreenInstrumentedTest {
                 InputType.TYPE_TEXT_VARIATION_NORMAL,
                 editorInfo.inputType and InputType.TYPE_MASK_VARIATION,
             )
-            assertTrue(editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
+            assertEquals(0, editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
             assertTrue(editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN != 0)
             assertEquals(
                 "The native editor must not force IME incognito mode, which can hide voice input",
@@ -310,7 +312,7 @@ class ConsoleScreenInstrumentedTest {
                 InputType.TYPE_TEXT_VARIATION_NORMAL,
                 editorInfo.inputType and InputType.TYPE_MASK_VARIATION,
             )
-            assertTrue(editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
+            assertEquals(0, editorInfo.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
             assertTrue(editorInfo.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN != 0)
             assertEquals(
                 "The native editor must not force IME incognito mode, which can hide voice input",
@@ -2645,6 +2647,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     )
 
     val committedText = mutableListOf<Pair<String, KeyboardLayout>>()
+    val textEditBackspaces = mutableListOf<Int>()
     val pastedText = mutableListOf<String>()
     val pasteRequests = mutableListOf<ApprovedPasteRequest>()
     var releaseAllCalls = 0
@@ -2757,6 +2760,18 @@ private class RecordingConsoleBackend : ConsoleBackend {
 
     override fun typeCommittedText(text: String, layout: KeyboardLayout) {
         committedText += text to layout
+    }
+
+    override suspend fun applyTextEdit(
+        deleteBefore: Int,
+        insertText: String,
+        layout: KeyboardLayout,
+        context: RemoteTextEditContext,
+    ): RemoteTextEditResult {
+        if (!context.isValid) return RemoteTextEditResult.Stale
+        textEditBackspaces += deleteBefore
+        if (insertText.isNotEmpty()) typeCommittedText(insertText, layout)
+        return RemoteTextEditResult.Submitted
     }
 
     override fun key(key: RemoteKey, pressed: Boolean) = Unit

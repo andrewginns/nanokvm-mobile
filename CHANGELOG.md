@@ -7,6 +7,33 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.10] - 2026-09-07 (private testing candidate)
+
+Android version code: **17**. This candidate repairs native keyboard corrections
+while retaining suggestions and autocorrect, and uses the existing production
+signing lineage for an in-place update from v0.3.9.
+
+### Fixed
+
+- Use Android's standard editable text handling so completed corrections replace
+  recent text instead of appending the corrected word to the original.
+- Preserve composition, surrounding text, selection and correction undo across
+  legacy and modern input-connection callbacks.
+- Keep replacement edits in the existing ordered HID queue and reject unsupported
+  replacements before deleting known text. Retain rejected text for recovery.
+- Discard stale correction context on focus, pointer, connection and session
+  changes; prevent rejected composition from accidentally submitting host text.
+- Preserve ordinary Backspace/Delete and physical keyboard behavior, with bounded
+  local text context and no new runtime dependencies or permissions.
+
+### Validation
+
+- 618 JVM tests, 72 Android tests on API 37 and 25 native-editor tests on API 36
+  passed, along with the strict repository build gate.
+- Native Gboard suggestion acceptance, automatic correction and original-word
+  restoration matched the test host. Samsung One UI 8.5 and a physical NanoKVM
+  host remain unverified; see [the keyboard plan](docs/SAMSUNG_KEYBOARD_FIX_PLAN.md).
+
 ## [0.3.9] - 2026-09-05 (public GitHub pre-release candidate)
 
 Android version code: **16**. This maintenance release removes unused internal

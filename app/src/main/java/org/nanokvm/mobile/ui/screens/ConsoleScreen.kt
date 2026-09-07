@@ -159,6 +159,8 @@ import org.nanokvm.mobile.ui.components.PointerMode
 import org.nanokvm.mobile.ui.components.RemoteViewport
 import org.nanokvm.mobile.ui.components.ViewportAction
 import org.nanokvm.mobile.ui.components.ViewportCommand
+import org.nanokvm.mobile.ui.input.ContextInvalidatingInputSink
+import org.nanokvm.mobile.ui.input.KeyboardContextBoundary
 import org.nanokvm.mobile.ui.input.PointerCaptureController
 import org.nanokvm.mobile.ui.input.PointerCaptureReleaseReason
 import org.nanokvm.mobile.ui.input.PointerCaptureState
@@ -273,6 +275,25 @@ internal fun ConsoleScreen(
     ) -> Unit,
 ) {
     val drafts = sessionDraftOwner
+    val keyboardContextBoundary = remember { KeyboardContextBoundary() }
+    val contextualInput = remember(input, keyboardContextBoundary) {
+        ContextInvalidatingInputSink(input, keyboardContextBoundary)
+    }
+    val correctionContextKey = remember(
+        profile.id,
+        profile.authority,
+        session.sessionGeneration,
+        sensitiveWorkGeneration,
+        session.connection.isSessionUsable,
+    ) {
+        KeyboardCorrectionContextKey(
+            profileId = profile.id,
+            authority = profile.authority,
+            sessionGeneration = session.sessionGeneration,
+            sensitiveWorkGeneration = sensitiveWorkGeneration,
+            sessionUsable = session.connection.isSessionUsable,
+        )
+    }
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val coreControls = features.core
     val phase3Controls = features.phase3
@@ -493,7 +514,7 @@ internal fun ConsoleScreen(
                 // The capture host owns the one neutral remote-input release for this lifecycle.
                 pointerCaptureController.release(PointerCaptureReleaseReason.SessionChanged)
             } else {
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
             }
             if (pointerMode == PointerMode.Captured) pointerMode = PointerMode.Trackpad
             if (
@@ -619,11 +640,11 @@ internal fun ConsoleScreen(
         if (pointerMode == PointerMode.Captured) {
             pointerCaptureController.release(PointerCaptureReleaseReason.PointerModeChanged)
         } else {
-            input.releaseAllInput()
+            contextualInput.releaseAllInput()
         }
         if (selected == PointerMode.Trackpad || selected == PointerMode.Captured) {
             // A neutral relative report also switches the backend away from its last absolute point.
-            input.moveRelative(0, 0)
+            contextualInput.moveRelative(0, 0)
         }
         pointerMode = selected
         if (selected == PointerMode.Captured) {
@@ -642,11 +663,11 @@ internal fun ConsoleScreen(
             }
             controlsExpanded = false
         } else {
-            input.releaseAllInput()
+            contextualInput.releaseAllInput()
         }
     }
     val toggleViewNavigation = {
-        input.releaseAllInput()
+        contextualInput.releaseAllInput()
         viewNavigationVisible = !viewNavigationVisible
         controlsExpanded = false
     }
@@ -670,7 +691,7 @@ internal fun ConsoleScreen(
             pointerCaptureController.release(PointerCaptureReleaseReason.User)
             pointerMode = PointerMode.Trackpad
         } else {
-            input.releaseAllInput()
+            contextualInput.releaseAllInput()
         }
         disconnectConfirmationVisible = true
     }
@@ -684,7 +705,7 @@ internal fun ConsoleScreen(
             controlsExpanded -> controlsExpanded = false
             keyboardVisible -> {
                 keyboardVisible = false
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
             }
             immersiveMode -> immersiveMode = false
             else -> requestDisconnect()
@@ -741,7 +762,9 @@ internal fun ConsoleScreen(
             destinationName = profile.name.ifBlank { profile.authority },
             authority = profile.authority,
             session = session,
-            input = input,
+            input = contextualInput,
+            keyboardContextBoundary = keyboardContextBoundary,
+            correctionContextKey = correctionContextKey,
             videoSurface = videoSurface,
             pointerMode = pointerMode,
             pointerCaptureController = pointerCaptureController,
@@ -767,12 +790,12 @@ internal fun ConsoleScreen(
             onOpenControls = { controlsExpanded = true },
             onHideKeyboard = {
                 keyboardVisible = false
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
             },
             onViewportAction = requestViewportAction,
             onCtrlAltDelete = { requestPowerAction(PowerAction.CtrlAltDelete) },
             onRetryConnection = {
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
                 if (session.status == org.nanokvm.mobile.runtime.ConsoleMessage.AuthenticationExpired) {
                     onReauthenticate()
                 } else {
@@ -780,7 +803,7 @@ internal fun ConsoleScreen(
                 }
             },
             onStopReconnect = {
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
                 coreControls.cancelReconnect()
             },
             onDisconnect = requestDisconnect,
@@ -805,7 +828,7 @@ internal fun ConsoleScreen(
                 },
                 onPointerMode = selectPointerMode,
                 onViewNavigation = toggleViewNavigation,
-                onMouseClick = { button -> input.sendOneShotMouseClick(button) },
+                onMouseClick = { button -> contextualInput.sendOneShotMouseClick(button) },
                 onFit = {
                     fitRequest++
                     controlsExpanded = false
@@ -993,6 +1016,7 @@ internal fun ConsoleScreen(
             request = request,
             onDismiss = { pendingPowerAction = null },
             onConfirm = {
+                keyboardContextBoundary.invalidate()
                 coreControls.power(request.destination, request.action)
                 pendingPowerAction = null
             },
@@ -1003,12 +1027,12 @@ internal fun ConsoleScreen(
             onDismiss = { overlay = ConsoleOverlay.None },
             onReconnect = {
                 overlay = ConsoleOverlay.None
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
                 coreControls.reconnect()
             },
             onResetHid = {
                 overlay = ConsoleOverlay.None
-                input.releaseAllInput()
+                contextualInput.releaseAllInput()
                 coreControls.resetHid()
             },
             onDeviceInfo = {
@@ -1271,6 +1295,7 @@ internal fun ConsoleScreen(
                 val confirmation = request.confirmation
                 val stillBound = confirmation.remainsBoundTo(currentPasteTarget)
                 if (stillConnected && stillBound) {
+                    keyboardContextBoundary.invalidate()
                     coreControls.pasteText(
                         ApprovedPasteRequest(
                             profileId = confirmation.target.profileId,
@@ -1383,11 +1408,21 @@ private data class PendingPowerAction(
     val destinationName: String,
 )
 
+private data class KeyboardCorrectionContextKey(
+    val profileId: String,
+    val authority: String,
+    val sessionGeneration: Long,
+    val sensitiveWorkGeneration: Long,
+    val sessionUsable: Boolean,
+)
+
 private data class ConsoleContentState(
     val destinationName: String,
     val authority: String,
     val session: BackendSession,
     val input: RemoteInputSink,
+    val keyboardContextBoundary: KeyboardContextBoundary,
+    val correctionContextKey: KeyboardCorrectionContextKey,
     val videoSurface: VideoSurfaceSink,
     val pointerMode: PointerMode,
     val pointerCaptureController: PointerCaptureController,
@@ -1421,6 +1456,8 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             authority = state.authority,
             session = state.session,
             input = state.input,
+            keyboardContextBoundary = state.keyboardContextBoundary,
+            correctionContextKey = state.correctionContextKey,
             videoSurface = state.videoSurface,
             pointerMode = state.pointerMode,
             pointerCaptureController = state.pointerCaptureController,
@@ -1465,6 +1502,8 @@ private fun ConsoleBody(
     authority: String,
     session: BackendSession,
     input: RemoteInputSink,
+    keyboardContextBoundary: KeyboardContextBoundary,
+    correctionContextKey: KeyboardCorrectionContextKey,
     videoSurface: VideoSurfaceSink,
     pointerMode: PointerMode,
     pointerCaptureController: PointerCaptureController,
@@ -1651,6 +1690,8 @@ private fun ConsoleBody(
         }
         ConsoleKeyboard(
             input = input,
+            contextBoundary = keyboardContextBoundary,
+            correctionContextKey = correctionContextKey,
             visible = keyboardVisible,
             releaseGeneration = session.inputReleaseGeneration,
             interceptLocalEscape = immersiveMode,

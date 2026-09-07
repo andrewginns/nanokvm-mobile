@@ -1,16 +1,8 @@
 package org.nanokvm.mobile.ui.components
 
-import android.content.Context
-import android.graphics.Color
-import android.text.Editable
-import android.text.InputType
-import android.text.SpannableStringBuilder
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.KeyEvent
-import android.view.View
-import android.view.inputmethod.BaseInputConnection
-import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,12 +20,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -44,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
@@ -55,6 +51,7 @@ import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.ui.input.ModifierLatch
 import org.nanokvm.mobile.ui.input.ModifierMode
+import org.nanokvm.mobile.ui.input.KeyboardContextBoundary
 import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
 
 @Composable
@@ -70,11 +67,18 @@ fun ConsoleKeyboard(
     onCtrlAltDelete: () -> Unit,
     onViewportAction: (ViewportAction) -> Unit,
     modifier: Modifier = Modifier,
+    contextBoundary: KeyboardContextBoundary? = null,
+    correctionContextKey: Any? = null,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     val hideKeyboardDescription = stringResource(R.string.console_hide_native_keyboard)
     var latch by remember { mutableStateOf(ModifierLatch()) }
     var showFunctionKeys by rememberSaveable { mutableStateOf(false) }
+    var imeView by remember { mutableStateOf<NativeImeView?>(null) }
+    var recoveryText by remember(correctionContextKey) { mutableStateOf<String?>(null) }
+    var showRecovery by remember(correctionContextKey) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val recoveryTitle = stringResource(R.string.console_keyboard_recovery_title)
 
     LaunchedEffect(visible, releaseGeneration) {
         if (!visible || latch.activeKeys().isNotEmpty()) latch = ModifierLatch()
@@ -88,12 +92,11 @@ fun ConsoleKeyboard(
     }
 
     fun sendKey(key: RemoteKey) {
-        input.key(key, true)
-        input.key(key, false)
-        releaseOneShot()
+        imeView?.sendToolbarKey(key)
     }
 
     fun cycleModifier(key: RemoteKey) {
+        imeView?.clearCorrectionContext()
         val previous = latch.mode(key)
         val next = latch.cycle(key)
         when {
@@ -106,20 +109,61 @@ fun ConsoleKeyboard(
 
     NativeImeHost(
         active = visible,
+        input = input,
+        layout = layout,
+        releaseGeneration = releaseGeneration,
+        correctionContextKey = correctionContextKey,
+        contextBoundary = contextBoundary,
         interceptLocalEscape = interceptLocalEscape,
         onLocalEscape = onLocalEscape,
-        onCommittedText = { text ->
-            if (text.isNotEmpty()) {
-                input.typeCommittedText(text, layout)
+        onShortcutText = { text ->
+            if (latch.activeKeys().isEmpty()) {
+                false
+            } else {
+                val onlyShift = latch.activeKeys().all { it == RemoteKey.Shift }
+                if (text.length == 1 || onlyShift) input.typeCommittedText(text, layout) else recoveryText = text
                 releaseOneShot()
+                true
             }
         },
-        onKey = { key, pressed -> input.key(key, pressed) },
+        onRecoverText = { recoveryText = it },
+        onSoftKeyConsumed = { releaseOneShot() },
+        onKey = { key, pressed ->
+            input.key(key, pressed)
+            if (!pressed) releaseOneShot()
+        },
+        onView = { imeView = it },
     )
 
+    if (showRecovery && recoveryText != null) {
+        AlertDialog(
+            onDismissRequest = { showRecovery = false },
+            title = { Text(recoveryTitle) },
+            text = { SelectionContainer { Text(recoveryText.orEmpty()) } },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                        ClipData.newPlainText(recoveryTitle, recoveryText),
+                    )
+                    showRecovery = false
+                }) { Text(stringResource(R.string.console_keyboard_recovery_copy)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRecovery = false; recoveryText = null }) {
+                    Text(stringResource(R.string.console_keyboard_recovery_discard))
+                }
+            },
+        )
+    }
     if (!visible) return
 
     Column(modifier = modifier.fillMaxWidth()) {
+        if (recoveryText != null) {
+            AssistChip(
+                onClick = { showRecovery = true },
+                label = { Text(recoveryTitle) },
+            )
+        }
         Surface(
             color = consoleColors.controlSurface,
             contentColor = consoleColors.onSurface,
@@ -308,162 +352,44 @@ private fun consoleFilterChipColors() = LocalConsoleColorScheme.current.let { co
 @Composable
 private fun NativeImeHost(
     active: Boolean,
+    input: RemoteInputSink,
+    layout: KeyboardLayout,
+    releaseGeneration: Long,
+    correctionContextKey: Any?,
+    contextBoundary: KeyboardContextBoundary?,
     interceptLocalEscape: Boolean,
     onLocalEscape: () -> Unit,
-    onCommittedText: (String) -> Unit,
+    onShortcutText: (String) -> Boolean,
+    onRecoverText: (String) -> Unit,
+    onSoftKeyConsumed: () -> Unit,
     onKey: (RemoteKey, Boolean) -> Unit,
+    onView: (NativeImeView) -> Unit,
 ) {
-    var sinkView by remember { mutableStateOf<ImeSinkView?>(null) }
-
+    var sinkView by remember { mutableStateOf<NativeImeView?>(null) }
     Box(Modifier.size(1.dp)) {
         AndroidView(
-            factory = { context ->
-                ImeSinkView(context).also {
-                    it.onCommittedText = onCommittedText
-                    it.onRemoteKey = onKey
-                    it.interceptLocalEscape = interceptLocalEscape
-                    it.onLocalEscape = onLocalEscape
-                    sinkView = it
-                }
-            },
+            factory = { context -> NativeImeView(context).also { sinkView = it; onView(it) } },
+            onReset = null,
+            onRelease = { it.setImeActive(false) },
             update = {
-                it.onCommittedText = onCommittedText
                 it.onRemoteKey = onKey
+                it.onShortcutText = onShortcutText
+                it.onRecoverText = onRecoverText
+                it.onSoftKeyConsumed = onSoftKeyConsumed
                 it.interceptLocalEscape = interceptLocalEscape
                 it.onLocalEscape = onLocalEscape
+                it.bind(input, layout, releaseGeneration, correctionContextKey)
+                it.setImeActive(active)
             },
             modifier = Modifier.size(1.dp),
         )
     }
-
-    LaunchedEffect(active, sinkView) {
-        val view = sinkView ?: return@LaunchedEffect
-        view.setImeActive(active)
-    }
-
-    DisposableEffect(sinkView) {
-        val effectView = sinkView
-        onDispose {
-            effectView?.setImeActive(false)
-        }
+    val view = sinkView
+    DisposableEffect(view, contextBoundary) {
+        val unregister = view?.let { contextBoundary?.register { it.clearCorrectionContext() } }
+        onDispose { unregister?.invoke() }
     }
 }
-
-private class ImeSinkView(context: Context) : View(context) {
-    var onCommittedText: (String) -> Unit = {}
-    var onRemoteKey: (RemoteKey, Boolean) -> Unit = { _, _ -> }
-    var interceptLocalEscape: Boolean = false
-    var onLocalEscape: () -> Unit = {}
-    private val localEscape = LocalEscapeKeyInterceptor()
-    private val inputMethod by lazy { context.getSystemService(InputMethodManager::class.java) }
-    private var keepImeFocus = false
-    private val restoreIme = Runnable { restoreImeFocus() }
-
-    init {
-        isFocusable = true
-        isFocusableInTouchMode = true
-        setBackgroundColor(Color.TRANSPARENT)
-        onFocusChangeListener = OnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus && keepImeFocus) scheduleImeRestore()
-        }
-    }
-
-    fun setImeActive(active: Boolean) {
-        keepImeFocus = active
-        removeCallbacks(restoreIme)
-        if (active) {
-            scheduleImeRestore()
-        } else {
-            inputMethod.hideSoftInputFromWindow(windowToken, 0)
-            clearFocus()
-        }
-    }
-
-    private fun scheduleImeRestore() {
-        removeCallbacks(restoreIme)
-        post(restoreIme)
-        postDelayed(restoreIme, 250L)
-    }
-
-    private fun restoreImeFocus() {
-        if (!keepImeFocus || !isAttachedToWindow) return
-        if (!hasFocus()) requestFocus()
-        inputMethod.showSoftInput(this, 0)
-    }
-
-    override fun onCheckIsTextEditor(): Boolean = true
-
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
-            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
-            EditorInfo.IME_FLAG_NO_FULLSCREEN or
-            EditorInfo.IME_FLAG_NO_EXTRACT_UI
-        outAttrs.initialSelStart = 0
-        outAttrs.initialSelEnd = 0
-        return KvmInputConnection()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
-        val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyDown(keyCode, event)
-        // The remote host owns key-repeat timing while the HID usage remains pressed. Android's
-        // repeated ACTION_DOWN events would only duplicate identical network reports.
-        if (event.repeatCount == 0) onRemoteKey(key, true)
-        return true
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
-        val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyUp(keyCode, event)
-        onRemoteKey(key, false)
-        return true
-    }
-
-    private inner class KvmInputConnection : BaseInputConnection(this@ImeSinkView, true) {
-        private val localEditable = SpannableStringBuilder()
-
-        override fun getEditable(): Editable = localEditable
-
-        override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-            text?.toString()?.takeIf(String::isNotEmpty)?.let(onCommittedText)
-            localEditable.clear()
-            return true
-        }
-
-        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            val composing = getComposingSpanStart(localEditable) >= 0
-            return if (composing || localEditable.isNotEmpty()) {
-                super.deleteSurroundingText(beforeLength, afterLength)
-            } else {
-                repeat(beforeLength.coerceAtLeast(1)) {
-                    onRemoteKey(RemoteKey.Backspace, true)
-                    onRemoteKey(RemoteKey.Backspace, false)
-                }
-                true
-            }
-        }
-
-        override fun sendKeyEvent(event: KeyEvent): Boolean {
-            if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
-            val key = remoteKeyForAndroidKeyCode(event.keyCode)
-                ?: return super.sendKeyEvent(event)
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) onRemoteKey(key, true)
-                KeyEvent.ACTION_UP -> onRemoteKey(key, false)
-                else -> return super.sendKeyEvent(event)
-            }
-            return true
-        }
-
-        override fun performEditorAction(actionCode: Int): Boolean {
-            onRemoteKey(RemoteKey.Enter, true)
-            onRemoteKey(RemoteKey.Enter, false)
-            return true
-        }
-    }
-}
-
 /** Consumes a complete physical Escape key pair when local UI ownership is enabled. */
 internal class LocalEscapeKeyInterceptor {
     private var keyUpPending = false

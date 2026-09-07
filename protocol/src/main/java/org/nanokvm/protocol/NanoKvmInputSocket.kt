@@ -35,6 +35,19 @@ data class CommittedTextResult(
     val connectionLost: Boolean,
 )
 
+/** A bounded suffix edit is preflighted in full before its first destructive keyboard report. */
+enum class HidTextEditResult {
+    SUBMITTED,
+    INVALID_RANGE,
+    UNSUPPORTED_TEXT,
+    MODIFIER_CONFLICT,
+    STALE,
+    UNKNOWN,
+}
+
+const val MAX_HID_TEXT_EDIT_DELETE = 256
+const val MAX_HID_TEXT_EDIT_INSERT_CHARS = 4_096
+
 /** Delay between completed HID press/release pairs in a paced committed-text operation. */
 data class CommittedTextPacing(
     val intervalMillis: Long = DEFAULT_INTERVAL_MILLIS,
@@ -208,6 +221,9 @@ class NanoKvmInputSocket internal constructor(
         lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
     ): CommittedTextResult {
         val mapping = HidCharacterMapper.mapText(text, layout, lineBreakMode)
+        if (mapping.unsupported.isNotEmpty()) {
+            return CommittedTextResult(0, mapping.unsupported, connectionLost = false)
+        }
         var sent = 0
         for (stroke in mapping.keystrokes) {
             if (!sendKeystroke(stroke, heldModifiers)) {
@@ -218,6 +234,58 @@ class NanoKvmInputSocket internal constructor(
             sent++
         }
         return CommittedTextResult(sent, mapping.unsupported, connectionLost = false)
+    }
+
+    /**
+     * Sends a complete preflighted replacement under the socket lock. No delete is sent when
+     * mapping fails. Context cancellation is checked between complete press/release pairs;
+     * cancellation or transport failure after any report makes the outcome unknown. The caller
+     * must discard its remote-text assumption and must not replay the operation.
+     */
+    fun sendTextEdit(
+        deleteBefore: Int,
+        insertText: String,
+        layout: KeyboardLayout = KeyboardLayout.US,
+        heldModifiers: Set<HidModifier> = emptySet(),
+        lineBreakMode: CommittedTextLineBreakMode = CommittedTextLineBreakMode.ENTER,
+        isCurrent: () -> Boolean = { true },
+    ): HidTextEditResult = synchronized(lock) {
+        if (deleteBefore !in 0..MAX_HID_TEXT_EDIT_DELETE ||
+            insertText.length > MAX_HID_TEXT_EDIT_INSERT_CHARS
+        ) return@synchronized HidTextEditResult.INVALID_RANGE
+        if (heldModifiers.isNotEmpty()) return@synchronized HidTextEditResult.MODIFIER_CONFLICT
+        // Backspace/Tab and other controls are explicit key actions, never text that can bypass
+        // the declared deletion range or move focus inside a purported suffix replacement.
+        if (insertText.any { it.isISOControl() && it != '\n' && it != '\r' }) {
+            return@synchronized HidTextEditResult.UNSUPPORTED_TEXT
+        }
+        val mapping = HidCharacterMapper.mapText(insertText, layout, lineBreakMode)
+        if (mapping.unsupported.isNotEmpty()) return@synchronized HidTextEditResult.UNSUPPORTED_TEXT
+        if (!isCurrent() || mutableState.value !is InputConnectionState.Connected) {
+            return@synchronized HidTextEditResult.STALE
+        }
+        val current = socket ?: return@synchronized HidTextEditResult.STALE
+        val release = HidKeyboardReport.released().toWireFrame().toByteString()
+        var attempted = false
+        val backspace = HidKeystroke(HidUsage.BACKSPACE)
+        for (index in 0 until deleteBefore + mapping.keystrokes.size) {
+            if (!isCurrent()) {
+                return@synchronized if (attempted) HidTextEditResult.UNKNOWN else HidTextEditResult.STALE
+            }
+            val stroke = if (index < deleteBefore) backspace else mapping.keystrokes[index - deleteBefore]
+            attempted = true
+            val sent = try {
+                current.send(stroke.pressReport().toWireFrame().toByteString()) && current.send(release)
+            } catch (_: Exception) {
+                false
+            }
+            if (!sent) {
+                // This is a safety release only; the edit itself is never repeated.
+                runCatching { current.send(release) }
+                return@synchronized HidTextEditResult.UNKNOWN
+            }
+        }
+        HidTextEditResult.SUBMITTED
     }
 
     /**

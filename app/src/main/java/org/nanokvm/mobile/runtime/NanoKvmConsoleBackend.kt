@@ -12,6 +12,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -57,6 +58,7 @@ import org.nanokvm.protocol.EndpointTrustPreflightResult
 import org.nanokvm.protocol.GpioAction
 import org.nanokvm.protocol.HidKeyboardReport
 import org.nanokvm.protocol.HidModifier
+import org.nanokvm.protocol.HidTextEditResult
 import org.nanokvm.protocol.HidUsage
 import org.nanokvm.protocol.HttpResponseException
 import org.nanokvm.protocol.InputConnectionState
@@ -68,6 +70,8 @@ import org.nanokvm.protocol.NanoKvmCapabilitySupport
 import org.nanokvm.protocol.NanoKvmEndpoint
 import org.nanokvm.protocol.NanoKvmException
 import org.nanokvm.protocol.NanoKvmInputSocket
+import org.nanokvm.protocol.MAX_HID_TEXT_EDIT_DELETE
+import org.nanokvm.protocol.MAX_HID_TEXT_EDIT_INSERT_CHARS
 import org.nanokvm.protocol.NanoKvmImageMountMode
 import org.nanokvm.protocol.NanoKvmMacAddress
 import org.nanokvm.protocol.NanoKvmMemoryLimitState
@@ -737,25 +741,151 @@ internal class NanoKvmConsoleBackend internal constructor(
         }
     }
 
-    override fun key(key: RemoteKey, pressed: Boolean) {
-        queueKeyboardCommandAfterPaste {
-            val socket: NanoKvmInputSocket?
-            val report: HidKeyboardReport
-            synchronized(stateLock) {
-                socket = input
-                val modifier = key.toModifier()
-                val usage = key.toUsage()
-                when {
-                    modifier != null && pressed -> keyboardState.press(modifier)
-                    modifier != null -> keyboardState.release(modifier)
-                    usage != null && pressed -> keyboardState.press(usage)
-                    usage != null -> keyboardState.release(usage)
-                    else -> Unit
-                }
-                report = keyboardState.snapshot()
-            }
-            socket?.sendKeyboard(report)
+    override suspend fun applyTextEdit(
+        deleteBefore: Int,
+        insertText: String,
+        layout: KeyboardLayout,
+        context: RemoteTextEditContext,
+    ): RemoteTextEditResult {
+        if (!context.isValid) return RemoteTextEditResult.Stale
+        if (deleteBefore !in 0..MAX_HID_TEXT_EDIT_DELETE ||
+            insertText.length > MAX_HID_TEXT_EDIT_INSERT_CHARS
+        ) {
+            context.invalidate()
+            return RemoteTextEditResult.Rejected(RemoteTextEditRejection.InvalidRange)
         }
+        val completion = CompletableFuture<RemoteTextEditResult>()
+        val dispatchStarted = AtomicBoolean(false)
+        fun complete(result: RemoteTextEditResult) {
+            if (result != RemoteTextEditResult.Submitted) context.invalidate()
+            completion.complete(result)
+        }
+        // queueKeyboardCommandAfterPaste appends synchronously. No suspension may precede this:
+        // a following Enter/pointer/shortcut must remain behind this edit in the existing queue.
+        val queued = queueKeyboardCommandAfterPaste(
+            onEpochRejected = { complete(RemoteTextEditResult.Stale) },
+        ) {
+            val result = synchronized(stateLock) {
+                val socket = input
+                if (!context.isValid || socket == null || closed || !foreground ||
+                    !acceptingCommands || !mutableSession.value.connection.isSessionUsable
+                ) {
+                    RemoteTextEditResult.Stale
+                } else {
+                    // Prevent lifecycle replacement from swapping the socket while this bounded
+                    // edit is queued. The context check itself is atomic and never takes this lock.
+                    dispatchStarted.set(true)
+                    try {
+                        when (socket.sendTextEdit(
+                            deleteBefore = deleteBefore,
+                            insertText = insertText,
+                            layout = layout.toProtocolLayout(),
+                            heldModifiers = keyboardState.modifiersSnapshot(),
+                            lineBreakMode = CommittedTextLineBreakMode.SHIFT_ENTER,
+                            isCurrent = { context.isValid },
+                        )) {
+                            HidTextEditResult.SUBMITTED -> RemoteTextEditResult.Submitted
+                            HidTextEditResult.INVALID_RANGE -> RemoteTextEditResult.Rejected(
+                                RemoteTextEditRejection.InvalidRange,
+                            )
+                            HidTextEditResult.UNSUPPORTED_TEXT -> RemoteTextEditResult.Rejected(
+                                RemoteTextEditRejection.UnsupportedText,
+                            )
+                            HidTextEditResult.MODIFIER_CONFLICT -> RemoteTextEditResult.Rejected(
+                                RemoteTextEditRejection.ModifierConflict,
+                            )
+                            HidTextEditResult.STALE -> RemoteTextEditResult.Stale
+                            HidTextEditResult.UNKNOWN -> RemoteTextEditResult.Unknown
+                        }
+                    } catch (_: Exception) {
+                        RemoteTextEditResult.Unknown
+                    }
+                }
+            }
+            // Invalidate before this job completes, so dependent edits cannot overtake rejection.
+            complete(result)
+        }
+        if (queued == null) {
+            complete(RemoteTextEditResult.Stale)
+        } else {
+            queued.invokeOnCompletion {
+                if (!completion.isDone) {
+                    complete(
+                        if (dispatchStarted.get()) RemoteTextEditResult.Unknown else RemoteTextEditResult.Stale,
+                    )
+                }
+            }
+        }
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation {
+                context.invalidate()
+                queued?.cancel()
+            }
+            completion.whenComplete { result, _ ->
+                continuation.resumeWith(Result.success(result))
+            }
+        }
+    }
+
+    override fun key(key: RemoteKey, pressed: Boolean) {
+        queueKey(key, pressed)
+    }
+
+    override fun key(key: RemoteKey, pressed: Boolean, context: RemoteTextEditContext) {
+        queueKey(key, pressed, context)
+    }
+
+    private fun queueKey(key: RemoteKey, pressed: Boolean, context: RemoteTextEditContext? = null) {
+        if (pressed && context?.isValid == false) return
+        val queued = queueKeyboardCommandAfterPaste(
+            onEpochRejected = { context?.invalidate() },
+        ) {
+            if (!pressed || context?.isValid != false) {
+                val sent = try {
+                    keyNow(key, pressed)
+                } catch (_: Exception) {
+                    false
+                }
+                if (!sent) context?.invalidate()
+            }
+        }
+        if (queued == null) context?.invalidate()
+    }
+
+    override fun tapKey(key: RemoteKey, context: RemoteTextEditContext) {
+        if (!context.isValid) return
+        val queued = queueKeyboardCommandAfterPaste(
+            onEpochRejected = context::invalidate,
+        ) {
+            synchronized(stateLock) {
+                if (!context.isValid) return@synchronized
+                val pressed = runCatching { keyNow(key, true) }.getOrDefault(false)
+                // Once the down may have been sent, always attempt its release even if the UI
+                // invalidates the context during that send.
+                val released = runCatching { keyNow(key, false) }.getOrDefault(false)
+                if (!pressed || !released) context.invalidate()
+            }
+        }
+        if (queued == null) context.invalidate()
+    }
+
+    private fun keyNow(key: RemoteKey, pressed: Boolean): Boolean {
+        val socket: NanoKvmInputSocket?
+        val report: HidKeyboardReport
+        synchronized(stateLock) {
+            socket = input
+            val modifier = key.toModifier()
+            val usage = key.toUsage()
+            when {
+                modifier != null && pressed -> keyboardState.press(modifier)
+                modifier != null -> keyboardState.release(modifier)
+                usage != null && pressed -> keyboardState.press(usage)
+                usage != null -> keyboardState.release(usage)
+                else -> Unit
+            }
+            report = keyboardState.snapshot()
+        }
+        return socket?.sendKeyboard(report) == true
     }
 
     override fun releaseAllInput() {

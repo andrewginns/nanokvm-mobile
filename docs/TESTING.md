@@ -47,6 +47,34 @@ With a booted emulator or USB device:
 The video test creates a native WebRTC peer and catches native-library or
 process-abort regressions. It does not prove an appliance video session.
 
+### Native keyboard corrections
+
+`NativeKeyboardInstrumentedTest` exercises the production editor with a recording
+input sink and compares completed edits with Android's standard `EditText`.
+Run it on a disposable emulator; it does not connect to a NanoKVM or prove a
+particular vendor keyboard's behavior.
+
+For on-screen keyboard QA, install the debug app and Android test APK on that
+emulator, then run this opt-in live fixture with its explicit serial:
+
+```powershell
+adb -s emulator-5554 shell am instrument -w -e class 'org.nanokvm.mobile.NativeKeyboardInstrumentedTest#standardEditorKeepsSuggestionsAndVoiceInputAvailable' -e nativeImeLiveMs 180000 org.nanokvm.mobile.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The fixture stays responsive for up to five minutes and publishes a test-only
+all-window accessibility tree to `cache/native-ime-windows.xml` in the app's
+private storage. Read it using
+`adb -s emulator-5554 shell run-as org.nanokvm.mobile cat cache/native-ime-windows.xml`.
+Its root attributes contain the recording
+sink's host text, native editor text/selection and remaining live time. Use key
+and suggestion bounds from the IME window to tap the real keyboard; injected
+text bypasses autocorrect. Use synthetic phrases only. The cache is removed
+when the fixture ends, so expired snapshots must not be used for later taps.
+
+This instrumentation helper is absent from release builds. See the
+[keyboard repair plan and results](SAMSUNG_KEYBOARD_FIX_PLAN.md) for the captured
+baseline and device coverage.
+
 Choose Android versions based on the change. At minimum, exercise the oldest
 supported behavior affected by the change and the current target API. A public
 APK also needs a representative physical phone; an emulator does not prove
