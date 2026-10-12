@@ -630,6 +630,11 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("é".repeat(32_769))
         assertClipboardEditorText("original")
         composeRule.onNodeWithTag("clipboard-confirm").assertIsNotEnabled()
+        // Older IMEs can echo the retained text while resynchronizing after rejection.
+        // This is not a new edited draft and must not re-enable sending stale content.
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("original")
+        assertClipboardEditorText("original")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsNotEnabled()
         composeRule.onNodeWithText("That edit exceeds 65536 UTF-8 bytes", substring = true)
             .performScrollTo().assertIsDisplayed()
         composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }

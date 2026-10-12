@@ -2033,8 +2033,13 @@ private fun ClipboardPasteDialog(
                                 )
                             ) {
                                 is ClipboardPayloadAnalysis.Accepted -> {
-                                    payload = analysis.payload
-                                    editTooLarge = false
+                                    // An IME may echo the retained value after a rejected edit.
+                                    // Only changed, valid text resolves that rejection; an echo
+                                    // must not silently authorize sending the stale draft.
+                                    if (analysis.payload.text != payload.text) {
+                                        payload = analysis.payload
+                                        editTooLarge = false
+                                    }
                                 }
                                 ClipboardPayloadAnalysis.TooLarge -> editTooLarge = true
                             }
