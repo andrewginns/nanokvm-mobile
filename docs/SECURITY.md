@@ -106,8 +106,12 @@ typed as one destination-bound, cancellable operation with global progress and
 no retry or replay.
 
 The confirmation surface shows the destination, target keyboard layout, total
-size, chunk count, unsupported-character warnings, and a bounded preview;
-accepted text is never sent automatically. Pasted line breaks are emitted as
+size, chunk count, unsupported-character warnings, and a bounded multiline
+editor. Editing recalculates this review; only an explicit Send types the
+edited content. Empty or oversized edits cannot be sent. Sensitive text stays
+hidden until revealed, and editor drafts are memory-only and cleared with the
+review on dismissal, recreation, backgrounding, or session change. The remote
+keyboard is suspended while this local editor is open. Pasted line breaks are emitted as
 Shift+Enter. Multiline IME commits use the same normalization, overall bound,
 chunk plan, and safer line-break mapping because Android does not reliably
 identify their source. Physical Enter and editor-action Enter remain unchanged,

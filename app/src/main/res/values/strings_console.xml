@@ -177,11 +177,13 @@
         <item quantity="other">%1$d chunks</item>
     </plurals>
     <string name="console_clipboard_sensitive_hidden">Sensitive clipboard text is hidden</string>
-    <string name="console_clipboard_preview_truncated">Preview shortened; the full text will be typed after confirmation.</string>
+    <string name="console_clipboard_edit_label">Text to send</string>
+    <string name="console_clipboard_edit_hint">Edit the text before sending. Nothing is typed until you tap Send.</string>
+    <string name="console_clipboard_edit_too_long">That edit exceeds %1$d UTF-8 bytes and was not kept. Shorten the text before sending.</string>
     <string name="console_clipboard_reveal_sensitive">Reveal text</string>
     <string name="console_clipboard_hide_sensitive">Hide text</string>
     <string name="console_clipboard_hid_explanation">NanoKVM will type this as keyboard input into the currently focused remote field. Text is processed in chunks of at most 1,024 UTF-8 bytes as one cancellable operation. It is not a shared or bidirectional clipboard.</string>
-    <string name="console_clipboard_type_remote">Type into remote</string>
+    <string name="console_clipboard_type_remote">Send</string>
     <string name="console_clipboard_warning_newline">Line breaks will be typed as Shift+Enter. The remote application decides how that shortcut behaves.</string>
     <string name="console_clipboard_warning_tab">Contains tabs that may move remote focus.</string>
     <string name="console_clipboard_warning_control">Contains other control characters.</string>

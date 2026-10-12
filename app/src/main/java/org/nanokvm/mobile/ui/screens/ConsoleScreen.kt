@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitScreen
@@ -64,6 +65,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -98,6 +100,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -108,6 +112,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
@@ -116,6 +121,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.clipboard.ClipboardPayload
+import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalysis
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
@@ -553,6 +559,9 @@ internal fun ConsoleScreen(
         } else {
             when (val result = clipboardGateway.readDirectPlainText()) {
                 is ClipboardReadResult.Available -> {
+                    // The remote IME host must not reclaim focus from the local clipboard editor.
+                    keyboardVisible = false
+                    contextualInput.releaseAllInput()
                     revealSensitivePaste = false
                     pasteRequest = PendingClipboardPaste(
                         confirmation = PasteConfirmationRequest(result.payload, currentPasteTarget),
@@ -624,6 +633,8 @@ internal fun ConsoleScreen(
     ) {
         val sharedPayload = pendingSharedPaste ?: return@LaunchedEffect
         if (session.connection.isSessionUsable && pasteRequest == null) {
+            keyboardVisible = false
+            contextualInput.releaseAllInput()
             revealSensitivePaste = false
             pasteRequest = PendingClipboardPaste(
                 confirmation = PasteConfirmationRequest(sharedPayload, currentPasteTarget),
@@ -1290,7 +1301,7 @@ internal fun ConsoleScreen(
                 pasteRequest = null
                 revealSensitivePaste = false
             },
-            onConfirm = {
+            onConfirm = { editedPayload ->
                 val stillConnected = session.connection.isSessionUsable
                 val confirmation = request.confirmation
                 val stillBound = confirmation.remainsBoundTo(currentPasteTarget)
@@ -1301,7 +1312,7 @@ internal fun ConsoleScreen(
                             profileId = confirmation.target.profileId,
                             authority = confirmation.target.authority,
                             sessionGeneration = confirmation.target.sessionGeneration,
-                            content = confirmation.payload.text,
+                            content = editedPayload.text,
                             keyboardLayout = request.keyboardLayout,
                         ),
                     )
@@ -1942,28 +1953,27 @@ private fun ClipboardPasteDialog(
     revealSensitive: Boolean,
     onRevealSensitive: () -> Unit,
     onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
+    onConfirm: (ClipboardPayload) -> Unit,
 ) {
-    val payload = request.payload
-    val previewHidden = payload.isSensitive && !revealSensitive
-    val previewText = remember(payload, previewHidden) {
-        if (previewHidden) {
-            ""
-        } else if (payload.characterCount <= CLIPBOARD_PREVIEW_MAX_CODE_POINTS) {
-            payload.text
-        } else {
-            payload.text.substring(
-                0,
-                payload.text.offsetByCodePoints(0, CLIPBOARD_PREVIEW_MAX_CODE_POINTS),
-            )
-        }
+    // Clipboard text is deliberately never saveable or retained beyond this exact request.
+    var payload by remember(request) { mutableStateOf(request.payload) }
+    var editTooLarge by remember(request) { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val softwareKeyboard = LocalSoftwareKeyboardController.current
+    val dismissEditor = {
+        focusManager.clearFocus()
+        softwareKeyboard?.hide()
+        onDismiss()
     }
-    val previewTruncated = previewText.length < payload.text.length
+    val previewHidden = payload.isSensitive && !revealSensitive
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismissEditor,
         title = { Text(stringResource(R.string.console_clipboard_preview_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     stringResource(
                         R.string.console_clipboard_destination,
@@ -2006,34 +2016,58 @@ private fun ClipboardPasteDialog(
                     ),
                     style = MaterialTheme.typography.labelMedium,
                 )
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("clipboard-preview"),
-                ) {
+                if (previewHidden) {
                     Text(
-                        text = if (previewHidden) {
-                            stringResource(R.string.console_clipboard_sensitive_hidden)
-                        } else {
-                            previewText
-                        },
+                        text = stringResource(R.string.console_clipboard_sensitive_hidden),
                         modifier = Modifier.padding(12.dp),
-                        maxLines = 6,
-                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                }
-                if (!previewHidden && previewTruncated) {
-                    Text(
-                        text = stringResource(R.string.console_clipboard_preview_truncated),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.testTag("clipboard-preview-truncated"),
+                } else {
+                    OutlinedTextField(
+                        value = payload.text,
+                        onValueChange = { editedText ->
+                            when (
+                                val analysis = ClipboardPayloadAnalyzer.analyzeDirectPlainTextAtIngress(
+                                    editedText,
+                                    isSensitive = request.payload.isSensitive,
+                                )
+                            ) {
+                                is ClipboardPayloadAnalysis.Accepted -> {
+                                    payload = analysis.payload
+                                    editTooLarge = false
+                                }
+                                ClipboardPayloadAnalysis.TooLarge -> editTooLarge = true
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("clipboard-editor"),
+                        label = { Text(stringResource(R.string.console_clipboard_edit_label)) },
+                        supportingText = {
+                            Text(
+                                if (editTooLarge) {
+                                    stringResource(
+                                        R.string.console_clipboard_edit_too_long,
+                                        ClipboardPayloadAnalyzer.MAX_RETAINED_PASTE_BYTES,
+                                    )
+                                } else {
+                                    stringResource(R.string.console_clipboard_edit_hint)
+                                },
+                            )
+                        },
+                        isError = editTooLarge,
+                        keyboardOptions = KeyboardOptions(
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Password,
+                        ),
+                        minLines = 3,
+                        maxLines = 6,
                     )
                 }
                 if (payload.isSensitive) {
-                    OutlinedButton(onClick = onRevealSensitive) {
+                    OutlinedButton(onClick = {
+                        focusManager.clearFocus()
+                        softwareKeyboard?.hide()
+                        onRevealSensitive()
+                    }) {
                         Icon(
                             imageVector = if (previewHidden) {
                                 Icons.Default.Visibility
@@ -2069,12 +2103,16 @@ private fun ClipboardPasteDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.console_cancel)) }
+            TextButton(onClick = dismissEditor) { Text(stringResource(R.string.console_cancel)) }
         },
         confirmButton = {
             TextButton(
-                onClick = onConfirm,
-                enabled = true,
+                onClick = {
+                    focusManager.clearFocus()
+                    softwareKeyboard?.hide()
+                    onConfirm(payload)
+                },
+                enabled = payload.text.isNotEmpty() && !editTooLarge,
                 modifier = Modifier.testTag("clipboard-confirm"),
             ) {
                 Text(stringResource(R.string.console_clipboard_type_remote))
@@ -2089,8 +2127,6 @@ private fun ClipboardTextWarning.stringResourceId(): Int = when (this) {
     ClipboardTextWarning.ContainsOtherControlCharacter ->
         R.string.console_clipboard_warning_control
 }
-
-private const val CLIPBOARD_PREVIEW_MAX_CODE_POINTS = 2_048
 
 @Composable
 private fun ConsoleControlSideSurface(
