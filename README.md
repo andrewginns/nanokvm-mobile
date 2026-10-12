@@ -164,6 +164,14 @@ share it as an update build. `main` identifies itself as the next development
 version; check out a release tag when you need the exact source for a published
 APK.
 
+For a private update to an existing development installation, use
+`scripts/build-development-update.ps1` with the preceding APK and the established
+external development keystore, as required by [AGENTS.md](AGENTS.md). Add
+`-Compact` for an attachment under 20 MiB: this uses the existing optimized
+`benchmark` variant and compresses native libraries while retaining all four
+ABIs. It is signed with the same development identity and is not a production
+release. Android extracts the compressed native libraries during installation.
+
 The complete maintainer verification commands are in
 [Testing](docs/TESTING.md).
 

@@ -4,6 +4,7 @@ param(
     [string]$PreviousApk,
     [string]$KeystorePath,
     [string]$OutputPath,
+    [switch]$Compact,
     [string]$Gradle = ".\gradlew.bat"
 )
 
@@ -39,10 +40,13 @@ if (-not $versionNameMatch.Success -or -not $versionCodeMatch.Success) {
 }
 $sourceVersionName = $versionNameMatch.Groups[1].Value
 $sourceVersionCode = [long]$versionCodeMatch.Groups[1].Value
-$builtApk = Join-Path $repository "app\build\outputs\apk\debug\app-debug.apk"
+$variant = if ($Compact) { "benchmark" } else { "debug" }
+$assembleTask = if ($Compact) { ":app:assembleBenchmark" } else { ":app:assembleDebug" }
+$artifactLabel = if ($Compact) { "compact" } else { "debug" }
+$builtApk = Join-Path $repository "app\build\outputs\apk\$variant\app-$variant.apk"
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-update-compatible-debug.apk"
+        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-update-compatible-$artifactLabel.apk"
     )
 }
 $absoluteOutput = [IO.Path]::GetFullPath($OutputPath)
@@ -54,7 +58,8 @@ try {
         "-Pkotlin.compiler.execution.strategy=in-process" `
         --dependency-verification=strict `
         "-Pnanokvm.developmentKeystore=$resolvedKeystore" `
-        :app:assembleDebug
+        "-Pnanokvm.compactDevelopmentApk=$($Compact.IsPresent.ToString().ToLowerInvariant())" `
+        $assembleTask
     if ($LASTEXITCODE -ne 0) {
         throw "Development update build failed with exit code $LASTEXITCODE."
     }
@@ -64,6 +69,10 @@ try {
         -CandidateApk $builtApk
     if ($LASTEXITCODE -ne 0) {
         throw "Development update verification failed with exit code $LASTEXITCODE."
+    }
+
+    if ($Compact -and (Get-Item -LiteralPath $builtApk).Length -ge 20MB) {
+        throw "The compact development APK must be smaller than 20 MiB for private attachment delivery."
     }
 
     $outputDirectory = Split-Path -Parent $absoluteOutput
