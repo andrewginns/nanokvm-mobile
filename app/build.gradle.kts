@@ -85,7 +85,7 @@ val expectedProtobufLicenseSha256 =
 val expectedIjgNoticeSha256 =
     "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
 val expectedRuntimeComponentLicensesSha256 =
-    "838d1d9454954589abdd90717a2cdb5df05a589ac9dbc9ac0c0b8a31bee7cdbc"
+    "3ba169375c98e743e52427a43b0747d15a09750451f985ce37d1200f73f555a9"
 
 val generateBundledAboutAssets by tasks.registering(Sync::class) {
     group = "build"

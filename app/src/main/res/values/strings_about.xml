@@ -16,8 +16,8 @@
     <string name="about_document_runtime_components">Resolved runtime component licences</string>
     <string name="about_document_apache">Apache License 2.0</string>
     <string name="about_document_protobuf">Protocol Buffers 4.28.2 licence</string>
-    <string name="about_document_webrtc_wrapper">WebRTC Android wrapper licence · v144.7559.09</string>
-    <string name="about_document_webrtc">Complete WebRTC notices · v144.7559.09</string>
+    <string name="about_document_webrtc_wrapper">WebRTC Android wrapper licence · v150.7871.01</string>
+    <string name="about_document_webrtc">Complete WebRTC notices · v150.7871.01</string>
     <string name="about_document_ijg">Independent JPEG Group notice</string>
     <string name="about_document_privacy">Privacy notice</string>
     <string name="about_document_security">Security policy</string>

@@ -25,43 +25,45 @@ the exact resolved coordinate list and offline licence texts are bundled under
 | OkHttp | HTTPS, REST, WebSocket and MJPEG transport to the user-selected NanoKVM origin | `INTERNET`; NanoKVM address, login request, in-memory session cookie, video and input | Apache-2.0 | Protocol owner; each dependency PR |
 | Kotlin Coroutines | Structured asynchronous session, transport and video work | In-process state only | Apache-2.0 | App maintainers; each dependency PR |
 | Kotlin Serialization JSON | Encode and decode NanoKVM API envelopes | NanoKVM requests and responses | Apache-2.0 | Protocol owner; each dependency PR |
-| WebRTC SDK Android (`android-prefixed-stripped` 144.7559.09) | Receive-only NanoKVM H.264 WebRTC transport; software codecs are stripped and Android hardware decode is required | `INTERNET` and `ACCESS_NETWORK_STATE`; authenticated LAN WebSocket signaling, appliance-supplied STUN/TURN peers and ICE credentials/candidates, local interface/connectivity/address metadata, and inbound video only; no microphone, camera, location, analytics, or developer cloud. Native logging is discarded through a no-op `LS_NONE` logger and guarded by unit, runtime, minification, and logcat regression review. | Wrapper MIT; WebRTC BSD-3-Clause and bundled third-party licences; see [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | Video/security owners; exact-version, native-ABI, licence, size, privacy/logging, and appliance review on every update |
+| WebRTC SDK Android (`android-prefixed-stripped` 150.7871.01) | Receive-only NanoKVM H.264 WebRTC transport; software codecs are stripped and Android hardware decode is required | `INTERNET` and `ACCESS_NETWORK_STATE`; authenticated LAN WebSocket signaling, appliance-supplied STUN/TURN peers and ICE credentials/candidates, local interface/connectivity/address metadata, and inbound video only; no microphone, camera, location, analytics, or developer cloud. Native logging is discarded through a no-op `LS_NONE` logger and guarded by unit, runtime, minification, and logcat regression review. | Wrapper MIT; WebRTC BSD-3-Clause and bundled third-party licences; see [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | Video/security owners; exact-version, native-ABI, licence, size, privacy/logging, and appliance review on every update |
 
 There are no analytics, advertising, crash-reporting, cloud-storage, social,
 location, or third-party authentication SDKs. Runtime dependencies must not be
 added without updating this inventory and the security/data-flow documentation.
 
 The stripped WebRTC AAR is pinned by SHA-256 in dependency verification. Version
-144.7559.09 is 13,822,983 bytes and contains arm64-v8a, armeabi-v7a, x86, and
-x86_64 native libraries. Their uncompressed total is 29,058,732 bytes
-(7,527,464 / 4,478,208 / 8,531,724 / 8,521,336 bytes respectively). Record the
+150.7871.01 is 14,314,150 bytes and contains arm64-v8a, armeabi-v7a, x86, and
+x86_64 native libraries. Their uncompressed total is 29,538,576 bytes
+(7,707,408 / 4,489,444 / 8,790,964 / 8,550,760 bytes respectively). Record the
 actual universal APK and per-ABI/AAB download-size change whenever it is updated;
 the AAR size is evidence about the dependency, not a claim about delivered size.
+
+The [October 2026 review](DEPENDENCY_REVIEW_2026-10.md) records the grouped
+update's artifact verification, compatibility checks and APK/AAB size comparison.
 
 ## Build and test dependencies
 
 | Component | Purpose | Shipped in APK | Licence |
 | --- | --- | --- | --- |
-| Android Gradle Plugin 9.3.1 and Gradle Wrapper 9.7.0 | Compile, shrink, verify and package Android variants | No | Apache-2.0 |
+| Android Gradle Plugin 9.4.1 and Gradle Wrapper 9.8.1 | Compile, shrink, verify and package Android variants | No | Apache-2.0 |
 | Kotlin Compose and Serialization plugins | Kotlin compilation and generated serializers | No | Apache-2.0 |
 | JUnit 4 and AndroidX Test/Espresso/Compose Test | JVM and device assertions | No | EPL-1.0 / Apache-2.0 |
 | MockWebServer and OkHttp TLS | Deterministic protocol and certificate tests | No | Apache-2.0 |
 | AndroidX Macrobenchmark and UI Automator | Out-of-process startup measurement against the minified benchmark APK | No | Apache-2.0 |
 | AndroidX Baseline Profile Gradle plugin | Generate, merge, rewrite and package app-specific Baseline and Startup Profiles | No | Apache-2.0 |
-| CycloneDX Gradle plugin 3.4.0 | Generate the verified release-runtime software bill of materials | No | Apache-2.0 |
+| CycloneDX Gradle plugin 3.5.1 | Generate the verified release-runtime software bill of materials | No | Apache-2.0 |
 
 The `benchmark` build type is a minified, profileable copy of `release` signed
 with the standard local debug key. It exists only for controlled performance and
 release-like testing; it is not a distributable artifact.
 
 Macrobenchmark remains on the stable AndroidX 1.4.1 line. The Baseline Profile
-Gradle plugin alone uses 1.5.0-beta01 because the 1.5 line is the first to
-support AGP 9's new DSL; stable 1.4.1 rejects AGP 9 application modules during
-configuration. Reassess this narrow pre-release exception when AndroidX 1.5
-reaches stable.
+Gradle plugin uses stable 1.5.0, which supports AGP 9's new DSL. This ends the
+previous 1.5.0-beta01 exception; the proposed 1.6.0-alpha01 is unnecessary for
+the current build and test platform.
 
 Biometric 1.1.0 remains the current stable release but declares the obsolete
-Fragment 1.2.5 transitively. The app therefore pins stable Fragment 1.8.9: its
+Fragment 1.2.5 transitively. The app therefore pins stable Fragment 1.9.1: its
 Activity Result integration is required for the Android 17 local-network
 permission launcher hosted by `FragmentActivity`. Keep this explicit override
 until Biometric's stable dependency graph no longer selects the pre-Activity-

@@ -21,9 +21,9 @@ replace, these licence texts and notices.
 
 ## WebRTC SDK Android wrapper
 
-Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:144.7559.09`
+Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:150.7871.01`
 
-Source: <https://github.com/webrtc-sdk/android/tree/v144.7559.09>
+Source: <https://github.com/webrtc-sdk/android/tree/v150.7871.01>
 
 The exact upstream wrapper licence is bundled at
 `app/src/main/assets/open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt`;
@@ -51,7 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## WebRTC
 
-Exact source: <https://github.com/webrtc-sdk/webrtc/tree/b1800a61db8320af5c14456c13622d8b85b1ed39>
+Exact source: <https://github.com/webrtc-sdk/webrtc/tree/73cb8180f7258ee292878d6edd05177f41883962>
 
 Copyright (c) 2011, The WebRTC project authors. All rights reserved.
 
@@ -82,14 +82,14 @@ WebRTC incorporates further third-party components. The generated notice bundle
 for the exact pinned wrapper release is preserved byte-for-byte at
 `app/src/main/assets/open_source_licenses/WEBRTC.md` and is included in the
 application for offline review. Its provenance is the upstream
-[`v144.7559.09` notice file](https://github.com/webrtc-sdk/android/blob/v144.7559.09/Licenses/WEBRTC.md),
+[`v150.7871.01` notice file](https://github.com/webrtc-sdk/android/blob/v150.7871.01/Licenses/WEBRTC.md),
 and its SHA-256 is
 `d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e`.
 
 That generated file references, but does not itself contain, libjpeg-turbo's
 `README.ijg`. The exact referenced file is bundled separately at
 `app/src/main/assets/open_source_licenses/README.ijg` from libjpeg-turbo commit
-[`6383cf609c1f63c18af0f59b2738caa0c6c7e379`](https://chromium.googlesource.com/chromium/deps/libjpeg_turbo/+/6383cf609c1f63c18af0f59b2738caa0c6c7e379/README.ijg);
+[`640f254ad0fa03f6b1f29f89b7dd9366f2f6e533`](https://chromium.googlesource.com/chromium/deps/libjpeg_turbo/+/640f254ad0fa03f6b1f29f89b7dd9366f2f6e533/README.ijg);
 its SHA-256 is
 `75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6`.
 As required there: this software is based in part on the work of the Independent
