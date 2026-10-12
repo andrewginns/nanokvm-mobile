@@ -102,11 +102,11 @@ class ProcessRestartInstrumentedTest {
     private fun killBackgroundTargetAndWait(): Boolean {
         val deadline = SystemClock.uptimeMillis() + UI_TIMEOUT_MS
         do {
-            // Older Android versions can take time to finish the background transition
-            // before am kill considers the process eligible. Require actual process exit;
-            // a disappeared window alone is already true after pressing Home.
+            // API 26's default all-users package lookup can silently skip the target.
+            // Select the current user and require actual process exit; a disappeared
+            // window alone is already true after pressing Home.
             if (device.hasObject(By.pkg(TARGET_PACKAGE))) return false
-            device.executeShellCommand("am kill $TARGET_PACKAGE")
+            device.executeShellCommand("am kill --user current $TARGET_PACKAGE")
             if (processId().isBlank()) return true
             SystemClock.sleep(100)
         } while (SystemClock.uptimeMillis() < deadline)
