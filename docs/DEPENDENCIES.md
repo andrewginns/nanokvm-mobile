@@ -41,6 +41,16 @@ the AAR size is evidence about the dependency, not a claim about delivered size.
 The [October 2026 review](DEPENDENCY_REVIEW_2026-10.md) records the grouped
 update's artifact verification, compatibility checks and APK/AAB size comparison.
 
+The 0.3.13 release's refreshed strict verification also covers the previously
+omitted Guava 33.7.1-jre parent POM, Jackson 2.22.2 base and text-dataformat parent
+POMs, and JUnit 6.1.3 BOM Gradle module metadata. These describe versions already
+present in the verified build dependency graph; no dependency version was
+changed. Each added SHA-256 was independently computed from fresh HTTPS downloads
+from both `repo.maven.apache.org` and `repo1.maven.org`, checked against the
+published checksum sidecar, and compared with the cached artifact. This fills
+missing verification entries without replacing checksums or relaxing strict
+verification.
+
 ## Build and test dependencies
 
 | Component | Purpose | Shipped in APK | Licence |
