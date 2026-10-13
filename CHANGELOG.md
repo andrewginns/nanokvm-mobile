@@ -7,6 +7,43 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.13] - 2026-10-13 (pre-release candidate)
+
+Android version code: **23**. This candidate adds editable clipboard review and
+keeps keyboard shortcuts ahead of View and zoom controls.
+
+### Changed
+
+- Edit pasted text locally in the confirmation dialog before explicitly sending
+  it to the connected host. Counts, warnings and chunk previews follow the edited
+  text; empty or oversized drafts cannot be sent.
+- Keep sensitive clipboard text concealed until Reveal. Cancel, session changes
+  and screen recreation discard the local draft and its approval. Editing the
+  draft releases remote keyboard focus and does not type into the host.
+- Place View and zoom controls after the keyboard shortcuts in the native
+  keyboard toolbar.
+- Preserve oversized-edit rejection on Android 8 when the IME repeats the
+  unchanged text during synchronization.
+- Include the previously merged Android build/runtime dependency refresh.
+  Updated runtime source mappings and licence notices accompany the release.
+- Add an opt-in compact development build. Public production APKs retain the
+  guarded release build and established production signing lineage.
+
+### Compatibility and validation
+
+- Android 8.0 / API 26 or later; application ID remains `org.nanokvm.mobile`.
+  No new permissions, telemetry, persistent storage or appliance API contracts.
+- Production updates continue from public v0.3.12/code 19. The privately tested
+  development APKs (codes 20–22) use a different signer and cannot be updated
+  in place by the production APK.
+- The approved development candidate passed the strict build gate, 618 JVM
+  tests, focused clipboard/toolbar checks on API 26 and 37, real Gboard editing,
+  process-restoration checks and an ARM64 native WebRTC smoke test. The owner
+  tested and approved that candidate; its device/appliance details were not
+  recorded. Final production artifact checks are recorded with the release.
+- Broader physical-device, appliance, accessibility and endurance coverage is
+  not implied. See the release notes for the exact signed-artifact test scope.
+
 ## [0.3.12] - 2026-09-07 (pre-release candidate)
 
 Android version code: **19**. This candidate includes the keyboard reopening fix

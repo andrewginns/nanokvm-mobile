@@ -122,8 +122,9 @@ provenance requirements are documented in [Distribution](docs/DISTRIBUTION.md).
 - WebRTC is attempted first only when explicitly selected and may contact
   appliance-supplied ICE/STUN/TURN endpoints before falling back to H.264 or
   MJPEG.
-- Phone clipboard and share-target text is previewed, split into bounded
-  1,024-byte UTF-8 chunks when needed, and typed as one USB HID operation.
+- Phone clipboard and share-target text can be edited in a local multiline
+  review before explicitly sending it. The edited text is split into bounded
+  1,024-byte UTF-8 chunks when needed and typed as one USB HID operation.
   Pasted line breaks use Shift+Enter. This is not a shared or bidirectional
   host clipboard, and the remote application still decides what shortcuts do.
 - Horizontal scrolling uses Shift+wheel compatibility because NanoKVM exposes
@@ -162,6 +163,14 @@ local machine's debug certificate and cannot update the published APK. Do not
 share it as an update build. `main` identifies itself as the next development
 version; check out a release tag when you need the exact source for a published
 APK.
+
+For a private update to an existing development installation, use
+`scripts/build-development-update.ps1` with the preceding APK and the established
+external development keystore, as required by [AGENTS.md](AGENTS.md). Add
+`-Compact` for an attachment under 20 MiB: this uses the existing optimized
+`benchmark` variant and compresses native libraries while retaining all four
+ABIs. It is signed with the same development identity and is not a production
+release. Android extracts the compressed native libraries during installation.
 
 The complete maintainer verification commands are in
 [Testing](docs/TESTING.md).

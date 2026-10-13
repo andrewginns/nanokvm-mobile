@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.macrobenchmark
 
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -57,10 +58,13 @@ class ProcessRestartInstrumentedTest {
         val originalPid = processId()
         assertTrue("Target process was not running before the restart exercise.", originalPid.isNotBlank())
 
-        device.executeShellCommand("am kill $TARGET_PACKAGE")
+        assertTrue(
+            "Target window did not leave the foreground.",
+            device.wait(Until.gone(By.pkg(TARGET_PACKAGE)), UI_TIMEOUT_MS),
+        )
         assertTrue(
             "Android did not terminate the background target process.",
-            device.wait(Until.gone(By.pkg(TARGET_PACKAGE)), UI_TIMEOUT_MS),
+            killBackgroundTargetAndWait(),
         )
         assertEquals("", processId())
 
@@ -94,6 +98,20 @@ class ProcessRestartInstrumentedTest {
 
     private fun processId(): String =
         device.executeShellCommand("pidof $TARGET_PACKAGE").trim()
+
+    private fun killBackgroundTargetAndWait(): Boolean {
+        val deadline = SystemClock.uptimeMillis() + UI_TIMEOUT_MS
+        do {
+            // API 26's default all-users package lookup can silently skip the target.
+            // Select the current user and require actual process exit; a disappeared
+            // window alone is already true after pressing Home.
+            if (device.hasObject(By.pkg(TARGET_PACKAGE))) return false
+            device.executeShellCommand("am kill --user current $TARGET_PACKAGE")
+            if (processId().isBlank()) return true
+            SystemClock.sleep(100)
+        } while (SystemClock.uptimeMillis() < deadline)
+        return false
+    }
 
     private fun assertShellSucceeded(command: String, expected: String) {
         val output = device.executeShellCommand(command).trim()

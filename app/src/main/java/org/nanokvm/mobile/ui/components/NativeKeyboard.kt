@@ -202,21 +202,6 @@ fun ConsoleKeyboard(
                         modifier = Modifier.heightIn(min = 48.dp),
                         colors = consoleFilterChipColors(),
                     )
-                    KeyChip(stringResource(R.string.console_view_top)) {
-                        onViewportAction(ViewportAction.FocusTop)
-                    }
-                    KeyChip(stringResource(R.string.console_view_centre)) {
-                        onViewportAction(ViewportAction.Center)
-                    }
-                    KeyChip(stringResource(R.string.console_view_bottom)) {
-                        onViewportAction(ViewportAction.FocusBottom)
-                    }
-                    KeyChip(stringResource(R.string.console_zoom_out_short)) {
-                        onViewportAction(ViewportAction.ZoomOut)
-                    }
-                    KeyChip(stringResource(R.string.console_zoom_in_short)) {
-                        onViewportAction(ViewportAction.ZoomIn)
-                    }
                     KeyChip(stringResource(R.string.console_key_backspace)) {
                         sendKey(RemoteKey.Backspace)
                     }
@@ -267,6 +252,21 @@ fun ConsoleKeyboard(
                         modifier = Modifier.heightIn(min = 48.dp),
                         colors = consoleFilterChipColors(),
                     )
+                    KeyChip(stringResource(R.string.console_view_top)) {
+                        onViewportAction(ViewportAction.FocusTop)
+                    }
+                    KeyChip(stringResource(R.string.console_view_centre)) {
+                        onViewportAction(ViewportAction.Center)
+                    }
+                    KeyChip(stringResource(R.string.console_view_bottom)) {
+                        onViewportAction(ViewportAction.FocusBottom)
+                    }
+                    KeyChip(stringResource(R.string.console_zoom_out_short)) {
+                        onViewportAction(ViewportAction.ZoomOut)
+                    }
+                    KeyChip(stringResource(R.string.console_zoom_in_short)) {
+                        onViewportAction(ViewportAction.ZoomIn)
+                    }
                     IconButton(
                         onClick = {
                             input.releaseAllInput()

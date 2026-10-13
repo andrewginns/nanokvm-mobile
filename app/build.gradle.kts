@@ -35,6 +35,10 @@ plugins {
 val developmentKeystorePath = providers
     .gradleProperty("nanokvm.developmentKeystore")
     .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEYSTORE"))
+val compactDevelopmentApk = providers
+    .gradleProperty("nanokvm.compactDevelopmentApk")
+    .map(String::toBooleanStrict)
+    .orElse(false)
 val developmentStorePassword = providers
     .gradleProperty("nanokvm.developmentStorePassword")
     .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_STORE_PASSWORD"))
@@ -579,7 +583,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
+        versionCode = 23
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -644,6 +648,16 @@ android {
     sourceSets.getByName("main").assets.srcDir(bundledAboutAssetsDirectory.get().asFile)
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("benchmark")) { variant ->
+        if (compactDevelopmentApk.get()) {
+            // The existing optimized development variant keeps all ABIs and app features.
+            // Compress native libraries for small private handoffs; Android extracts them.
+            variant.packaging.jniLibs.useLegacyPackaging.set(true)
+        }
+    }
 }
 
 tasks.named("preBuild").configure {

@@ -1,5 +1,8 @@
 package org.nanokvm.mobile
 
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
@@ -7,14 +10,17 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.util.Xml
 import android.view.PixelCopy
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
@@ -28,6 +34,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
@@ -42,6 +49,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
@@ -50,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalDensity
@@ -57,6 +67,7 @@ import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
@@ -115,6 +126,7 @@ import org.nanokvm.mobile.ui.theme.NanoKvmTheme
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.io.File
 
 /** Exercises the native console without requiring a reachable NanoKVM or stored credentials. */
 class ConsoleScreenInstrumentedTest {
@@ -123,6 +135,8 @@ class ConsoleScreenInstrumentedTest {
 
     private val backend = RecordingConsoleBackend()
     private val sessionDraftOwner = ConsoleSessionDraftOwner()
+    private var requestedOrientationToRestore: Int? = null
+    private var configurationOrientationToRestore: Int? = null
     private val profile = HostProfile(
         id = "instrumented-console",
         name = "Lab NanoKVM",
@@ -139,6 +153,15 @@ class ConsoleScreenInstrumentedTest {
             composeRule.activity.currentFocus?.clearFocus()
         }
         composeRule.waitForIdle()
+        requestedOrientationToRestore?.let { requestedOrientation ->
+            val originalOrientation = checkNotNull(configurationOrientationToRestore)
+            composeRule.runOnUiThread {
+                composeRule.activity.requestedOrientation = requestedOrientation
+            }
+            composeRule.waitUntil(timeoutMillis = 10_000L) {
+                composeRule.activity.resources.configuration.orientation == originalOrientation
+            }
+        }
     }
 
     @Test
@@ -450,6 +473,51 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun keyboardShortcutsPrecedeViewAndZoomActions() {
+        renderConsole()
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+
+        fun labels(node: androidx.compose.ui.semantics.SemanticsNode): List<String> {
+            val own = if (node.config.contains(SemanticsProperties.Text)) {
+                node.config[SemanticsProperties.Text].map { it.text }
+            } else {
+                emptyList()
+            }
+            return own + node.children.flatMap(::labels)
+        }
+        val accessoryLabels = labels(
+            composeRule.onNodeWithTag("keyboard-accessory").fetchSemanticsNode(),
+        )
+        val shortcutIds = listOf(
+            R.string.console_key_escape, R.string.console_key_tab, R.string.console_key_enter,
+            R.string.console_key_backspace, R.string.console_key_delete, R.string.console_key_control,
+            R.string.console_key_alt, R.string.console_key_shift, R.string.console_key_super,
+            R.string.console_key_arrow_left, R.string.console_key_arrow_up,
+            R.string.console_key_arrow_down, R.string.console_key_arrow_right,
+            R.string.console_ctrl_alt_delete, R.string.console_function_keys,
+        )
+        val viewIds = listOf(
+            R.string.console_view_top, R.string.console_view_centre, R.string.console_view_bottom,
+            R.string.console_zoom_out_short, R.string.console_zoom_in_short,
+        )
+        val shortcutPositions = shortcutIds.map { accessoryLabels.indexOf(composeRule.activity.getString(it)) }
+        val viewPositions = viewIds.map { accessoryLabels.indexOf(composeRule.activity.getString(it)) }
+        assertTrue("All keyboard shortcuts remain in the accessory", shortcutPositions.all { it >= 0 })
+        assertTrue("All view controls remain in the accessory", viewPositions.all { it >= 0 })
+        assertTrue("View and zoom follow every keyboard shortcut", shortcutPositions.max() < viewPositions.min())
+
+        viewIds.forEach { resource ->
+            composeRule.onNodeWithText(composeRule.activity.getString(resource))
+                .performScrollTo()
+                .assertIsDisplayed()
+                .performClick()
+        }
+        composeRule.runOnIdle {
+            assertTrue("View actions must not type into the remote", backend.committedText.isEmpty())
+        }
+    }
+
+    @Test
     fun phoneClipboardIsPreviewedBeforeTypingIntoTheBoundRemote() {
         val clipboard = ClipboardGateway {
             ClipboardReadResult.Available(
@@ -469,7 +537,229 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
-    fun multiChunkClipboardShowsBoundedPreviewAndShiftEnterDisclosure() {
+    fun clipboardEditsAreLocalUntilExplicitSendAndRecalculateMultilineReview() {
+        renderConsole(clipboardGateway = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("original clipboard"),
+            )
+        })
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("line one\r\nline two")
+        assertClipboardEditorText("line one\nline two")
+        composeRule.onNodeWithText("17 characters", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Line breaks will be typed as Shift+Enter", substring = true)
+            .performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertTrue(backend.pastedText.isEmpty())
+            assertTrue(backend.committedText.isEmpty())
+        }
+
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+        composeRule.runOnIdle { assertEquals(listOf("line one\nline two"), backend.pastedText) }
+        composeRule.onNodeWithTag("clipboard-editor").assertDoesNotExist()
+    }
+
+    @Test
+    fun emptyClipboardEditCannotSendAndTypingCanResumeLocally() {
+        renderConsole(clipboardGateway = ClipboardGateway {
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText("original"))
+        })
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsNotEnabled()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("replacement")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsEnabled().performClick()
+        composeRule.runOnIdle { assertEquals(listOf("replacement"), backend.pastedText) }
+    }
+
+    @Test
+    fun clipboardEditorTakesKeyboardFocusWithoutTypingIntoTheRemote() {
+        renderConsole(clipboardGateway = ClipboardGateway {
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText("original"))
+        })
+        composeRule.onNodeWithContentDescription("Show keyboard").performClick()
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performClick().performTextReplacement("local")
+        composeRule.onNodeWithTag("clipboard-editor").performTextInput("\nsecond line")
+        assertClipboardEditorText("local\nsecond line")
+        composeRule.runOnIdle {
+            assertTrue(backend.pastedText.isEmpty())
+            assertTrue(backend.committedText.isEmpty())
+        }
+        exposeLiveClipboardEditorIfRequested()
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.onNodeWithContentDescription("Show keyboard").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertTrue(backend.pastedText.isEmpty())
+            assertTrue(backend.committedText.isEmpty())
+        }
+    }
+
+    @Test
+    fun cancellingEditedClipboardAndOpeningAgainReadsFreshText() {
+        var clipboardText = "first clipboard"
+        var reads = 0
+        renderConsole(clipboardGateway = ClipboardGateway {
+            reads++
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText(clipboardText))
+        })
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("discard this draft")
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.runOnIdle {
+            assertTrue(backend.pastedText.isEmpty())
+            clipboardText = "fresh clipboard"
+        }
+
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        assertClipboardEditorText("fresh clipboard")
+        composeRule.runOnIdle { assertEquals(2, reads) }
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+        composeRule.runOnIdle { assertEquals(listOf("fresh clipboard"), backend.pastedText) }
+    }
+
+    @Test
+    fun oversizedClipboardEditIsRejectedAndCannotSendStaleText() {
+        renderConsole(clipboardGateway = ClipboardGateway {
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText("original"))
+        })
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("é".repeat(32_769))
+        assertClipboardEditorText("original")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsNotEnabled()
+        // Older IMEs can echo the retained text while resynchronizing after rejection.
+        // This is not a new edited draft and must not re-enable sending stale content.
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("original")
+        assertClipboardEditorText("original")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsNotEnabled()
+        composeRule.onNodeWithText("That edit exceeds 65536 UTF-8 bytes", substring = true)
+            .performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("shortened")
+        composeRule.onNodeWithTag("clipboard-confirm").assertIsEnabled().performClick()
+        composeRule.runOnIdle { assertEquals(listOf("shortened"), backend.pastedText) }
+    }
+
+    @Test
+    fun sensitiveClipboardEditorRequiresRevealAndCanHideEditedText() {
+        renderConsole(clipboardGateway = ClipboardGateway {
+            ClipboardReadResult.Available(
+                ClipboardPayloadAnalyzer.analyzeDirectPlainText("sensitive sample", isSensitive = true),
+            )
+        })
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").assertDoesNotExist()
+        composeRule.onNodeWithText("sensitive sample").assertDoesNotExist()
+        composeRule.onNodeWithText("Reveal text").performScrollTo().performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("edited sensitive sample")
+        composeRule.onNodeWithText("Hide text").performScrollTo().performClick()
+        composeRule.onNodeWithTag("clipboard-editor").assertDoesNotExist()
+        composeRule.onNodeWithText("edited sensitive sample").assertDoesNotExist()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithTag("clipboard-confirm").performClick()
+        composeRule.runOnIdle { assertEquals(listOf("edited sensitive sample"), backend.pastedText) }
+    }
+
+    @Test
+    fun clipboardEditorDoesNotRestoreAnEditedDraftOrApprovalAfterRecreation() {
+        val restorationTester = StateRestorationTester(composeRule)
+        val clipboard = ClipboardGateway {
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText("fresh sample"))
+        }
+        restorationTester.setContent {
+            val session by backend.session.collectAsState()
+            NanoKvmTheme {
+                ConsoleScreen(
+                    profile = profile,
+                    session = session,
+                    input = backend,
+                    videoSurface = backend,
+                    features = backend.features,
+                    onDisconnect = {},
+                    sessionDraftOwner = sessionDraftOwner,
+                    clipboardGateway = clipboard,
+                    onSharedPasteConsumed = {},
+                    onScrollSensitivityChange = {},
+                    onMjpegFrameDetectionEnabledChange = {},
+                    onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("discard on recreation")
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithTag("clipboard-editor").assertDoesNotExist()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        assertClipboardEditorText("fresh sample")
+    }
+
+    @Test
+    fun clipboardDraftAndApprovalAreDiscardedAcrossRealActivityRotation() {
+        var clipboardText = "before rotation"
+        var clipboardReads = 0
+        val clipboard = ClipboardGateway {
+            clipboardReads++
+            ClipboardReadResult.Available(ClipboardPayloadAnalyzer.analyzeDirectPlainText(clipboardText))
+        }
+        renderConsole(clipboardGateway = clipboard)
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("discard rotated draft")
+        val originalActivity = composeRule.activity
+        val originalOrientation = originalActivity.resources.configuration.orientation
+        assertTrue(
+            originalOrientation == Configuration.ORIENTATION_PORTRAIT ||
+                originalOrientation == Configuration.ORIENTATION_LANDSCAPE,
+        )
+        requestedOrientationToRestore = originalActivity.requestedOrientation
+        configurationOrientationToRestore = originalOrientation
+        val rotatedOrientation = if (originalOrientation == Configuration.ORIENTATION_PORTRAIT) {
+            Configuration.ORIENTATION_LANDSCAPE
+        } else {
+            Configuration.ORIENTATION_PORTRAIT
+        }
+        composeRule.runOnIdle {
+            clipboardText = "fresh after rotation"
+            originalActivity.requestedOrientation = if (rotatedOrientation == Configuration.ORIENTATION_LANDSCAPE) {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            val currentActivity = composeRule.activity
+            currentActivity !== originalActivity &&
+                currentActivity.resources.configuration.orientation == rotatedOrientation
+        }
+        val replacementActivity = composeRule.activity
+        assertTrue(replacementActivity !== originalActivity)
+        assertEquals(rotatedOrientation, replacementActivity.resources.configuration.orientation)
+        // Generic ComponentActivity does not reinstall the test content in onCreate. Reattach
+        // this same ConsoleScreen fixture to exercise its actual restored Activity state.
+        renderConsole(clipboardGateway = clipboard, activity = replacementActivity)
+        composeRule.onNodeWithTag("clipboard-editor").assertDoesNotExist()
+        composeRule.onNodeWithTag("clipboard-confirm").assertDoesNotExist()
+        composeRule.onNodeWithText("discard rotated draft").assertDoesNotExist()
+        composeRule.runOnIdle {
+            assertTrue(backend.pastedText.isEmpty())
+            assertTrue(backend.committedText.isEmpty())
+        }
+
+        composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
+        assertClipboardEditorText("fresh after rotation")
+        composeRule.runOnIdle { assertEquals(2, clipboardReads) }
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+    }
+
+    @Test
+    fun multiChunkClipboardShowsFullEditableTextAndShiftEnterDisclosure() {
         val text = "a".repeat(2_100) + "\nnext"
         val clipboard = ClipboardGateway {
             ClipboardReadResult.Available(
@@ -483,8 +773,8 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText(
             "Line breaks will be typed as Shift+Enter",
             substring = true,
-        ).assertIsDisplayed()
-        composeRule.onNodeWithTag("clipboard-preview-truncated").assertIsDisplayed()
+        ).performScrollTo().assertIsDisplayed()
+        assertClipboardEditorText(text)
         composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
 
         composeRule.onNodeWithTag("clipboard-confirm").performClick()
@@ -562,11 +852,75 @@ class ConsoleScreenInstrumentedTest {
         }
         composeRule.onNodeWithContentDescription("Type phone clipboard").performClick()
         composeRule.onNodeWithText("temporary preview").assertIsDisplayed()
+        composeRule.onNodeWithTag("clipboard-editor").performTextReplacement("temporary edited preview")
 
         composeRule.runOnIdle { sensitiveGeneration.longValue++ }
 
         composeRule.onNodeWithText("Type phone clipboard?").assertDoesNotExist()
         composeRule.runOnIdle { assertTrue(backend.pastedText.isEmpty()) }
+    }
+
+    private fun assertClipboardEditorText(expected: String) {
+        assertEquals(
+            expected,
+            composeRule.onNodeWithTag("clipboard-editor").fetchSemanticsNode()
+                .config[SemanticsProperties.EditableText].text,
+        )
+    }
+
+    private fun exposeLiveClipboardEditorIfRequested() {
+        val liveMs = InstrumentationRegistry.getArguments().getString("clipboardLiveMs")
+            ?.toLongOrNull()?.coerceIn(0L, 180_000L) ?: 0L
+        if (liveMs == 0L) return
+        // Optional synthetic-device QA keeps the production editor live without another
+        // UIAutomator connection taking ownership away from this instrumentation run.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        automation.serviceInfo = automation.serviceInfo.apply {
+            flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+        }
+        val output = File(instrumentation.targetContext.cacheDir, "clipboard-editor-windows.xml")
+        val nextOutput = File(instrumentation.targetContext.cacheDir, "clipboard-editor-windows.next.xml")
+        val end = SystemClock.uptimeMillis() + liveMs
+        try {
+            while (SystemClock.uptimeMillis() < end) {
+                // Live IME taps mutate Compose state outside test actions. Keep the test
+                // recomposer advancing while the instrumentation thread exposes the tree.
+                composeRule.mainClock.advanceTimeByFrame()
+                composeRule.waitForIdle()
+                nextOutput.writer().use { writer ->
+                    val xml = Xml.newSerializer().apply { setOutput(writer); startDocument("UTF-8", true) }
+                    fun writeNode(node: AccessibilityNodeInfo) {
+                        val bounds = android.graphics.Rect().also(node::getBoundsInScreen)
+                        xml.startTag(null, "node")
+                        xml.attribute(null, "text", node.text?.toString().orEmpty())
+                        xml.attribute(null, "content-desc", node.contentDescription?.toString().orEmpty())
+                        xml.attribute(null, "class", node.className?.toString().orEmpty())
+                        xml.attribute(null, "bounds", "[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]")
+                        for (index in 0 until node.childCount) node.getChild(index)?.let(::writeNode)
+                        xml.endTag(null, "node")
+                    }
+                    xml.startTag(null, "hierarchy")
+                    xml.attribute(null, "live-remaining-ms", (end - SystemClock.uptimeMillis()).coerceAtLeast(0L).toString())
+                    for (window in automation.windows) {
+                        xml.startTag(null, "window")
+                        xml.attribute(null, "type", window.type.toString())
+                        window.root?.let(::writeNode)
+                        xml.endTag(null, "window")
+                    }
+                    xml.endTag(null, "hierarchy")
+                    xml.endDocument()
+                }
+                check(nextOutput.renameTo(output)) { "Could not publish the complete live clipboard tree" }
+                SystemClock.sleep(500L)
+            }
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+            output.delete()
+            nextOutput.delete()
+        }
     }
 
     @Test
@@ -2439,9 +2793,10 @@ class ConsoleScreenInstrumentedTest {
         onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit = {},
         themeMode: ThemeMode = ThemeMode.SYSTEM,
         useDynamicColor: Boolean = true,
+        activity: ComponentActivity? = null,
     ) {
         val connectedSession = backend.session.value
-        composeRule.setContent {
+        val content: @Composable () -> Unit = {
             NanoKvmTheme(themeMode = themeMode, useDynamicColor = useDynamicColor) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -2492,6 +2847,11 @@ class ConsoleScreenInstrumentedTest {
                     }
                 }
             }
+        }
+        if (activity == null) {
+            composeRule.setContent(content)
+        } else {
+            composeRule.runOnUiThread { activity.setContent(content = content) }
         }
     }
 
