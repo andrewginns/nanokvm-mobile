@@ -18,6 +18,7 @@ class NanoKvmClient private constructor(
     val transport: OkHttpClient,
     private val ownsHttpClient: Boolean,
     val api: NanoKvmApi,
+    private val inputLease: NanoKvmInputLease,
 ) : Closeable {
     /** Builds an origin-scoped WebSocket handshake with the current NanoKVM cookie attached. */
     fun webSocketRequest(path: String): Request {
@@ -35,6 +36,8 @@ class NanoKvmClient private constructor(
             httpClient = transport,
             tokenStore = tokenStore,
             heartbeatIntervalMillis = heartbeatIntervalMillis,
+            managedControl = api.firmware == NanoKvmFirmware.NANOKVM_OS,
+            inputLease = inputLease,
         )
 
     /** Creates an explicit, non-reconnecting root/serial terminal connection. */
@@ -47,6 +50,7 @@ class NanoKvmClient private constructor(
 
     /** Forget this client session locally. Server logout is intentionally not called. */
     fun forgetSession() {
+        inputLease.reset()
         api.invalidateSessionScopedHandles()
         tokenStore.write(null)
     }
@@ -117,8 +121,9 @@ class NanoKvmClient private constructor(
             httpClient: OkHttpClient,
             ownsHttpClient: Boolean,
         ): NanoKvmClient {
-            val api = NanoKvmApi(endpoint, httpClient, tokenStore, DEFAULT_JSON)
-            return NanoKvmClient(endpoint, tokenStore, httpClient, ownsHttpClient, api)
+            val inputLease = NanoKvmInputLease()
+            val api = NanoKvmApi(endpoint, httpClient, tokenStore, DEFAULT_JSON, inputLease)
+            return NanoKvmClient(endpoint, tokenStore, httpClient, ownsHttpClient, api, inputLease)
         }
     }
 }

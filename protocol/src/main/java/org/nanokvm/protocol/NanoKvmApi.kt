@@ -25,7 +25,11 @@ class NanoKvmApi internal constructor(
     private val httpClient: OkHttpClient,
     private val tokenStore: SessionTokenStore,
     private val json: Json,
+    private val inputLease: NanoKvmInputLease = NanoKvmInputLease(),
 ) {
+    @Volatile
+    internal var firmware: NanoKvmFirmware = NanoKvmFirmware.UNKNOWN
+    internal var osSupport: NanoKvmOsSupport? = null
     private val scriptCatalogLock = Any()
     private var latestScriptCatalog: NanoKvmScriptCatalog? = null
     private val hidShortcutCatalogLock = Any()
@@ -43,6 +47,8 @@ class NanoKvmApi internal constructor(
         require(username.isNotBlank()) { "Username must not be blank" }
         require(password.isNotEmpty()) { "Password must not be empty" }
 
+        firmware = NanoKvmFirmware.UNKNOWN
+        osSupport = null
         val encryptedPassword = NanoKvmPasswordCipher.encrypt(password)
         val token = post(
             path = "/api/auth/login",
@@ -53,6 +59,22 @@ class NanoKvmApi internal constructor(
         invalidateSessionScopedHandles()
         tokenStore.write(token.token)
         return token
+    }
+
+    suspend fun osVideoCapabilities(): NanoKvmOsVideoCapabilities =
+        get("/api/vm/video/capabilities", serializer<NanoKvmOsVideoCapabilities>()).validated()
+
+    internal suspend fun osAccount(): NanoKvmOsAccount =
+        get("/api/auth/account", serializer<NanoKvmOsAccount>())
+
+    /** One validated OS batch; never falls through to Sipeed's sequential screen writes. */
+    suspend fun applyOsVideoSettings(settings: NanoKvmOsVideoSettings) {
+        check(firmware == NanoKvmFirmware.NANOKVM_OS && osSupport?.canConfigureVideo == true) {
+            "Video configuration is not available for this session"
+        }
+        val current = osVideoCapabilities()
+        require(current.accepts(settings)) { "Video settings are unavailable for the current input" }
+        postWithoutData("/api/vm/video", settings)
     }
 
     /** Returns the authenticated account name. */
@@ -495,6 +517,9 @@ class NanoKvmApi internal constructor(
 
     /** Triggers a guarded physical power or reset button press. */
     suspend fun pressGpio(action: GpioAction, durationMillis: Long = 800L) {
+        check(firmware != NanoKvmFirmware.NANOKVM_OS || inputLease.read() != null) {
+            "This session does not hold input control"
+        }
         require(durationMillis in 1L..30_000L) { "GPIO press duration must be 1..30000 ms" }
         postWithoutData(
             "/api/vm/gpio",
@@ -1009,6 +1034,7 @@ class NanoKvmApi internal constructor(
     }
 
     internal fun invalidateSessionScopedHandles() {
+        inputLease.reset()
         synchronized(scriptCatalogLock) {
             latestScriptCatalog = null
         }
@@ -1137,7 +1163,13 @@ class NanoKvmApi internal constructor(
         path: String,
         body: RequestType,
     ) {
-        val request = requestBuilder(path).post(
+        val request = requestBuilder(path).apply {
+            if (firmware == NanoKvmFirmware.NANOKVM_OS && path == "/api/vm/gpio") {
+                header("X-NanoKVM-Input-Lease", checkNotNull(inputLease.read()) {
+                    "This session does not hold input control"
+                })
+            }
+        }.post(
             json.encodeToString(body).toRequestBody(JSON_MEDIA_TYPE),
         ).build()
         executeEnvelope<Unit>(request, responseSerializer = null)
@@ -1184,9 +1216,19 @@ class NanoKvmApi internal constructor(
         responseSerializer,
     ) ?: throw InvalidApiResponseException("NanoKVM response for $path did not contain data")
 
-    private fun requestBuilder(path: String): Request.Builder = Request.Builder()
-        .url(endpoint.apiUrl(path))
-        .header("Accept", "application/json")
+    private fun requestBuilder(path: String): Request.Builder {
+        check(firmware != NanoKvmFirmware.NANOKVM_OS || path in NANO_KVM_OS_CORE_PATHS) {
+            "This operation has not been adapted for NanoKVM OS"
+        }
+        return Request.Builder()
+            .url(endpoint.apiUrl(path))
+            .header("Accept", "application/json")
+            .apply {
+                // OS browser logins are HttpOnly-cookie-only. Native clients explicitly opt in
+                // once, on the same request; stock Sipeed ignores this additional header.
+                if (path == "/api/auth/login") header("X-NanoKVM-Return-Token", "true")
+            }
+    }
 
     private suspend fun <T> executeEnvelope(
         request: Request,

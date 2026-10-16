@@ -49,6 +49,7 @@ data class NanoKvmVideoConfig(
     val h264StallTimeoutMillis: Long = 5_000L,
     val mjpegFirstFrameTimeoutMillis: Long = 5_000L,
     val mjpegStallTimeoutMillis: Long = 5_000L,
+    val allowMjpeg: Boolean = true,
 ) {
     init {
         require(maxMjpegFrameBytes > 0) { "Maximum MJPEG frame size must be positive" }
@@ -72,6 +73,9 @@ data class NanoKvmVideoConfig(
         }
     }
 }
+
+internal fun NanoKvmVideoConfig.transportChain(): List<NanoKvmVideoTransport> =
+    preference.transportChain().filter { allowMjpeg || it != NanoKvmVideoTransport.MJPEG }
 
 sealed interface NanoKvmVideoStatus {
     data class Connecting(val transport: NanoKvmVideoTransport) : NanoKvmVideoStatus
@@ -154,7 +158,7 @@ class NanoKvmVideoSession(
         }
         decoderReleased.whenComplete { _, _ ->
             if (isCurrent(run)) {
-                when (config.preference.transportChain().first()) {
+                when (config.transportChain().first()) {
                     NanoKvmVideoTransport.WEBRTC -> startWebRtc(run, surface, config)
                     NanoKvmVideoTransport.H264 -> startH264(run, surface, config)
                     NanoKvmVideoTransport.MJPEG -> error("MJPEG does not use a decoder Surface")
@@ -171,7 +175,13 @@ class NanoKvmVideoSession(
             generation
         }
         decoderReleased.whenComplete { _, _ ->
-            if (isCurrent(run)) startMjpeg(run, normalized)
+            if (isCurrent(run)) {
+                if (config.allowMjpeg) startMjpeg(run, normalized)
+                else notifyStatus(run, NanoKvmVideoStatus.Error(
+                    NanoKvmVideoTransport.MJPEG,
+                    IllegalStateException("MJPEG is unavailable for this capture input"),
+                ))
+            }
         }
     }
 
@@ -482,8 +492,8 @@ class NanoKvmVideoSession(
             dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.H264) }
         }
 
-        val h264Index = config.preference.transportChain().indexOf(NanoKvmVideoTransport.H264)
-        val nextTransport = config.preference.transportChain().getOrNull(h264Index + 1)
+        val h264Index = config.transportChain().indexOf(NanoKvmVideoTransport.H264)
+        val nextTransport = config.transportChain().getOrNull(h264Index + 1)
         if (nextTransport == NanoKvmVideoTransport.MJPEG) {
             notifyStatus(
                 run,

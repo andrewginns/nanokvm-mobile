@@ -84,3 +84,7 @@ semantics, and relevant external input. Run long video, WebRTC, Keystore,
 thermal, and performance cases on physical hardware; emulator results do not
 prove those behaviors. Record the actual matrix and do not imply coverage that
 was not run.
+
+## NanoKVM OS compatibility draft
+
+Run the two-firmware, two-viewer and transport cases listed in [NANOKVM_OS.md](NANOKVM_OS.md#verification-status-and-remaining-work). All new physical appliance and handset cases are pending; fixtures are not device evidence.
