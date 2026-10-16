@@ -79,6 +79,7 @@ interface ConsoleCoreControls {
     /** Explicit, replay-free write for the app-local MJPEG frame-detection preference. */
     fun setMjpegFrameDetectionEnabled(enabled: Boolean)
     fun resetHid()
+    fun requestInputControl() = Unit
     /** Dispatches a one-shot host control only to the exact destination the user approved. */
     fun power(destination: ApprovedCoreDestination, action: PowerAction)
     /** Types destination-bound, explicitly approved phone text through HID. */
@@ -1128,6 +1129,8 @@ data class BackendSession(
     val videoStallEvents: Long = 0L,
     val deviceStatus: NanoKvmDeviceStatus = NanoKvmDeviceStatus(),
     val capabilities: NanoKvmServerCapabilities? = null,
+    val inputControl: org.nanokvm.protocol.NanoKvmInputControl =
+        org.nanokvm.protocol.NanoKvmInputControl.UNMANAGED,
     val phase3: Phase3FeatureUiState = Phase3FeatureUiState(),
     val administration: AdministrationUiState = AdministrationUiState(),
     val pasteProgress: RemotePasteProgress? = null,

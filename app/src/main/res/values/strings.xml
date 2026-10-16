@@ -169,4 +169,8 @@
     <string name="console_keyboard_recovery_title">Review text that may not have been sent</string>
     <string name="console_keyboard_recovery_copy">Copy text</string>
     <string name="console_keyboard_recovery_discard">Discard</string>
+    <string name="console_os_take_control">View only · Take control</string>
+    <string name="console_os_waiting_control">Waiting for NanoKVM OS input control…</string>
+    <string name="console_os_management_scope">NanoKVM OS detected. Use its web interface for updates, accounts, USB devices and add-ons.</string>
+    <string name="console_os_video_scope">This client uses H.264 or MJPEG. Use the NanoKVM OS web interface for H.265 video, portrait modes and monitor profiles. Stream settings are shared with other viewers.</string>
 </resources>

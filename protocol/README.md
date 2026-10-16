@@ -279,3 +279,7 @@ cancellation, redirect suppression, ambiguous disconnect, consumption, and redac
 Autostart tests cover exact route/method/body contracts, JSON escaping, strict basename and UTF-8
 bounds, mutable-buffer clearing, latest-snapshot identity, guarded create versus explicit update,
 bodyless delete, redacted diagnostics, the 2.3.1 capability floor, and no replay.
+
+## NanoKVM OS adapter
+
+Discovery distinguishes current NanoKVM OS release labels plus a validated read-only capability response from Sipeed SemVer. See [the bounded compatibility contract](../docs/NANOKVM_OS.md). The native-token header is limited to login; input leases are client/socket scoped and attach only to guarded ATX POST requests.

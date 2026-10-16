@@ -143,6 +143,9 @@ import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.isSessionUsable
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
+import org.nanokvm.protocol.NanoKvmFirmware
+import org.nanokvm.protocol.NanoKvmInputControl
+import org.nanokvm.protocol.NanoKvmOsSupport
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateGateway
@@ -302,14 +305,15 @@ internal fun ConsoleScreen(
     }
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val coreControls = features.core
-    val phase3Controls = features.phase3
-    val administrationControls = features.administration
-    val operatorControls = features.operator
-    val picoClawControls = features.picoClaw
+    val isNanoKvmOs = session.capabilities?.firmware == NanoKvmFirmware.NANOKVM_OS
+    val phase3Controls = features.phase3.takeUnless { isNanoKvmOs }
+    val administrationControls = features.administration.takeUnless { isNanoKvmOs }
+    val operatorControls = features.operator.takeUnless { isNanoKvmOs }
+    val picoClawControls = features.picoClaw.takeUnless { isNanoKvmOs }
     val operatorState = operatorControls?.operatorState?.collectAsStateWithLifecycle()
     val picoClawState = picoClawControls?.picoClawState?.collectAsStateWithLifecycle()
-    val automationOwner = features.automation
-    val offlineUpdateOwner = features.offlineUpdate
+    val automationOwner = features.automation.takeUnless { isNanoKvmOs }
+    val offlineUpdateOwner = features.offlineUpdate.takeUnless { isNanoKvmOs }
     var pointerMode by rememberSaveable(stateSaver = pointerModeSaver) {
         mutableStateOf(PointerMode.Direct)
     }
@@ -687,7 +691,9 @@ internal fun ConsoleScreen(
         viewportCommand = ViewportCommand(viewportCommandSequence, action)
     }
     val requestPowerAction: (PowerAction) -> Unit = request@{ action ->
-        if (!session.connection.isSessionUsable) return@request
+        if (!session.connection.isSessionUsable ||
+            (isNanoKvmOs && session.inputControl != NanoKvmInputControl.CONTROLLING)
+        ) return@request
         pendingPowerAction = PendingPowerAction(
             action = action,
             destination = currentCoreDestination,
@@ -902,6 +908,27 @@ internal fun ConsoleScreen(
                         ),
                 ) {
                     ConsoleMainContent(consoleContentState)
+                    if (isNanoKvmOs && session.connection.isSessionUsable &&
+                        session.inputControl != NanoKvmInputControl.CONTROLLING
+                    ) {
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopCenter).padding(8.dp)
+                                .testTag("nanokvm-os-view-only"),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            if (session.inputControl == NanoKvmInputControl.VIEW_ONLY) {
+                                TextButton(onClick = coreControls::requestInputControl) {
+                                    Text(stringResource(R.string.console_os_take_control))
+                                }
+                            } else {
+                                Text(
+                                    stringResource(R.string.console_os_waiting_control),
+                                    modifier = Modifier.padding(12.dp),
+                                )
+                            }
+                        }
+                    }
                     if (pointerCaptureState != PointerCaptureState.Idle) {
                         PointerCaptureStatus(
                             state = pointerCaptureState,
@@ -991,6 +1018,7 @@ internal fun ConsoleScreen(
     if (overlay == ConsoleOverlay.VideoSettings) {
         VideoSettingsDialog(
             initial = session.videoSettings,
+            nanoKvmOs = session.capabilities?.nanoKvmOs,
             appliedTransport = session.streamLabel.displayText(),
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
             onDismiss = { overlay = ConsoleOverlay.None },
@@ -1041,6 +1069,8 @@ internal fun ConsoleScreen(
                 contextualInput.releaseAllInput()
                 coreControls.reconnect()
             },
+            resetHidAvailable = !isNanoKvmOs,
+            nanoKvmOs = isNanoKvmOs,
             onResetHid = {
                 overlay = ConsoleOverlay.None
                 contextualInput.releaseAllInput()
@@ -2769,6 +2799,7 @@ private fun ScrollSettingsDialog(
 @Composable
 private fun VideoSettingsDialog(
     initial: VideoSettings,
+    nanoKvmOs: NanoKvmOsSupport? = null,
     appliedTransport: String,
     initialMjpegFrameDetectionEnabled: Boolean,
     onDismiss: () -> Unit,
@@ -2797,64 +2828,79 @@ private fun VideoSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag("video-applied-transport"),
                 )
-                TransportChoiceRow(transport) { transport = it }
-                ChoiceRow(
-                    stringResource(R.string.console_resolution),
-                    listOf(0, 480, 600, 720, 1080),
-                    resolution,
-                    {
-                        if (it == 0) {
-                            stringResource(R.string.console_resolution_native)
-                        } else {
-                            stringResource(R.string.console_resolution_value, it)
-                        }
-                    },
-                ) { resolution = it }
-                ChoiceRow(
-                    stringResource(R.string.console_frame_rate),
-                    listOf(24, 30, 60),
-                    fps,
-                    { stringResource(R.string.console_frame_rate_value, it) },
-                ) { fps = it }
-                if (transport != VideoTransportPreference.MJPEG) {
+                TransportChoiceRow(
+                    selected = transport,
+                    allowMjpeg = nanoKvmOs?.video?.stream?.mjpeg?.available ?: true,
+                ) { transport = it }
+                if (nanoKvmOs != null) {
                     Text(
-                        stringResource(R.string.console_h264_settings),
-                        style = MaterialTheme.typography.titleSmall,
+                        stringResource(R.string.console_os_video_scope),
+                        style = MaterialTheme.typography.bodySmall,
                     )
-                    ChoiceRow(
-                        stringResource(R.string.console_h264_bitrate),
-                        listOf(1_000, 2_000, 3_000, 5_000),
-                        bitrate,
-                        { stringResource(R.string.console_bitrate_value, it / 1_000) },
-                    ) { bitrate = it }
-                    ChoiceRow(
-                        stringResource(R.string.console_h264_gop),
-                        listOf(10, 30, 50, 100),
-                        gop,
-                        {
-                            pluralStringResource(
-                                R.plurals.console_h264_gop_value,
-                                it,
-                                it,
-                            )
-                        },
-                    ) { gop = it }
                 }
-                if (transport != VideoTransportPreference.H264) {
-                    Text(
-                        stringResource(R.string.console_mjpeg_settings),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
+                if (nanoKvmOs == null || nanoKvmOs.canConfigureVideo) {
                     ChoiceRow(
-                        stringResource(R.string.console_mjpeg_quality),
-                        listOf(50, 60, 80, 100),
-                        quality,
-                        { it.toString() },
-                    ) { quality = it }
-                    MjpegFrameDetectionPreferenceControl(
-                        enabled = mjpegFrameDetectionEnabled,
-                        onEnabledChange = { mjpegFrameDetectionEnabled = it },
-                    )
+                        stringResource(R.string.console_resolution),
+                        nanoKvmOs?.video?.supportedHeights ?: listOf(0, 480, 600, 720, 1080),
+                        resolution,
+                        {
+                            if (it == 0) {
+                                stringResource(R.string.console_resolution_native)
+                            } else {
+                                stringResource(R.string.console_resolution_value, it)
+                            }
+                        },
+                    ) { resolution = it }
+                    ChoiceRow(
+                        stringResource(R.string.console_frame_rate),
+                        (if (nanoKvmOs == null) listOf(24, 30, 60)
+                        else listOf(10, 15, 24, 30, 60)).filter {
+                            nanoKvmOs == null ||
+                                it in nanoKvmOs.video.stream.minFps..nanoKvmOs.video.maximumFrameRate
+                        },
+                        fps,
+                        { stringResource(R.string.console_frame_rate_value, it) },
+                    ) { fps = it }
+                    if (transport != VideoTransportPreference.MJPEG) {
+                        Text(
+                            stringResource(R.string.console_h264_settings),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        ChoiceRow(
+                            stringResource(R.string.console_h264_bitrate),
+                            listOf(1_000, 2_000, 3_000, 5_000),
+                            bitrate,
+                            { stringResource(R.string.console_bitrate_value, it / 1_000) },
+                        ) { bitrate = it }
+                        if (nanoKvmOs == null) ChoiceRow(
+                            stringResource(R.string.console_h264_gop),
+                            listOf(10, 30, 50, 100),
+                            gop,
+                            {
+                                pluralStringResource(
+                                    R.plurals.console_h264_gop_value,
+                                    it,
+                                    it,
+                                )
+                            },
+                        ) { gop = it }
+                    }
+                    if (transport != VideoTransportPreference.H264) {
+                        Text(
+                            stringResource(R.string.console_mjpeg_settings),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        ChoiceRow(
+                            stringResource(R.string.console_mjpeg_quality),
+                            listOf(50, 60, 80, 100),
+                            quality,
+                            { it.toString() },
+                        ) { quality = it }
+                        if (nanoKvmOs == null) MjpegFrameDetectionPreferenceControl(
+                            enabled = mjpegFrameDetectionEnabled,
+                            onEnabledChange = { mjpegFrameDetectionEnabled = it },
+                        )
+                    }
                 }
                 Text(
                     stringResource(R.string.console_video_settings_help),
@@ -2893,6 +2939,7 @@ private fun VideoSettingsDialog(
 @Composable
 private fun TransportChoiceRow(
     selected: VideoTransportPreference,
+    allowMjpeg: Boolean = true,
     onSelect: (VideoTransportPreference) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2901,7 +2948,9 @@ private fun TransportChoiceRow(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            VideoTransportPreference.entries.forEach { preference ->
+            VideoTransportPreference.entries.filter {
+                allowMjpeg || it != VideoTransportPreference.MJPEG
+            }.forEach { preference ->
                 FilterChip(
                     selected = preference == selected,
                     onClick = { onSelect(preference) },
@@ -3113,6 +3162,8 @@ private fun MoreActionsDialog(
     onDismiss: () -> Unit,
     onReconnect: () -> Unit,
     onResetHid: () -> Unit,
+    resetHidAvailable: Boolean = true,
+    nanoKvmOs: Boolean = false,
     onDeviceInfo: () -> Unit,
     phase3Available: Boolean,
     onVirtualMedia: () -> Unit,
@@ -3142,7 +3193,16 @@ private fun MoreActionsDialog(
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.console_reconnect_stream))
                 }
-                OutlinedButton(onClick = onResetHid, modifier = Modifier.fillMaxWidth()) {
+                if (nanoKvmOs) {
+                    Text(
+                        stringResource(R.string.console_os_management_scope),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (resetHidAvailable) OutlinedButton(
+                    onClick = onResetHid,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Icon(Icons.Default.Usb, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.console_reset_keyboard_mouse))
