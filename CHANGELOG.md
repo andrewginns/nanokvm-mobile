@@ -7,7 +7,7 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
-## [0.3.14] - 2026-11-08 (pre-release candidate)
+## [0.3.14] - 2026-11-08
 
 Android version code: **24**.
 
@@ -18,9 +18,9 @@ Android version code: **24**.
   show a live view when entering Recents directly from the foreground app.
 - Continue the production update lineage from public v0.3.13 (build 23).
 
-## [0.3.13] - 2026-10-13 (pre-release candidate)
+## [0.3.13] - 2026-10-13
 
-Android version code: **23**. This candidate adds editable clipboard review and
+Android version code: **23**. This release adds editable clipboard review and
 keeps keyboard shortcuts ahead of View and zoom controls.
 
 ### Changed
@@ -55,9 +55,9 @@ keeps keyboard shortcuts ahead of View and zoom controls.
 - Broader physical-device, appliance, accessibility and endurance coverage is
   not implied. See the release notes for the exact signed-artifact test scope.
 
-## [0.3.12] - 2026-09-07 (pre-release candidate)
+## [0.3.12] - 2026-09-07
 
-Android version code: **19**. This candidate includes the keyboard reopening fix
+Android version code: **19**. This release includes the keyboard reopening fix
 from v0.3.11 and repairs ordinary copied text being rejected as rich text.
 
 ### Fixed
@@ -91,9 +91,9 @@ after dismissal and reopening, and preserves the production signing lineage.
 - No permissions, runtime dependencies, persistent storage, telemetry, data
   collection, or appliance API contracts changed.
 
-## [0.3.10] - 2026-09-07 (private testing candidate)
+## [0.3.10] - 2026-09-07
 
-Android version code: **17**. This candidate repairs native keyboard corrections
+Android version code: **17**. This release repairs native keyboard corrections
 while retaining suggestions and autocorrect, and uses the existing production
 signing lineage for an in-place update from v0.3.9.
 
@@ -118,7 +118,7 @@ signing lineage for an in-place update from v0.3.9.
   restoration matched the test host. Samsung One UI 8.5 and a physical NanoKVM
   host remain unverified; see [the keyboard plan](docs/SAMSUNG_KEYBOARD_FIX_PLAN.md).
 
-## [0.3.9] - 2026-09-05 (public GitHub pre-release candidate)
+## [0.3.9] - 2026-09-05
 
 Android version code: **16**. This maintenance release removes unused internal
 paths while preserving the existing app features, including PicoClaw and
@@ -140,7 +140,7 @@ boot-script management, and the production signing lineage.
 - No app permissions, persistent storage, telemetry, data collection, or
   packaged runtime dependencies changed.
 
-## [0.3.8] - 2026-08-31 (public GitHub pre-release candidate)
+## [0.3.8] - 2026-08-31
 
 Android version code: **15**. This release improves large clipboard, share, and
 multiline keyboard input while preserving the existing production signing
