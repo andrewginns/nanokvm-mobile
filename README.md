@@ -76,9 +76,9 @@ data is shown.</sub>
 - NanoKVM application 2.3.2 or newer, reachable over HTTPS on the local network.
 - On Android 17 (API 37), grant **Local network** access when prompted.
 
-The current stable APK has been used for several weeks without reported issues
-against NanoKVM application 2.4.3. Hardware-dependent features remain
-capability-gated and may not appear on every appliance.
+The owner ran v0.3.6 with NanoKVM application 2.4.3 for several weeks without
+reporting issues. Hardware-dependent features are available when the appliance
+advertises the corresponding capability.
 
 Private and self-signed certificates are supported through explicit review and
 per-profile pinning. The app does not install a global CA or use a global
