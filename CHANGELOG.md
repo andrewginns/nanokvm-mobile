@@ -7,6 +7,17 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.14] - 2026-11-08 (pre-release candidate)
+
+Android version code: **24**.
+
+- Allow foreground screenshots, screen recordings, screen sharing, and
+  screen-based assistant features such as Circle to Search on supported devices.
+  Captures can include the visible remote console.
+- Keep saved Recents snapshots disabled on Android 13 and later. Launchers may
+  show a live view when entering Recents directly from the foreground app.
+- Continue the production update lineage from public v0.3.13 (build 23).
+
 ## [0.3.13] - 2026-10-13 (pre-release candidate)
 
 Android version code: **23**. This candidate adds editable clipboard review and

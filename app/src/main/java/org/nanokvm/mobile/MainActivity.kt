@@ -4,7 +4,6 @@ import android.content.ClipDescription
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
-import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.fragment.app.FragmentActivity
@@ -28,10 +27,8 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Hide saved task previews while allowing foreground screenshots and assistant captures.
             setRecentsScreenshotEnabled(false)
-        }
-        if (!BuildConfig.DEBUG) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
 
         val container = (application as NanoKvmApplication).container

@@ -88,10 +88,17 @@ offers retry without deleting data. Confirmed corruption requires an explicit
 reset whose consequence includes profiles, certificate pins, and protected
 credentials.
 
-Non-debug builds set `FLAG_SECURE` and disable Recents previews. This blocks
-ordinary screenshots, recordings, and non-secure displays, but not the
-out-of-scope device and physical threats above. The app does not persist remote
-framebuffer, terminal, chat, script output, or operator history.
+All builds allow screenshots, recordings, screen sharing, and screen-based
+assistant features such as Circle to Search, subject to device support and
+system settings. Visible remote framebuffer, terminal, chat, script output, and
+credentials can therefore appear in user-initiated captures or assistant
+requests. The app itself does not persist remote framebuffer, terminal, chat,
+script output, or operator history.
+
+On Android 13 and later, all builds disable saved Recents snapshots after the
+app stops, independently of foreground capture. Launchers may still show a live
+view when entering Recents directly from the foreground app. Earlier Android
+versions may show the app's contents in Recents previews.
 
 ## Input, clipboard, lifecycle, and command safety
 
@@ -259,7 +266,7 @@ At minimum, affected changes and releases should verify:
 | Network trust | Cleartext rejection, data-free inspection, hostname/date checks, self-signed acceptance, pin mismatch and recovery, redirect/cookie origin, and authentication teardown |
 | Credentials and storage | Real Keystore success/cancel/expiry/invalidation/deletion, failed replacement, background and process death, backup exclusion, storage failure/corruption/reset, and partial deletion |
 | Input and lifecycle | HID release on cancellation/background/disconnect, no stale callbacks, bounded reconnect, no paste or mutation replay, and ambiguity recovery |
-| Platform privacy | Merged permissions/components, local-network denial/revocation, filesystem and backup behavior, Recents/screenshot blocking, logcat review, and observed traffic |
+| Platform privacy | Merged permissions/components, local-network denial/revocation, filesystem and backup behavior, foreground screenshot/assistant capture and Android 13+ Recents protection, logcat review, and observed traffic |
 | Video and extensions | Parser bounds, transport teardown, WebRTC peer/logging disclosure, fresh fallback, and capability-gated real-appliance tests for disruptive features |
 | Release artifact | Package/version identity, signing lineage, upgrade without clearing data, exact-byte install/launch, source/SBOM/licence/checksum bundle, and dependency vulnerability disposition |
 

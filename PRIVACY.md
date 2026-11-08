@@ -152,11 +152,17 @@ server secret and affect other clients.
 
 ## Screen privacy
 
-Non-debug builds prevent Android Recents previews and set `FLAG_SECURE`, which
-blocks ordinary screenshots, screen recording, and non-secure displays. This
-does not protect against a rooted/compromised device, malicious input or
-accessibility service, physical control of an unlocked device, or an external
-camera.
+The app allows screenshots, screen recording, screen sharing, and screen-based
+assistant features such as Circle to Search, subject to device support and
+system settings. Captures can include anything visible in the app, including
+the remote console. User-invoked assistant features are handled by the selected
+system assistant.
+
+On Android 13 and later, all builds disable saved Recents snapshots after the
+app stops. A launcher may still show a live view when entering Recents directly
+from the foreground app. This does not block foreground screenshots or
+assistant captures. Earlier Android versions may show the app's contents in
+Recents previews.
 
 ## Diagnostics and user reports
 
