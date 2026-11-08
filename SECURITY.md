@@ -6,14 +6,14 @@ security boundaries and verification guidance are in the
 
 ## Supported versions
 
-NanoKVM Mobile 0.3.7 is the current stable, production-signed GitHub release.
+GitHub marks the current production-signed APK as the [latest release](https://github.com/andrewginns/nanokvm-mobile/releases/latest).
 Security fixes are developed on the current 0.3.x source milestone. Earlier
 development APKs use a different debug signing identity and are not a supported
 public distribution channel.
 
 | Version | Security status |
 | --- | --- |
-| 0.3.7 stable GitHub release | Receives critical fixes until superseded |
+| Latest GitHub release | Receives critical fixes until superseded |
 | `main` / 0.3.x development | Receives fixes |
 | Debug-signed development snapshots | Superseded; no production update compatibility |
 | Older snapshots | Unsupported |

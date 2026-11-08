@@ -583,7 +583,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 23
+        versionCode = 24
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
