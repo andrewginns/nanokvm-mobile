@@ -47,6 +47,34 @@ With a booted emulator or USB device:
 The video test creates a native WebRTC peer and catches native-library or
 process-abort regressions. It does not prove an appliance video session.
 
+### Screenshots and assistant capture
+
+Run the system screenshot regression against the non-debug benchmark app on a
+disposable emulator. The test clears the target app's data before starting:
+
+```powershell
+.\gradlew.bat --no-problems-report --dependency-verification=strict '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.mobile.macrobenchmark.ScreenCaptureInstrumentedTest' :macrobenchmark:connectedBenchmarkAndroidTest
+```
+
+`ScreenCaptureInstrumentedTest` checks visible app pixels in real system
+screenshots across profile-list/editor navigation, background/resume, and
+rotation. It rejects a debuggable target because debug builds also allowed
+screenshots before the capture restriction was removed. Compose rendering or
+`PixelCopy` checks alone do not verify system screenshot access.
+
+On a supported physical phone with a non-debug build, also verify:
+
+- ordinary screenshots and screen recording include the controls and live
+  MJPEG, H.264, and WebRTC viewport, including fullscreen;
+- Circle to Search can select visible app and remote-console content, including
+  with a dialog open, when enabled in the phone's assistant settings;
+- returning from the assistant overlay leaves console video and input working;
+  and
+- after pressing Home to stop the app, Android 13+ Recents cards hide app
+  content while foreground screenshots continue to work. A launcher may show a
+  live view when entering Recents directly from the foreground app. Earlier
+  Android versions may show app contents in Recents.
+
 ### Native keyboard corrections
 
 `NativeKeyboardInstrumentedTest` exercises the production editor with a recording
