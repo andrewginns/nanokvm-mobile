@@ -80,17 +80,17 @@ are bundled as `APACHE-2.0.txt`.
 - `androidx.cursoradapter:cursoradapter:1.0.0`
 - `androidx.customview:customview-poolingcontainer:1.0.0`
 - `androidx.customview:customview:1.0.0`
-- `androidx.datastore:datastore-android:1.2.1`
-- `androidx.datastore:datastore-core-android:1.2.1`
-- `androidx.datastore:datastore-core-okio-jvm:1.2.1`
-- `androidx.datastore:datastore-core-okio:1.2.1`
-- `androidx.datastore:datastore-core:1.2.1`
-- `androidx.datastore:datastore-preferences-android:1.2.1`
-- `androidx.datastore:datastore-preferences-core-android:1.2.1`
-- `androidx.datastore:datastore-preferences-core:1.2.1`
-- `androidx.datastore:datastore-preferences-proto:1.2.1`
-- `androidx.datastore:datastore-preferences:1.2.1`
-- `androidx.datastore:datastore:1.2.1`
+- `androidx.datastore:datastore-android:1.3.0`
+- `androidx.datastore:datastore-core-android:1.3.0`
+- `androidx.datastore:datastore-core-okio-jvm:1.3.0`
+- `androidx.datastore:datastore-core-okio:1.3.0`
+- `androidx.datastore:datastore-core:1.3.0`
+- `androidx.datastore:datastore-preferences-android:1.3.0`
+- `androidx.datastore:datastore-preferences-core-android:1.3.0`
+- `androidx.datastore:datastore-preferences-core:1.3.0`
+- `androidx.datastore:datastore-preferences-proto:1.3.0`
+- `androidx.datastore:datastore-preferences:1.3.0`
+- `androidx.datastore:datastore:1.3.0`
 - `androidx.drawerlayout:drawerlayout:1.0.0`
 - `androidx.emoji2:emoji2:1.4.0`
 - `androidx.fragment:fragment:1.9.1`
@@ -126,8 +126,8 @@ are bundled as `APACHE-2.0.txt`.
 - `androidx.savedstate:savedstate-ktx:1.4.0`
 - `androidx.savedstate:savedstate:1.4.0`
 - `androidx.startup:startup-runtime:1.2.0`
-- `androidx.tracing:tracing-android:2.0.0`
-- `androidx.tracing:tracing:2.0.0`
+- `androidx.tracing:tracing-android:2.0.1`
+- `androidx.tracing:tracing:2.0.1`
 - `androidx.vectordrawable:vectordrawable-animated:1.1.0`
 - `androidx.vectordrawable:vectordrawable:1.1.0`
 - `androidx.versionedparcelable:versionedparcelable:1.1.1`
@@ -136,36 +136,38 @@ are bundled as `APACHE-2.0.txt`.
 - `androidx.window:window-core:1.5.0`
 - `androidx.window:window:1.5.0`
 - `com.google.guava:listenablefuture:1.0`
-- `com.squareup.okhttp3:okhttp-android:5.5.0`
-- `com.squareup.okhttp3:okhttp:5.5.0`
+- `com.squareup.okhttp3:okhttp-android:5.5.1`
+- `com.squareup.okhttp3:okhttp:5.5.1`
 - `com.squareup.okio:okio-jvm:3.18.1`
 - `com.squareup.okio:okio:3.18.1`
 - `org.jetbrains:annotations:23.0.0`
 - `org.jetbrains.kotlin:kotlin-stdlib-common:2.4.21`
 - `org.jetbrains.kotlin:kotlin-stdlib:2.4.21`
+- `org.jetbrains.kotlinx:atomicfu-jvm:0.28.0`
+- `org.jetbrains.kotlinx:atomicfu:0.28.0`
 - `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0`
 - `org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.11.0`
 - `org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0`
 - `org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0`
-- `org.jetbrains.kotlinx:kotlinx-serialization-bom:1.11.0`
-- `org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.11.0`
-- `org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0`
-- `org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.11.0`
-- `org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0`
+- `org.jetbrains.kotlinx:kotlinx-serialization-bom:1.12.0`
+- `org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.12.0`
+- `org.jetbrains.kotlinx:kotlinx-serialization-core:1.12.0`
+- `org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.12.0`
+- `org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0`
 - `org.jspecify:jspecify:1.0.0`
 
 ## DataStore external protobuf
 
-- `androidx.datastore:datastore-preferences-external-protobuf:1.2.1`
+- `androidx.datastore:datastore-preferences-external-protobuf:1.3.0`
 
-This artifact repackages the protobuf 4.28.2 runtime. Its unmodified upstream
+This artifact repackages the protobuf 4.36.1 runtime. Its unmodified upstream
 BSD-3-Clause licence, including the Google copyright notice, is bundled as
-`PROTOBUF-4.28.2-LICENSE.txt`; the exact upstream source tag is
-`https://github.com/protocolbuffers/protobuf/tree/v28.2`.
+`PROTOBUF-4.36.1-LICENSE.txt`; the exact upstream source tag is
+`https://github.com/protocolbuffers/protobuf/tree/v36.1`.
 
 ## WebRTC SDK Android and WebRTC
 
-- `io.github.webrtc-sdk:android-prefixed-stripped:150.7871.01`
+- `io.github.webrtc-sdk:android-prefixed-stripped:150.7871.04`
 
 The wrapper's MIT text is bundled as `WEBRTC_SDK_ANDROID_LICENSE.txt`. WebRTC's
 BSD-3-Clause terms and the complete notice set for its incorporated components

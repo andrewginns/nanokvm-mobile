@@ -82,7 +82,7 @@ internal enum class BundledAboutDocument(
     ),
     ProtobufLicense(
         R.string.about_document_protobuf,
-        "open_source_licenses/PROTOBUF-4.28.2-LICENSE.txt",
+        "open_source_licenses/PROTOBUF-4.36.1-LICENSE.txt",
         "about-document-protobuf",
     ),
     WebRtcWrapperLicense(

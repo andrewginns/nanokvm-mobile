@@ -91,7 +91,7 @@ class AboutDialogInstrumentedTest {
             .open("open_source_licenses/APACHE-2.0.txt")
             .use { it.readBytes() }
         val protobufLicense = composeRule.activity.assets
-            .open("open_source_licenses/PROTOBUF-4.28.2-LICENSE.txt")
+            .open("open_source_licenses/PROTOBUF-4.36.1-LICENSE.txt")
             .use { it.readBytes() }
         val ijgNotice = composeRule.activity.assets
             .open("open_source_licenses/README.ijg")
@@ -125,9 +125,9 @@ class AboutDialogInstrumentedTest {
             "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6",
             sha256(ijgNotice),
         )
-        assertEquals(8_558, runtimeComponentLicenses.size)
+        assertEquals(8_646, runtimeComponentLicenses.size)
         assertEquals(
-            "3ba169375c98e743e52427a43b0747d15a09750451f985ce37d1200f73f555a9",
+            "c94407a034aad6e0477ede11ebe332210a49ab7ec2d1e03939b65ba60b8499df",
             sha256(runtimeComponentLicenses),
         )
     }

@@ -91,9 +91,8 @@ clearly defined dependency family, record:
 - source archive SHA-256 and its retained release path; and
 - any exception or disposition.
 
-Map repackaged protobuf to upstream protobuf v28.2 rather than DataStore's stub
-sources, and map the WebRTC wrapper to its exact wrapper tag and underlying
-WebRTC commit. Retain or mirror the exact source archives with the release when
+Map repackaged protobuf to the exact upstream revision recorded in the runtime
+licence index. Map WebRTC to its exact wrapper tag and underlying WebRTC commit. Retain or mirror the exact source archives with the release when
 their continued availability is not otherwise assured. Include the completed
 manifest in `SHA256SUMS`; successful signing alone is not a complete release
 gate.

@@ -13,7 +13,7 @@ components in that index are distributed under Apache License 2.0. The complete
 terms are preserved at
 `app/src/main/assets/open_source_licenses/APACHE-2.0.txt` and are bundled in the
 APK. The external protobuf component's BSD-3-Clause terms are reproduced in the
-unmodified `PROTOBUF-4.28.2-LICENSE.txt` bundled in the APK.
+unmodified `PROTOBUF-4.36.1-LICENSE.txt` bundled in the APK.
 
 The canonical CycloneDX SBOM published with each release is the complete
 machine-readable resolved release-runtime graph. It complements, but does not
@@ -21,9 +21,9 @@ replace, these licence texts and notices.
 
 ## WebRTC SDK Android wrapper
 
-Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:150.7871.01`
+Artifact: `io.github.webrtc-sdk:android-prefixed-stripped:150.7871.04`
 
-Source: <https://github.com/webrtc-sdk/android/tree/v150.7871.01>
+Source: <https://github.com/webrtc-sdk/android/tree/v150.7871.04>
 
 The exact upstream wrapper licence is bundled at
 `app/src/main/assets/open_source_licenses/WEBRTC_SDK_ANDROID_LICENSE.txt`;
@@ -51,7 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## WebRTC
 
-Exact source: <https://github.com/webrtc-sdk/webrtc/tree/73cb8180f7258ee292878d6edd05177f41883962>
+Exact source: <https://github.com/webrtc-sdk/webrtc/tree/a545de45259b47dfac5f3635863e47cb601f1bb2>
 
 Copyright (c) 2011, The WebRTC project authors. All rights reserved.
 
@@ -82,7 +82,7 @@ WebRTC incorporates further third-party components. The generated notice bundle
 for the exact pinned wrapper release is preserved byte-for-byte at
 `app/src/main/assets/open_source_licenses/WEBRTC.md` and is included in the
 application for offline review. Its provenance is the upstream
-[`v150.7871.01` notice file](https://github.com/webrtc-sdk/android/blob/v150.7871.01/Licenses/WEBRTC.md),
+[`v150.7871.04` notice file](https://github.com/webrtc-sdk/android/blob/v150.7871.04/Licenses/WEBRTC.md),
 and its SHA-256 is
 `d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e`.
 
