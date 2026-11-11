@@ -177,3 +177,7 @@ Advance a row only when current evidence satisfies its stated exit proof.
 Stable publication or a historical checkpoint does not close missing
 compatibility, physical-device, accessibility, endurance, destructive-action,
 signed-journey, or performance evidence; keep that evidence explicitly open.
+
+## NanoKVM OS (separate firmware family)
+
+Draft core adapter: native login, safe firmware discovery, H.264/MJPEG, input ownership and limited batch video settings. Advanced management remains in the OS web UI. This is source-level coverage only; see [scope, source contract and outstanding verification](NANOKVM_OS.md).

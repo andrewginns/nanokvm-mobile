@@ -109,6 +109,8 @@ class NanoKvmInputSocket internal constructor(
     private val httpClient: OkHttpClient,
     private val tokenStore: SessionTokenStore,
     private val heartbeatIntervalMillis: Long,
+    private val managedControl: Boolean = false,
+    private val inputLease: NanoKvmInputLease = NanoKvmInputLease(),
 ) : Closeable {
     private val lock = Any()
     private val mutableState = MutableStateFlow<InputConnectionState>(InputConnectionState.Disconnected)
@@ -124,6 +126,19 @@ class NanoKvmInputSocket internal constructor(
     private var disposed = false
 
     val state: StateFlow<InputConnectionState> = mutableState.asStateFlow()
+    val control: StateFlow<NanoKvmInputControl> = inputLease.control
+
+    private fun canSendInputLocked(): Boolean =
+        mutableState.value is InputConnectionState.Connected &&
+            (!managedControl || inputLease.allows(this))
+
+    /** Explicit user action only. No reconnect or failed send automatically takes control. */
+    fun requestControl(): Boolean = synchronized(lock) {
+        if (!managedControl || mutableState.value !is InputConnectionState.Connected) {
+            return@synchronized false
+        }
+        socket?.send(byteArrayOf(3, 1).toByteString()) == true
+    }
 
     init {
         require(heartbeatIntervalMillis >= 1_000L) { "Heartbeat interval must be at least one second" }
@@ -134,6 +149,7 @@ class NanoKvmInputSocket internal constructor(
         check(!disposed) { "This input socket has been disposed" }
         if (socket != null) return@synchronized false
 
+        if (managedControl) inputLease.begin(this)
         mutableState.value = InputConnectionState.Connecting
         val requestBuilder = Request.Builder()
             .url(endpoint.webSocketUrl("/api/ws"))
@@ -167,7 +183,7 @@ class NanoKvmInputSocket internal constructor(
         heldModifiers: Set<HidModifier> = emptySet(),
     ): Boolean = synchronized(lock) {
         val effectiveModifiers = heldModifiers + modifiers
-        if (mutableState.value !is InputConnectionState.Connected) return@synchronized false
+        if (!canSendInputLocked()) return@synchronized false
         val current = socket ?: return@synchronized false
         if (!current.send(
                 HidKeyboardReport.create(effectiveModifiers, keys)
@@ -194,7 +210,7 @@ class NanoKvmInputSocket internal constructor(
         plan as HidShortcutRunPlan.Reports
 
         return synchronized(lock) {
-            if (mutableState.value !is InputConnectionState.Connected) {
+            if (!canSendInputLocked()) {
                 return@synchronized NanoKvmHidShortcutRunResult.ConnectionLost(reportsSent = 0)
             }
             val current = socket
@@ -261,7 +277,7 @@ class NanoKvmInputSocket internal constructor(
         }
         val mapping = HidCharacterMapper.mapText(insertText, layout, lineBreakMode)
         if (mapping.unsupported.isNotEmpty()) return@synchronized HidTextEditResult.UNSUPPORTED_TEXT
-        if (!isCurrent() || mutableState.value !is InputConnectionState.Connected) {
+        if (!isCurrent() || !canSendInputLocked()) {
             return@synchronized HidTextEditResult.STALE
         }
         val current = socket ?: return@synchronized HidTextEditResult.STALE
@@ -365,7 +381,7 @@ class NanoKvmInputSocket internal constructor(
                 currentCoroutineContext().ensureActive()
 
                 if (sent < total) {
-                    if (mutableState.value !is InputConnectionState.Connected) {
+                    if (!canSendInputLocked()) {
                         return PacedCommittedTextResult.ConnectionLost(sentKeystrokes = sent)
                     }
                     delay(pacing.intervalMillis)
@@ -397,7 +413,7 @@ class NanoKvmInputSocket internal constructor(
         mouse: HidMouseReport,
         restoredKeyboard: HidKeyboardReport,
     ): Boolean = synchronized(lock) {
-        if (mutableState.value !is InputConnectionState.Connected) return@synchronized false
+        if (!canSendInputLocked()) return@synchronized false
         val current = socket ?: return@synchronized false
         if (!current.send(shiftedKeyboard.toWireFrame().toByteString())) return@synchronized false
         val mouseSent = current.send(mouse.toWireFrame().toByteString())
@@ -420,6 +436,7 @@ class NanoKvmInputSocket internal constructor(
             stopHeartbeatLocked()
             mutableState.value = InputConnectionState.Closing
             sendReleaseFramesLocked(current)
+            if (managedControl) inputLease.clear(this)
             if (!current.close(code, reason.take(123))) current.cancel()
         }
     }
@@ -430,6 +447,7 @@ class NanoKvmInputSocket internal constructor(
             val current = socket ?: return
             stopHeartbeatLocked()
             sendReleaseFramesLocked(current)
+            if (managedControl) inputLease.clear(this)
             current.cancel()
             socket = null
             mutableState.value = InputConnectionState.Disconnected
@@ -444,6 +462,7 @@ class NanoKvmInputSocket internal constructor(
             socket?.let { current ->
                 mutableState.value = InputConnectionState.Closing
                 sendReleaseFramesLocked(current)
+                if (managedControl) inputLease.clear(this)
                 if (!current.close(1000, "client disposed")) current.cancel()
             } ?: run {
                 mutableState.value = InputConnectionState.Disconnected
@@ -453,11 +472,12 @@ class NanoKvmInputSocket internal constructor(
     }
 
     private fun sendFrame(bytes: ByteArray): Boolean = synchronized(lock) {
-        if (mutableState.value !is InputConnectionState.Connected) return@synchronized false
+        if (!canSendInputLocked()) return@synchronized false
         socket?.send(bytes.toByteString()) == true
     }
 
     private fun sendReleaseFramesLocked(current: WebSocket) {
+        if (managedControl && !inputLease.allows(this)) return
         current.send(HidKeyboardReport.released().toWireFrame().toByteString())
         current.send(RelativeMouseReport.create().toWireFrame().toByteString())
         if (absoluteMouseWasUsed) {
@@ -506,6 +526,12 @@ class NanoKvmInputSocket internal constructor(
             if (!isCurrent(webSocket)) return
             if (!isInputTextMessageWithinLimit(text)) {
                 closeForOversizedMessage(webSocket, "input text message too large")
+                return
+            }
+            synchronized(lock) {
+                if (socket === webSocket && managedControl) {
+                    inputLease.receive(this@NanoKvmInputSocket, text)
+                }
             }
         }
 
@@ -522,6 +548,7 @@ class NanoKvmInputSocket internal constructor(
                 stopHeartbeatLocked()
                 mutableState.value = InputConnectionState.Closing
                 sendReleaseFramesLocked(webSocket)
+                if (managedControl) inputLease.clear(this@NanoKvmInputSocket)
                 webSocket.close(code, reason.take(123))
             }
         }
@@ -530,6 +557,7 @@ class NanoKvmInputSocket internal constructor(
             synchronized(lock) {
                 if (socket !== webSocket) return
                 stopHeartbeatLocked()
+                if (managedControl) inputLease.clear(this@NanoKvmInputSocket)
                 socket = null
                 mutableState.value = InputConnectionState.Disconnected
             }
@@ -539,6 +567,7 @@ class NanoKvmInputSocket internal constructor(
             synchronized(lock) {
                 if (socket !== webSocket) return
                 stopHeartbeatLocked()
+                if (managedControl) inputLease.clear(this@NanoKvmInputSocket)
                 socket = null
                 mutableState.value = InputConnectionState.Failed(t, response?.code)
                 response?.close()
@@ -562,8 +591,10 @@ class NanoKvmInputSocket internal constructor(
             stopHeartbeatLocked()
             mutableState.value = InputConnectionState.Closing
             sendReleaseFramesLocked(webSocket)
+            if (managedControl) inputLease.clear(this)
             if (!webSocket.close(MESSAGE_TOO_BIG_CLOSE_CODE, reason)) {
                 webSocket.cancel()
+                if (managedControl) inputLease.clear(this@NanoKvmInputSocket)
                 socket = null
                 mutableState.value = InputConnectionState.Disconnected
             }

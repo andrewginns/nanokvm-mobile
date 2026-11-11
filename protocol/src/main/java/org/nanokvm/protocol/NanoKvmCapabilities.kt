@@ -160,6 +160,8 @@ sealed interface NanoKvmCapabilitySupport {
 class NanoKvmServerCapabilities internal constructor(
     val applicationVersion: NanoKvmApplicationVersion?,
     assessments: Map<NanoKvmCapability, NanoKvmCapabilitySupport>,
+    val firmware: NanoKvmFirmware = NanoKvmFirmware.SIPEED,
+    val nanoKvmOs: NanoKvmOsSupport? = null,
 ) {
     private val assessments = assessments.toMap()
     val all: Map<NanoKvmCapability, NanoKvmCapabilitySupport> = this.assessments
@@ -209,8 +211,43 @@ internal suspend fun NanoKvmApi.probeServerCapabilities(): NanoKvmServerProbeRes
         ?.application
         ?.let(NanoKvmApplicationVersion::parse)
 
+    val label = (vmInfo as? NanoKvmProbeResult.Supported)?.value?.application.orEmpty()
+    val osVideo = if (isNanoKvmOsReleaseLabel(label)) {
+        optionalReadProbe { osVideoCapabilities() }
+    } else null
+    val os = (osVideo as? NanoKvmProbeResult.Supported)?.value?.let { video ->
+        val account = optionalReadProbe { osAccount() }
+        val accountValue = (account as? NanoKvmProbeResult.Supported)?.value
+        NanoKvmOsSupport(
+            video = video,
+            canConfigureVideo = accountValue?.role == "admin" &&
+                accountValue.mustChangePassword == false,
+        )
+    }
+    val family = when {
+        os != null -> NanoKvmFirmware.NANOKVM_OS
+        version != null -> NanoKvmFirmware.SIPEED
+        else -> NanoKvmFirmware.UNKNOWN
+    }
+    firmware = family
+    osSupport = os
     val assessments = NanoKvmCapability.entries.associateWith { capability ->
-        supportFromVersion(capability, version)
+        if (os == null) supportFromVersion(capability, version) else {
+            // Deliberately describes this adapter's supported contract, not Sipeed version floors.
+            val evidence = NanoKvmCapabilityEvidence.Endpoint("/api/vm/video/capabilities")
+            when (capability) {
+                NanoKvmCapability.DIRECT_H264, NanoKvmCapability.STANDARD_HID_WEBSOCKET ->
+                    NanoKvmCapabilitySupport.Supported(evidence)
+                NanoKvmCapability.STREAM_CONFIGURATION ->
+                    if (os.canConfigureVideo) NanoKvmCapabilitySupport.Supported(evidence)
+                    else NanoKvmCapabilitySupport.Unsupported(evidence)
+                NanoKvmCapability.GPIO_CONTROL ->
+                    gpio.toCapabilitySupport("/api/vm/gpio")
+                else -> NanoKvmCapabilitySupport.Unknown(
+                    NanoKvmCapabilityUnknownReason.NO_RELIABLE_VERSION_RULE,
+                )
+            }
+        }
     }.toMutableMap()
     assessments[NanoKvmCapability.VM_INFORMATION] = vmInfo.toCapabilitySupport("/api/vm/info")
     assessments[NanoKvmCapability.HARDWARE_INFORMATION] =
@@ -221,7 +258,7 @@ internal suspend fun NanoKvmApi.probeServerCapabilities(): NanoKvmServerProbeRes
         vmInfo = vmInfo,
         hardware = hardware,
         gpio = gpio,
-        capabilities = NanoKvmServerCapabilities(version, assessments),
+        capabilities = NanoKvmServerCapabilities(version, assessments, family, os),
     )
 }
 

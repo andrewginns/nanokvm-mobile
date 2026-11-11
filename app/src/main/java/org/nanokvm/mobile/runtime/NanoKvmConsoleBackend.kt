@@ -63,6 +63,8 @@ import org.nanokvm.protocol.HidUsage
 import org.nanokvm.protocol.HttpResponseException
 import org.nanokvm.protocol.InputConnectionState
 import org.nanokvm.protocol.KeyboardReportState
+import org.nanokvm.protocol.NanoKvmFirmware
+import org.nanokvm.protocol.NanoKvmOsVideoSettings
 import org.nanokvm.protocol.NanoKvmClient
 import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmCapability
@@ -356,7 +358,9 @@ internal class NanoKvmConsoleBackend internal constructor(
                 // VM information is the compatibility gate, so an inconclusive optional probe is
                 // retried as a required read and allowed to fail the connection with its real error.
                 ?: createdClient.api.vmInfo()
-            if (!isSupportedNanoKvmApplication(info.application)) {
+            if (probe.capabilities.firmware != NanoKvmFirmware.NANOKVM_OS &&
+                !isSupportedNanoKvmApplication(info.application)
+            ) {
                 createdClient.forgetSession()
                 createdClient.close()
                 mutableSession.value = BackendSession(connection = ConnectionState.Failed)
@@ -402,8 +406,13 @@ internal class NanoKvmConsoleBackend internal constructor(
                     roundTripMs = discoveryElapsedMs,
                     deviceStatus = info.toNanoKvmDeviceStatus(hardware, gpio),
                     capabilities = probe.capabilities,
-                    phase3 = Phase3FeatureUiState(available = true),
-                    administration = AdministrationUiState(available = true),
+                    inputControl = createdInput.control.value,
+                    phase3 = Phase3FeatureUiState(
+                        available = probe.capabilities.firmware == NanoKvmFirmware.SIPEED,
+                    ),
+                    administration = AdministrationUiState(
+                        available = probe.capabilities.firmware == NanoKvmFirmware.SIPEED,
+                    ),
                     status = ConsoleMessage.ConnectedToNanoKvm,
                 )
                 openCommandAcceptanceLocked()
@@ -908,16 +917,37 @@ internal class NanoKvmConsoleBackend internal constructor(
                 }
                 mutableSession.update { it.withActionFeedback(ConsoleMessage.ApplyingVideoSettings) }
                 try {
-                    activeSession.console.updateScreen(
-                        ScreenSetting.RESOLUTION,
-                        settings.resolutionHeight,
-                    )
-                    activeSession.console.updateScreen(ScreenSetting.FPS, settings.framesPerSecond)
-                    // NanoKVM overloads `quality`: bitrate values update H.264 while percentage
-                    // values update MJPEG. Apply both so AUTO can fall back without stale settings.
-                    activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.bitrateKbps)
-                    activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.jpegQuality)
-                    activeSession.console.updateScreen(ScreenSetting.GOP, settings.gopFrames)
+                    val os = activeSession.capabilities.nanoKvmOs
+                    if (os != null) {
+                        val current = activeSession.client.api.osVideoCapabilities()
+                        require(settings.transportPreference != VideoTransportPreference.MJPEG ||
+                            current.stream.mjpeg.available) {
+                            "MJPEG is unavailable for the current HDMI input"
+                        }
+                        if (settings.copy(transportPreference = videoSettings.transportPreference) !=
+                            videoSettings
+                        ) {
+                            activeSession.client.api.applyOsVideoSettings(
+                                NanoKvmOsVideoSettings(
+                                    height = settings.resolutionHeight,
+                                    fps = settings.framesPerSecond,
+                                    bitRate = settings.bitrateKbps,
+                                    quality = settings.jpegQuality,
+                                ),
+                            )
+                        }
+                    } else {
+                        activeSession.console.updateScreen(
+                            ScreenSetting.RESOLUTION,
+                            settings.resolutionHeight,
+                        )
+                        activeSession.console.updateScreen(ScreenSetting.FPS, settings.framesPerSecond)
+                        // NanoKVM overloads `quality`: bitrate values update H.264 while percentage
+                        // values update MJPEG. Apply both so AUTO can fall back without stale settings.
+                        activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.bitrateKbps)
+                        activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.jpegQuality)
+                        activeSession.console.updateScreen(ScreenSetting.GOP, settings.gopFrames)
+                    }
                     videoSettings = settings
                     closeVideoAndAwaitDecoderReleaseLocked()
                     forgetVideoSurfaceLocked()
@@ -942,6 +972,12 @@ internal class NanoKvmConsoleBackend internal constructor(
 
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) {
         mjpegFrameDetectionCoordinator.setEnabledByUser(enabled)
+    }
+
+    override fun requestInputControl() {
+        synchronized(stateLock) {
+            if (currentSessionBindingLocked() != null) input?.requestControl()
+        }
     }
 
     override fun resetHid() {
@@ -2495,8 +2531,13 @@ internal class NanoKvmConsoleBackend internal constructor(
                     it.copy(
                         connection = ConnectionState.Connected,
                         sessionGeneration = sessionGeneration,
-                        phase3 = Phase3FeatureUiState(available = true),
-                        administration = AdministrationUiState(available = true),
+                        inputControl = createdInput.control.value,
+                        phase3 = Phase3FeatureUiState(
+                            available = activeSession.capabilities.firmware == NanoKvmFirmware.SIPEED,
+                        ),
+                        administration = AdministrationUiState(
+                            available = activeSession.capabilities.firmware == NanoKvmFirmware.SIPEED,
+                        ),
                         pasteProgress = null,
                         status = null,
                         lastActionFeedback = null,
@@ -2533,7 +2574,18 @@ internal class NanoKvmConsoleBackend internal constructor(
         closeVideoAndAwaitDecoderReleaseLocked()
         if (synchronized(stateLock) { surface } !== output || !output.isValid) return
         mjpegFrameDetectionCoordinator.onVideoSessionStarting()
-        val config = videoSettings.toNanoKvmVideoConfig()
+        val osVideo = try {
+            authenticatedSession?.capabilities?.nanoKvmOs?.let {
+                activeClient.api.osVideoCapabilities()
+            }
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            scheduleReconnect(ReconnectFailure(error), immediateFirstAttempt = false)
+            return
+        }
+        val config = videoSettings.toNanoKvmVideoConfig().copy(
+            allowMjpeg = osVideo?.stream?.mjpeg?.available ?: true,
+        )
         val boundListener = SessionBoundVideoListener(videoListener)
         val created = NanoKvmVideoSession(
             client = activeClient.transport,
@@ -2573,6 +2625,23 @@ internal class NanoKvmConsoleBackend internal constructor(
     ) {
         inputMonitor?.cancel()
         inputMonitor = scope.launch {
+            launch {
+                socket.control.collect { control ->
+                    synchronized(stateLock) {
+                        if (input !== socket) return@collect
+                        if (mutableSession.value.inputControl != control) {
+                            keyboardState.releaseAll()
+                            pressedMouseButtons.clear()
+                            mutableSession.update {
+                                it.copy(
+                                    inputControl = control,
+                                    inputReleaseGeneration = it.inputReleaseGeneration + 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             socket.state.collect { state ->
                 if (synchronized(stateLock) { input !== socket }) return@collect
                 // Mount/restore/device toggles intentionally replace this socket themselves after
@@ -2789,6 +2858,10 @@ internal class NanoKvmConsoleBackend internal constructor(
         sessionGeneration: Long,
     ) {
         check(Thread.holdsLock(stateLock))
+        if (activeSession.capabilities.firmware == NanoKvmFirmware.NANOKVM_OS) {
+            invalidateSessionFeatureSet()
+            return
+        }
         installPhase3GatewayLocked(activeSession, sessionGeneration)
         installAdministrationGatewayLocked(activeSession, sessionGeneration)
         installDeviceControlGatewayLocked(activeSession, sessionGeneration)
