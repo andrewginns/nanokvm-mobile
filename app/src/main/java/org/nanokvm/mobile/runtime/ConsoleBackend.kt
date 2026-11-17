@@ -1119,6 +1119,7 @@ data class BackendSession(
     val remoteHeight: Int = 1080,
     val streamLabel: VideoStreamDescriptor = VideoStreamDescriptor.DirectH264,
     val videoSettings: VideoSettings = VideoSettings(),
+    val supportsManualResolution: Boolean = true,
     /** Recreates the TextureView/BufferQueue when producer APIs or codecs must be switched. */
     val videoSurfaceGeneration: Long = 0,
     val framesPerSecond: Int? = null,

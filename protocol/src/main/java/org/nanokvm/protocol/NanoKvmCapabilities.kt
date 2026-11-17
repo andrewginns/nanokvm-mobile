@@ -17,6 +17,9 @@ data class NanoKvmApplicationVersion(
     val preRelease: String? = null,
     val buildMetadata: String? = null,
 ) : Comparable<NanoKvmApplicationVersion> {
+    val supportsManualResolution: Boolean
+        get() = this < MANUAL_RESOLUTION_REMOVED
+
     init {
         require(major >= 0 && minor >= 0 && patch >= 0) { "Version numbers must be non-negative" }
         require(preRelease == null || PRE_RELEASE.matches(preRelease)) {
@@ -41,6 +44,7 @@ data class NanoKvmApplicationVersion(
     }
 
     companion object {
+        internal val MANUAL_RESOLUTION_REMOVED = NanoKvmApplicationVersion(2, 5, 4)
         private val VERSION = Regex(
             """(?<![0-9A-Za-z])[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?![0-9A-Za-z.-])""",
         )
@@ -132,6 +136,11 @@ sealed interface NanoKvmCapabilityEvidence {
     data class VersionFloor(
         val actual: NanoKvmApplicationVersion,
         val minimum: NanoKvmApplicationVersion,
+    ) : NanoKvmCapabilityEvidence
+
+    data class RemovedInVersion(
+        val actual: NanoKvmApplicationVersion,
+        val removedIn: NanoKvmApplicationVersion,
     ) : NanoKvmCapabilityEvidence
 
     data class Endpoint(val path: String) : NanoKvmCapabilityEvidence
@@ -289,6 +298,14 @@ private fun supportFromVersion(
         return NanoKvmCapabilitySupport.Unknown(
             reason = NanoKvmCapabilityUnknownReason.VERSION_NOT_REPORTED,
             minimumVersion = rule.minimum,
+        )
+    }
+    if (capability == NanoKvmCapability.RESOLUTION_640_X_480 && !actual.supportsManualResolution) {
+        return NanoKvmCapabilitySupport.Unsupported(
+            NanoKvmCapabilityEvidence.RemovedInVersion(
+                actual,
+                NanoKvmApplicationVersion.MANUAL_RESOLUTION_REMOVED,
+            ),
         )
     }
     val evidence = NanoKvmCapabilityEvidence.VersionFloor(actual, rule.minimum)

@@ -991,6 +991,7 @@ internal fun ConsoleScreen(
     if (overlay == ConsoleOverlay.VideoSettings) {
         VideoSettingsDialog(
             initial = session.videoSettings,
+            supportsManualResolution = session.supportsManualResolution,
             appliedTransport = session.streamLabel.displayText(),
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
             onDismiss = { overlay = ConsoleOverlay.None },
@@ -2769,6 +2770,7 @@ private fun ScrollSettingsDialog(
 @Composable
 private fun VideoSettingsDialog(
     initial: VideoSettings,
+    supportsManualResolution: Boolean,
     appliedTransport: String,
     initialMjpegFrameDetectionEnabled: Boolean,
     onDismiss: () -> Unit,
@@ -2798,18 +2800,20 @@ private fun VideoSettingsDialog(
                     modifier = Modifier.testTag("video-applied-transport"),
                 )
                 TransportChoiceRow(transport) { transport = it }
-                ChoiceRow(
-                    stringResource(R.string.console_resolution),
-                    listOf(0, 480, 600, 720, 1080),
-                    resolution,
-                    {
-                        if (it == 0) {
-                            stringResource(R.string.console_resolution_native)
-                        } else {
-                            stringResource(R.string.console_resolution_value, it)
-                        }
-                    },
-                ) { resolution = it }
+                if (supportsManualResolution) {
+                    ChoiceRow(
+                        stringResource(R.string.console_resolution),
+                        listOf(0, 480, 600, 720, 1080),
+                        resolution,
+                        {
+                            if (it == 0) {
+                                stringResource(R.string.console_resolution_native)
+                            } else {
+                                stringResource(R.string.console_resolution_value, it)
+                            }
+                        },
+                    ) { resolution = it }
+                }
                 ChoiceRow(
                     stringResource(R.string.console_frame_rate),
                     listOf(24, 30, 60),
@@ -2869,7 +2873,7 @@ private fun VideoSettingsDialog(
                     onApply(
                         VideoSettings(
                             transportPreference = transport,
-                            resolutionHeight = resolution,
+                            resolutionHeight = if (supportsManualResolution) resolution else 0,
                             framesPerSecond = fps,
                             bitrateKbps = bitrate,
                             jpegQuality = quality,

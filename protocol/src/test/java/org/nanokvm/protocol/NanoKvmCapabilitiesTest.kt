@@ -193,6 +193,24 @@ class NanoKvmCapabilityProbeTest {
     }
 
     @Test
+    fun `manual resolution is removed starting with 2_5_4`() = runBlocking {
+        server.enqueue(envelope("""{"application":"2.5.4"}"""))
+        server.enqueue(envelope("""{"version":"1"}"""))
+        server.enqueue(envelope("""{"pwr":false,"hdd":false}"""))
+
+        val capabilities = client.api.probeCapabilities().capabilities
+
+        assertTrue(NanoKvmApplicationVersion(2, 4, 3).supportsManualResolution)
+        val removedIn = NanoKvmApplicationVersion(2, 5, 4)
+        assertEquals(
+            NanoKvmCapabilitySupport.Unsupported(
+                NanoKvmCapabilityEvidence.RemovedInVersion(removedIn, removedIn),
+            ),
+            capabilities[NanoKvmCapability.RESOLUTION_640_X_480],
+        )
+    }
+
+    @Test
     fun `device-control floors follow the pinned upstream changelog`() = runBlocking {
         server.enqueue(envelope("""{"application":"2.1.4"}"""))
         server.enqueue(envelope("""{"version":"NanoKVM PCIe"}"""))
