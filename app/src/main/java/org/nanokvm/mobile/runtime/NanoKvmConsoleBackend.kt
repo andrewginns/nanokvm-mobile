@@ -99,7 +99,6 @@ import org.nanokvm.protocol.KeyboardLayout as ProtocolKeyboardLayout
 import org.nanokvm.protocol.PacedCommittedTextProgress
 import org.nanokvm.protocol.PacedCommittedTextResult
 import org.nanokvm.protocol.RelativeMouseReport
-import org.nanokvm.protocol.ScreenSetting
 import org.nanokvm.protocol.SessionToken
 import org.nanokvm.protocol.TlsMode
 import org.nanokvm.protocol.TrustPreflightRejection
@@ -401,6 +400,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                     streamLabel = VideoStreamDescriptor.DirectH264,
                     roundTripMs = discoveryElapsedMs,
                     deviceStatus = info.toNanoKvmDeviceStatus(hardware, gpio),
+                    supportsManualResolution = createdSession.supportsManualResolution,
                     capabilities = probe.capabilities,
                     phase3 = Phase3FeatureUiState(available = true),
                     administration = AdministrationUiState(available = true),
@@ -908,20 +908,14 @@ internal class NanoKvmConsoleBackend internal constructor(
                 }
                 mutableSession.update { it.withActionFeedback(ConsoleMessage.ApplyingVideoSettings) }
                 try {
-                    activeSession.console.updateScreen(
-                        ScreenSetting.RESOLUTION,
-                        settings.resolutionHeight,
+                    val appliedSettings = activeSession.console.applyVideoSettings(
+                        settings,
+                        activeSession.supportsManualResolution,
                     )
-                    activeSession.console.updateScreen(ScreenSetting.FPS, settings.framesPerSecond)
-                    // NanoKVM overloads `quality`: bitrate values update H.264 while percentage
-                    // values update MJPEG. Apply both so AUTO can fall back without stale settings.
-                    activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.bitrateKbps)
-                    activeSession.console.updateScreen(ScreenSetting.QUALITY, settings.jpegQuality)
-                    activeSession.console.updateScreen(ScreenSetting.GOP, settings.gopFrames)
-                    videoSettings = settings
+                    videoSettings = appliedSettings
                     closeVideoAndAwaitDecoderReleaseLocked()
                     forgetVideoSurfaceLocked()
-                    mutableSession.update { it.withAppliedVideoSettings(settings) }
+                    mutableSession.update { it.withAppliedVideoSettings(appliedSettings) }
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     mutableSession.update {

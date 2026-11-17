@@ -7,6 +7,13 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+Android version code **25**.
+
+- Restore login on NanoKVM 2.5.1 and later by accepting the server's session
+  cookie. Older appliances can still supply the token in the login response body.
+- Use automatic capture resolution on NanoKVM 2.5.4 and later so FPS, quality,
+  and GOP settings can be applied. Older appliances retain manual resolution.
+
 ## [0.3.14] - 2026-11-08
 
 Android version code: **24**.

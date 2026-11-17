@@ -18,6 +18,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.tls.HandshakeCertificates
+import okhttp3.tls.HeldCertificate
 import okio.Buffer
 import okio.BufferedSource
 import okio.ForwardingSource
@@ -93,6 +95,94 @@ class NanoKvmApiTest {
 
         val infoRequest = server.takeRequest()
         assertEquals("nano-kvm-token=jwt.value", infoRequest.getHeader("Cookie"))
+    }
+
+    @Test
+    fun `2_5 login cookie authenticates REST and input WebSocket over HTTPS`() = runBlocking {
+        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
+        val tls = HandshakeCertificates.Builder().heldCertificate(certificate).build()
+        MockWebServer().use { httpsServer ->
+            httpsServer.useHttps(tls.sslSocketFactory(), false)
+            val endpoint = NanoKvmEndpoint.parse(httpsServer.url("/").toString())
+            val pinned = CertificateFingerprint.sha256OfDer(certificate.certificate.encoded)
+            NanoKvmClient.create(endpoint, TlsMode.PinnedCertificate(pinned), tokenStore).use { httpsClient ->
+                httpsServer.enqueue(
+                    jsonResponse("""{"code":0,"msg":"success","data":null}""")
+                        .addHeader("Set-Cookie", "unrelated=ignored; Path=/")
+                        .addHeader(
+                            "Set-Cookie",
+                            "nano-kvm-token=cookie.jwt; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Strict",
+                        ),
+                )
+                httpsServer.enqueue(jsonResponse("""{"code":0,"data":{"application":"2.5.4"}}"""))
+                val peerClosed = CountDownLatch(1)
+                httpsServer.enqueue(
+                    MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                            webSocket.close(code, reason)
+                        }
+
+                        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                            peerClosed.countDown()
+                        }
+                    }),
+                )
+
+                val token = httpsClient.api.login("admin", "test password".toCharArray())
+                assertEquals("cookie.jwt", token.token)
+                assertEquals("cookie.jwt", tokenStore.read())
+                assertEquals("2.5.4", httpsClient.api.vmInfo().application)
+                httpsClient.newInputSocket().use { input ->
+                    assertTrue(input.connect())
+                    assertEquals(InputConnectionState.Connected, withTimeout(5_000) {
+                        input.state.first { it is InputConnectionState.Connected || it is InputConnectionState.Failed }
+                    })
+                    assertEquals("/api/auth/login", httpsServer.takeRequest(5, TimeUnit.SECONDS)?.path)
+                    val rest = httpsServer.takeRequest(5, TimeUnit.SECONDS)
+                    assertEquals("/api/vm/info", rest?.path)
+                    assertEquals("nano-kvm-token=cookie.jwt", rest?.getHeader("Cookie"))
+                    val inputHandshake = httpsServer.takeRequest(5, TimeUnit.SECONDS)
+                    assertEquals("/api/ws", inputHandshake?.path)
+                    assertEquals("nano-kvm-token=cookie.jwt", inputHandshake?.getHeader("Cookie"))
+                }
+                assertTrue(peerClosed.await(5, TimeUnit.SECONDS))
+            }
+        }
+    }
+
+    @Test
+    fun `rejected login cannot install a response cookie`() {
+        tokenStore.write("existing.jwt")
+        server.enqueue(
+            jsonResponse("""{"code":-2,"msg":"invalid credentials","data":null}""")
+                .addHeader("Set-Cookie", "nano-kvm-token=rejected.jwt; Path=/; HttpOnly"),
+        )
+        val failure = assertThrows(ApiResponseException::class.java) {
+            runBlocking { client.api.login("admin", "wrong password".toCharArray()) }
+        }
+        assertEquals(-2, failure.code)
+        assertEquals("existing.jwt", tokenStore.read())
+    }
+
+    @Test
+    fun `missing expired path scoped and ambiguous cookies cannot replace a session`() {
+        tokenStore.write("existing.jwt")
+        val invalidCookies = listOf(
+            emptyList(),
+            listOf("unrelated=ignored; Path=/"),
+            listOf("nano-kvm-token=new.jwt; Path=/; Max-Age=0"),
+            listOf("nano-kvm-token=new.jwt; Path=/api/auth"),
+            listOf("nano-kvm-token=one.jwt; Path=/", "nano-kvm-token=two.jwt; Path=/"),
+        )
+        for (cookies in invalidCookies) {
+            val response = jsonResponse("""{"code":0,"data":null}""")
+            cookies.forEach { response.addHeader("Set-Cookie", it) }
+            server.enqueue(response)
+            assertThrows(InvalidApiResponseException::class.java) {
+                runBlocking { client.api.login("admin", "test password".toCharArray()) }
+            }
+            assertEquals("existing.jwt", tokenStore.read())
+        }
     }
 
     @Test

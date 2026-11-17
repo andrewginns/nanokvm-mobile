@@ -20,7 +20,8 @@ val info = client.api.vmInfo()
 ```
 
 `login` performs NanoKVM's CryptoJS/OpenSSL-compatible AES password protection and stores the
-returned token. REST calls and WebSocket requests use the server's required
+token from the successful login's `Set-Cookie` header (NanoKVM 2.5.1 and later) or the
+legacy JSON response. REST calls and WebSocket requests use the server's required
 `nano-kvm-token` cookie. `forgetSession()` only clears local state; it deliberately avoids the
 server logout operation, which can invalidate other sessions depending on server configuration.
 

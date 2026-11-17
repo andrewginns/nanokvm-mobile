@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.nanokvm.protocol.GpioAction
 import org.nanokvm.protocol.GpioStatus
 import org.nanokvm.protocol.NanoKvmApi
+import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmClient
 import org.nanokvm.protocol.NanoKvmServerCapabilities
 import org.nanokvm.protocol.ScreenSetting
@@ -25,6 +26,8 @@ internal class AuthenticatedNanoKvmSession(
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
 
+    val supportsManualResolution =
+        NanoKvmApplicationVersion.parse(vmInfo.application)?.supportsManualResolution == true
     val console = NanoKvmConsoleFeatureGateway(client.api)
 
     override fun close() {
@@ -71,7 +74,20 @@ internal class SessionBoundFeatureLifecycle<Feature> {
 internal class NanoKvmConsoleFeatureGateway(
     private val api: NanoKvmApi,
 ) {
-    suspend fun updateScreen(setting: ScreenSetting, value: Int) = api.updateScreen(setting, value)
+    suspend fun applyVideoSettings(
+        settings: VideoSettings,
+        supportsManualResolution: Boolean,
+    ): VideoSettings {
+        if (supportsManualResolution) {
+            api.updateScreen(ScreenSetting.RESOLUTION, settings.resolutionHeight)
+        }
+        api.updateScreen(ScreenSetting.FPS, settings.framesPerSecond)
+        // NanoKVM uses one setting for both H.264 bitrate and MJPEG quality.
+        api.updateScreen(ScreenSetting.QUALITY, settings.bitrateKbps)
+        api.updateScreen(ScreenSetting.QUALITY, settings.jpegQuality)
+        api.updateScreen(ScreenSetting.GOP, settings.gopFrames)
+        return if (supportsManualResolution) settings else settings.copy(resolutionHeight = 0)
+    }
 
     suspend fun resetHid() = api.resetHid()
 

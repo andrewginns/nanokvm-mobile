@@ -10,11 +10,13 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+import okhttp3.Cookie
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -44,11 +46,28 @@ class NanoKvmApi internal constructor(
         require(password.isNotEmpty()) { "Password must not be empty" }
 
         val encryptedPassword = NanoKvmPasswordCipher.encrypt(password)
-        val token = post(
-            path = "/api/auth/login",
-            body = LoginRequest(username.trim(), encryptedPassword),
-            responseSerializer = serializer<SessionToken>(),
-        )
+        val body = LoginRequest(username.trim(), encryptedPassword)
+        val request = requestBuilder("/api/auth/login")
+            .post(json.encodeToString(body).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        val token = executeApiResponse(request) { envelope, response ->
+            val sessionCookies = response.headers("Set-Cookie").filter {
+                it.substringBefore('=').trim() == SESSION_COOKIE_NAME
+            }
+            if (sessionCookies.isEmpty()) {
+                decodeResponseData(envelope, serializer<SessionToken>())
+            } else {
+                val origin = endpoint.baseUrl
+                val cookie = sessionCookies.singleOrNull()?.let { Cookie.parse(origin, it) }
+                if (response.request.url != request.url || cookie == null || !cookie.hostOnly ||
+                    cookie.path != "/" || !cookie.matches(origin) ||
+                    cookie.expiresAt <= System.currentTimeMillis()
+                ) {
+                    throw InvalidApiResponseException("NanoKVM returned an invalid session cookie")
+                }
+                SessionToken(cookie.value)
+            }
+        }
         validateCookieValue(token.token)
         invalidateSessionScopedHandles()
         tokenStore.write(token.token)
@@ -1193,7 +1212,30 @@ class NanoKvmApi internal constructor(
         responseSerializer: kotlinx.serialization.KSerializer<T>?,
         callTimeoutMillis: Long? = null,
         transport: OkHttpClient = httpClient,
-    ): T? {
+    ): T? = executeApiResponse(request, callTimeoutMillis, transport) { envelope, _ ->
+        responseSerializer?.let { decodeResponseData(envelope, it) }
+    }
+
+    private fun <T> decodeResponseData(
+        envelope: RawApiEnvelope,
+        responseSerializer: kotlinx.serialization.KSerializer<T>,
+    ): T {
+        val data = envelope.data ?: throw InvalidApiResponseException(
+            "Successful NanoKVM response contained no data",
+        )
+        return try {
+            json.decodeFromJsonElement(responseSerializer, data)
+        } catch (error: SerializationException) {
+            throw InvalidApiResponseException("NanoKVM returned invalid response data", error)
+        }
+    }
+
+    private suspend fun <T> executeApiResponse(
+        request: Request,
+        callTimeoutMillis: Long? = null,
+        transport: OkHttpClient = httpClient,
+        readResult: (RawApiEnvelope, Response) -> T,
+    ): T {
         val call = transport.newCall(request)
         callTimeoutMillis?.let { call.timeout().timeout(it, TimeUnit.MILLISECONDS) }
         return try {
@@ -1219,18 +1261,7 @@ class NanoKvmApi internal constructor(
                     if (envelope.code != 0) {
                         throw ApiResponseException(envelope.code, envelope.msg)
                     }
-                    if (responseSerializer == null) return@runInterruptible null
-                    val data = envelope.data ?: throw InvalidApiResponseException(
-                        "Successful NanoKVM response contained no data",
-                    )
-                    try {
-                        json.decodeFromJsonElement(responseSerializer, data)
-                    } catch (error: SerializationException) {
-                        throw InvalidApiResponseException(
-                            "NanoKVM returned invalid response data",
-                            error,
-                        )
-                    }
+                    readResult(envelope, it)
                 }
             }
         } catch (error: CancellationException) {
@@ -1258,6 +1289,7 @@ class NanoKvmApi internal constructor(
     }
 
     companion object {
+        private const val SESSION_COOKIE_NAME = "nano-kvm-token"
         private val API_IO_DISPATCHER = Dispatchers.IO
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OCTET_STREAM_MEDIA_TYPE = "application/octet-stream".toMediaType()
