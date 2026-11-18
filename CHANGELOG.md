@@ -7,6 +7,22 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.16] - 2026-11-18
+
+Android version code **26**.
+
+- Show a single reconnecting state with an animated link and controls to stop
+  or disconnect. Expired sessions prompt for sign-in again.
+- Clear the video warning on the first rendered frame and keep the fallback
+  reason in Video settings. Recover stalled video without reconnecting a
+  working keyboard and mouse connection.
+- Animate initial connection and show actual clipboard send progress around
+  the Stop action.
+- Preserve uppercase letters and shifted symbols from Android software
+  keyboards, including keyboards that send key events instead of text.
+
+## [0.3.15] - 2026-11-17
+
 Android version code **25**.
 
 - Restore login on NanoKVM 2.5.1 and later by accepting the server's session
