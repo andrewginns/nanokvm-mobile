@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -39,6 +40,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -73,6 +75,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -113,6 +116,7 @@ import org.nanokvm.mobile.runtime.PicoClawSupport
 import org.nanokvm.mobile.runtime.PicoClawUiState
 import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.RemoteKey
+import org.nanokvm.mobile.runtime.RemotePasteProgress
 import org.nanokvm.mobile.runtime.RemoteTextEditContext
 import org.nanokvm.mobile.runtime.RemoteTextEditResult
 import org.nanokvm.mobile.runtime.VideoTransportDescriptor
@@ -1707,6 +1711,7 @@ class ConsoleScreenInstrumentedTest {
                 status = null,
             ),
         )
+        composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             val session by sessionState.collectAsState()
             NanoKvmTheme(themeMode = ThemeMode.LIGHT, useDynamicColor = false) {
@@ -1727,7 +1732,18 @@ class ConsoleScreenInstrumentedTest {
             }
         }
 
+        composeRule.mainClock.advanceTimeBy(96)
         composeRule.onNodeWithTag("console-transient-status").assertIsDisplayed()
+        val pulse = composeRule.onNodeWithTag("reconnect-pulse")
+        val disconnect = composeRule.onNodeWithTag("transient-disconnect-action")
+        val originalDisconnectBounds = disconnect.fetchSemanticsNode().boundsInRoot
+        val firstFrame = pulse.captureToImage().asAndroidBitmap()
+        composeRule.mainClock.advanceTimeBy(400)
+        val nextFrame = pulse.captureToImage().asAndroidBitmap()
+        assertFalse("The signal should travel between endpoints", firstFrame.sameAs(nextFrame))
+        assertEquals(originalDisconnectBounds, disconnect.fetchSemanticsNode().boundsInRoot)
+        composeRule.mainClock.autoAdvance = true
+
         assertTextColor("Reconnecting", DarkConsoleColorScheme.onSurface)
         assertTextColor("Stop reconnecting", DarkConsoleColorScheme.onSurface)
         assertTextColor("Disconnect", DarkConsoleColorScheme.onActive)
@@ -1742,6 +1758,7 @@ class ConsoleScreenInstrumentedTest {
                 status = null,
             )
         }
+        pulse.assertDoesNotExist()
         assertTextColor("Connection failed", DarkConsoleColorScheme.onSurface)
         assertTextColor("Retry", DarkConsoleColorScheme.onSurface)
         assertTextColor("Disconnect", DarkConsoleColorScheme.onActive)
@@ -1751,6 +1768,21 @@ class ConsoleScreenInstrumentedTest {
         }
         assertTextColor("Disconnected", DarkConsoleColorScheme.onSurface)
         assertTextColor("Retry", DarkConsoleColorScheme.onSurface)
+    }
+
+    @Test
+    fun clipboardTransferRingKeepsTheAccessibleStopAction() {
+        val session = backend.session as MutableStateFlow<BackendSession>
+        session.value = session.value.copy(
+            pasteProgress = RemotePasteProgress(operationToken = 1, sentKeystrokes = 4, totalKeystrokes = 10),
+        )
+        renderConsole()
+
+        composeRule.onNodeWithTag("clipboard-send-progress", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("console-clipboard-action")
+            .assertContentDescriptionEquals("Cancel clipboard typing · 4 of 10")
+            .performClick()
+        composeRule.runOnIdle { assertEquals(1, backend.cancelPasteCalls) }
     }
 
     @Test
@@ -2478,6 +2510,7 @@ class ConsoleScreenInstrumentedTest {
     fun twoHundredPercentTextKeepsPrimaryAndRecoveryActionsReadable() {
         @Suppress("UNCHECKED_CAST")
         val mutableSession = backend.session as MutableStateFlow<BackendSession>
+        val heightDp = mutableIntStateOf(700)
         composeRule.setContent {
             val session by mutableSession.collectAsState()
             val baseDensity = LocalDensity.current
@@ -2485,7 +2518,7 @@ class ConsoleScreenInstrumentedTest {
                 LocalDensity provides Density(baseDensity.density, fontScale = 2f),
             ) {
                 NanoKvmTheme {
-                    Box(Modifier.requiredSize(width = 411.dp, height = 700.dp)) {
+                    Box(Modifier.requiredSize(width = 411.dp, height = heightDp.intValue.dp)) {
                         ConsoleScreen(
                             profile = profile,
                             session = session,
@@ -2553,6 +2586,13 @@ class ConsoleScreenInstrumentedTest {
         assertTrue("Large-text recovery actions must not overlap", retry.bottom <= disconnect.top + 1f)
         assertTrue(retry.left >= preview.left - 1f && retry.right <= preview.right + 1f)
         assertTrue(disconnect.left >= preview.left - 1f && disconnect.right <= preview.right + 1f)
+
+        composeRule.runOnIdle {
+            heightDp.intValue = 240
+            mutableSession.value = mutableSession.value.copy(connection = ConnectionState.Reconnecting)
+        }
+        composeRule.onNodeWithTag("stop-reconnect-action").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("transient-disconnect-action").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -3164,5 +3204,9 @@ private class RecordingConsoleBackend : ConsoleBackend {
         pasteRequests += request
         pastedText += request.content
     }
-    override fun cancelPaste() = Unit
+    var cancelPasteCalls = 0
+
+    override fun cancelPaste() {
+        cancelPasteCalls++
+    }
 }

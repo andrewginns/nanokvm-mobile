@@ -3,6 +3,8 @@ package org.nanokvm.mobile.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -57,6 +60,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -104,6 +108,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
@@ -159,6 +164,7 @@ import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoTransportPreference
 import org.nanokvm.mobile.ui.displayText
+import org.nanokvm.mobile.ui.components.ConnectionPulse
 import org.nanokvm.mobile.ui.components.ConsoleKeyboard
 import org.nanokvm.mobile.ui.components.ImmersiveModeEffect
 import org.nanokvm.mobile.ui.components.LocalEscapeKeyInterceptor
@@ -1582,11 +1588,28 @@ private fun ConsoleBody(
                     ),
                 ) {
                     Column(
-                        modifier = Modifier.padding(18.dp),
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(connectionLabel(session.connection), style = MaterialTheme.typography.titleMedium)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            itemVerticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (session.connection == ConnectionState.Reconnecting) {
+                                ConnectionPulse(
+                                    modifier = Modifier.testTag("reconnect-pulse"),
+                                    accent = consoleColors.warning,
+                                )
+                            }
+                            Text(
+                                connectionLabel(session.connection),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                        }
                         Text(
                             stringResource(
                                 R.string.console_confirm_host_target,
@@ -1713,6 +1736,16 @@ private fun ConsoleQuickActions(
         if (keyboardVisible) R.string.console_keyboard_visible else R.string.console_keyboard_hidden,
     )
     val pasteProgress = session.pasteProgress
+    val clipboardProgress = pasteProgress?.takeIf { it.totalKeystrokes > 0 }?.let { progress ->
+        val fraction = progress.sentKeystrokes.toFloat() / progress.totalKeystrokes
+        if (progress.phase == RemotePastePhase.Cancelling) {
+            rememberUpdatedState(fraction)
+        } else {
+            key(progress.operationToken) {
+                animateFloatAsState(fraction, animationSpec = tween(160), label = "clipboard send")
+            }
+        }
+    }
     val clipboardActionDescription = if (pasteProgress == null) {
         stringResource(R.string.console_type_phone_clipboard)
     } else {
@@ -1758,6 +1791,7 @@ private fun ConsoleQuickActions(
             actionDescription = clipboardActionDescription,
             enabled = pasteProgress != null || session.connection.isSessionUsable,
             selected = pasteProgress != null,
+            progress = clipboardProgress?.let { progress -> { progress.value } },
             onClick = onClipboard,
             tag = "console-clipboard-action",
         )
@@ -1827,6 +1861,7 @@ private fun ConsoleQuickAction(
     state: String? = null,
     statusIcon: ImageVector? = null,
     statusColor: Color = Color.Unspecified,
+    progress: (() -> Float)? = null,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     val actionModifier = Modifier
@@ -1859,6 +1894,7 @@ private fun ConsoleQuickAction(
                     statusColor = statusColor,
                     statusIconInset = 4.dp,
                     modifier = Modifier.fillMaxSize(),
+                    progress = progress,
                 )
             }
         }
@@ -1884,6 +1920,7 @@ private fun ConsoleQuickAction(
                 icon = icon,
                 statusIcon = statusIcon,
                 statusColor = statusColor,
+                progress = progress,
             )
             Text(
                 visibleLabel,
@@ -1901,8 +1938,23 @@ private fun ConsoleQuickActionIcon(
     statusColor: Color,
     modifier: Modifier = Modifier,
     statusIconInset: Dp = 0.dp,
+    progress: (() -> Float)?,
 ) {
-    Box(modifier, contentAlignment = Alignment.Center) {
+    Box(modifier.size(32.dp), contentAlignment = Alignment.Center) {
+        if (progress != null) {
+            val colors = LocalConsoleColorScheme.current
+            CircularProgressIndicator(
+                progress = progress,
+                modifier = Modifier
+                    .size(32.dp)
+                    .testTag("clipboard-send-progress")
+                    .clearAndSetSemantics {},
+                color = colors.active,
+                trackColor = colors.outline,
+                strokeWidth = 2.dp,
+                gapSize = 0.dp,
+            )
+        }
         Icon(
             icon,
             contentDescription = null,

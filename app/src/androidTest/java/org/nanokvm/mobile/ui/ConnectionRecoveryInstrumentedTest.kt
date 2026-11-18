@@ -89,6 +89,7 @@ class ConnectionRecoveryInstrumentedTest {
             }
         }
 
+        composeRule.onNodeWithTag("initial-connection-pulse").assertIsDisplayed()
         composeRule.onNodeWithTag("connecting-cancel-action")
             .performScrollTo()
             .assertIsDisplayed()

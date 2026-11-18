@@ -26,7 +26,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -55,6 +54,7 @@ import org.nanokvm.mobile.R
 import org.nanokvm.mobile.clipboard.ClipboardGateway
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.security.CredentialAuthenticator
+import org.nanokvm.mobile.ui.components.ConnectionPulse
 import org.nanokvm.mobile.ui.screens.CertificateReviewScreen
 import org.nanokvm.mobile.ui.screens.ConsoleScreen
 import org.nanokvm.mobile.ui.screens.ProfileEditorScreen
@@ -377,7 +377,7 @@ internal fun ConnectingScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CircularProgressIndicator()
+        ConnectionPulse(Modifier.testTag("initial-connection-pulse"))
         Text(
             stringResource(R.string.connecting_to_profile, profile.name),
             style = MaterialTheme.typography.titleMedium,
