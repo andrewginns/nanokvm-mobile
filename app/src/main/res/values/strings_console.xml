@@ -64,19 +64,7 @@
     <string name="console_message_video_settings_applied">Video settings applied; restarting stream</string>
     <string name="console_message_video_settings_not_applied">Video settings were not applied: %1$s</string>
     <string name="console_message_clipboard_byte_limit">Clipboard text must contain 1 to %1$d UTF-8 bytes</string>
-    <string name="console_message_preparing_reconnect">Preparing to reconnect</string>
-    <string name="console_message_reconnect_attempt">Reconnect attempt %1$d of %2$d</string>
-    <string name="console_message_reconnect_attempt_delayed">Reconnect attempt %1$d of %2$d in %3$s</string>
-    <plurals name="console_message_reconnect_delay">
-        <item quantity="one">%1$d second</item>
-        <item quantity="other">%1$d seconds</item>
-    </plurals>
-    <string name="console_message_reconnect_stopped">Reconnect stopped after %1$s: %2$s</string>
     <string name="console_message_reconnect_cancelled">Automatic reconnect stopped. Retry when you are ready.</string>
-    <plurals name="console_message_reconnect_attempt_count">
-        <item quantity="one">%1$d attempt</item>
-        <item quantity="other">%1$d attempts</item>
-    </plurals>
     <string name="console_message_typing_clipboard">Typing approved clipboard text into remote</string>
     <string name="console_message_clipboard_session_changed">The NanoKVM session changed before clipboard typing could start.</string>
     <string name="console_message_clipboard_already_active">Clipboard typing is already active or stopping.</string>
@@ -99,7 +87,14 @@
     <string name="console_message_host_control_sent">Host control sent</string>
     <string name="console_message_host_control_session_changed">The host-control request was not sent because the authenticated destination changed.</string>
     <string name="console_message_connecting_video">Connecting %1$s</string>
-    <string name="console_message_video_fallback">%1$s unavailable; using %2$s</string>
+    <string name="console_message_video_fallback">%1$s switched to %2$s. %3$s</string>
+    <string name="console_message_video_failed">%1$s video stopped. %2$s</string>
+    <string name="console_video_reason_unavailable">This transport is unavailable on this device.</string>
+    <string name="console_video_reason_first_frame">Timed out waiting for the first frame.</string>
+    <string name="console_video_reason_stalled">The stream stopped delivering frames.</string>
+    <string name="console_video_reason_decoder">The video decoder failed.</string>
+    <string name="console_video_reason_transport">The stream connection failed.</string>
+    <string name="console_video_reason_http">The stream request was rejected (HTTP %1$d).</string>
     <string name="console_message_mjpeg_detection_unavailable">MJPEG frame detection is unavailable for this session.</string>
     <string name="console_message_mjpeg_detection_not_acknowledged">NanoKVM did not acknowledge the MJPEG frame-detection request. The request was not retried.</string>
 
@@ -257,8 +252,6 @@
     <string name="console_disconnect_detail">Target: %1$s\n\nThis ends the remote session. It does not power off or restart the host.</string>
     <string name="console_retry">Retry</string>
     <string name="console_stop_reconnecting">Stop reconnecting</string>
-    <string name="console_reconnect_progress">Attempt %1$d of %2$d</string>
-    <string name="console_reconnect_delay">Next attempt in %1$s</string>
 
     <!-- Virtual media and Wake-on-LAN -->
     <string name="console_virtual_media">Virtual media</string>

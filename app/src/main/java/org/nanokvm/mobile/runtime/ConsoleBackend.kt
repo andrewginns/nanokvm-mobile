@@ -1118,6 +1118,7 @@ data class BackendSession(
     val remoteWidth: Int = 1920,
     val remoteHeight: Int = 1080,
     val streamLabel: VideoStreamDescriptor = VideoStreamDescriptor.DirectH264,
+    val lastVideoFallback: ConsoleMessage.VideoFallback? = null,
     val videoSettings: VideoSettings = VideoSettings(),
     val supportsManualResolution: Boolean = true,
     /** Recreates the TextureView/BufferQueue when producer APIs or codecs must be switched. */
@@ -1136,9 +1137,6 @@ data class BackendSession(
     val status: ConsoleMessage.Status? = null,
     /** Latest user-action feedback, isolated from unrelated video/status callbacks. */
     val lastActionFeedback: SequencedConsoleActionFeedback? = null,
-    val reconnectAttempt: Int? = null,
-    val reconnectMaximumAttempts: Int? = null,
-    val nextReconnectDelayMillis: Long? = null,
     /** Monotonically changes whenever all HID state is released, so UI latches can resynchronize. */
     val inputReleaseGeneration: Long = 0,
 )

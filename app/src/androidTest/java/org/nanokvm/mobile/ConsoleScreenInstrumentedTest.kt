@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -114,6 +115,8 @@ import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.RemoteKey
 import org.nanokvm.mobile.runtime.RemoteTextEditContext
 import org.nanokvm.mobile.runtime.RemoteTextEditResult
+import org.nanokvm.mobile.runtime.VideoTransportDescriptor
+import org.nanokvm.video.NanoKvmVideoFailureReason
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoStreamDescriptor
 import org.nanokvm.mobile.runtime.VideoTransportPreference
@@ -1701,14 +1704,7 @@ class ConsoleScreenInstrumentedTest {
         val sessionState = MutableStateFlow(
             backend.session.value.copy(
                 connection = ConnectionState.Reconnecting,
-                status = ConsoleMessage.ReconnectAttemptDelayed(
-                    attempt = 2,
-                    maximumAttempts = 5,
-                    delaySeconds = 3,
-                ),
-                reconnectAttempt = 2,
-                reconnectMaximumAttempts = 5,
-                nextReconnectDelayMillis = 3_000L,
+                status = null,
             ),
         )
         composeRule.setContent {
@@ -1735,24 +1731,15 @@ class ConsoleScreenInstrumentedTest {
         assertTextColor("Reconnecting", DarkConsoleColorScheme.onSurface)
         assertTextColor("Stop reconnecting", DarkConsoleColorScheme.onSurface)
         assertTextColor("Disconnect", DarkConsoleColorScheme.onActive)
-        assertTextColor("Attempt 2 of 5", DarkConsoleColorScheme.onSurface)
-        assertTextColor("Next attempt in 3 seconds", DarkConsoleColorScheme.onSurface)
+        composeRule.onNodeWithText("Attempt", substring = true).assertDoesNotExist()
         assertTextColor(
             "Target: ${profile.name} (${profile.authority})",
             DarkConsoleColorScheme.onSurfaceMuted,
         )
-        assertTextColor(
-            "Reconnect attempt 2 of 5 in 3 seconds",
-            DarkConsoleColorScheme.onSurfaceMuted,
-        )
-
         composeRule.runOnIdle {
             sessionState.value = sessionState.value.copy(
                 connection = ConnectionState.Failed,
                 status = null,
-                reconnectAttempt = null,
-                reconnectMaximumAttempts = null,
-                nextReconnectDelayMillis = null,
             )
         }
         assertTextColor("Connection failed", DarkConsoleColorScheme.onSurface)
@@ -2251,6 +2238,30 @@ class ConsoleScreenInstrumentedTest {
                 backend.lastVideoSettings,
             )
         }
+    }
+
+    @Test
+    fun playingFallbackKeepsReasonInVideoSettingsWithoutWarning() {
+        val fallback = ConsoleMessage.VideoFallback(
+            VideoTransportDescriptor.DirectH264,
+            VideoTransportDescriptor.Mjpeg,
+            NanoKvmVideoFailureReason.FirstFrameTimeout,
+        )
+        val session = backend.session as MutableStateFlow<BackendSession>
+        session.value = session.value.copy(
+            connection = ConnectionState.Connected,
+            streamLabel = VideoStreamDescriptor.MjpegFallback,
+            lastVideoFallback = fallback,
+        )
+        renderConsole()
+
+        composeRule.onNodeWithTag("console-degraded-status").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Video settings").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("video-applied-transport").assertIsDisplayed()
+        composeRule.onNodeWithTag("video-fallback-detail")
+            .assertTextContains("Timed out waiting for the first frame.", substring = true)
     }
 
     @Test

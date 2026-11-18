@@ -73,6 +73,15 @@ data class NanoKvmVideoConfig(
     }
 }
 
+sealed interface NanoKvmVideoFailureReason {
+    data object Unavailable : NanoKvmVideoFailureReason
+    data object FirstFrameTimeout : NanoKvmVideoFailureReason
+    data object Stalled : NanoKvmVideoFailureReason
+    data object Decoder : NanoKvmVideoFailureReason
+    data object Transport : NanoKvmVideoFailureReason
+    data class HttpRejected(val statusCode: Int) : NanoKvmVideoFailureReason
+}
+
 sealed interface NanoKvmVideoStatus {
     data class Connecting(val transport: NanoKvmVideoTransport) : NanoKvmVideoStatus
     data class Streaming(val transport: NanoKvmVideoTransport) : NanoKvmVideoStatus
@@ -80,9 +89,14 @@ sealed interface NanoKvmVideoStatus {
         val from: NanoKvmVideoTransport,
         val to: NanoKvmVideoTransport,
         val cause: Throwable,
+        val reason: NanoKvmVideoFailureReason,
     ) : NanoKvmVideoStatus
     data object Stopped : NanoKvmVideoStatus
-    data class Error(val transport: NanoKvmVideoTransport, val cause: Throwable) : NanoKvmVideoStatus
+    data class Error(
+        val transport: NanoKvmVideoTransport,
+        val cause: Throwable,
+        val reason: NanoKvmVideoFailureReason,
+    ) : NanoKvmVideoStatus
 }
 
 interface NanoKvmVideoListener {
@@ -199,7 +213,11 @@ class NanoKvmVideoSession(
                 webRtcFailureClaimed = false
             }
             notifyStatus(run, NanoKvmVideoStatus.Connecting(NanoKvmVideoTransport.WEBRTC))
-            onWebRtcFailure(run, surface, config, IllegalStateException("WebRTC is unavailable"))
+            onWebRtcFailure(
+                run, surface, config,
+                IllegalStateException("WebRTC is unavailable"),
+                NanoKvmVideoFailureReason.Unavailable,
+            )
             return
         }
         val created = NanoKvmWebRtcSource(
@@ -231,12 +249,13 @@ class NanoKvmVideoSession(
                             surface,
                             config,
                             IllegalStateException("WebRTC signaling closed ($code)"),
+                            NanoKvmVideoFailureReason.Transport,
                         )
                     }
                 }
 
                 override fun onFailure(cause: Throwable, responseCode: Int?) {
-                    if (isCurrent(run)) onWebRtcFailure(run, surface, config, cause)
+                    onWebRtcFailure(run, surface, config, cause, transportFailureReason(responseCode))
                 }
             },
         )
@@ -292,6 +311,7 @@ class NanoKvmVideoSession(
         surface: Surface,
         config: NanoKvmVideoConfig,
         cause: Throwable,
+        reason: NanoKvmVideoFailureReason,
         expectedWatchdogEpoch: Long? = null,
     ) {
         val oldSource: NanoKvmWebRtcSource?
@@ -310,12 +330,17 @@ class NanoKvmVideoSession(
         if (expectedWatchdogEpoch != null) {
             dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.WEBRTC) }
         }
+        if (reason == NanoKvmVideoFailureReason.HttpRejected(401)) {
+            notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.WEBRTC, cause, reason))
+            return
+        }
         notifyStatus(
             run,
             NanoKvmVideoStatus.FallingBack(
                 from = NanoKvmVideoTransport.WEBRTC,
                 to = NanoKvmVideoTransport.H264,
                 cause = cause,
+                reason = reason,
             ),
         )
         if (isCurrent(run)) startH264(run, surface, config)
@@ -330,6 +355,7 @@ class NanoKvmVideoSession(
     ) {
         cancelWebRtcWatchdogLocked()
         val watchdogEpoch = webRtcWatchdogEpoch
+        val reason = frameTimeoutReason(webRtcHasRendered)
         webRtcWatchdog = watchdogExecutor.schedule(
             {
                 onWebRtcFailure(
@@ -337,6 +363,7 @@ class NanoKvmVideoSession(
                     surface,
                     config,
                     IllegalStateException(message),
+                    reason,
                     expectedWatchdogEpoch = watchdogEpoch,
                 )
             },
@@ -357,7 +384,7 @@ class NanoKvmVideoSession(
                 override fun onStatusChanged(status: H264RendererStatus) {
                     if (!isCurrent(run)) return
                     if (status is H264RendererStatus.Error) {
-                        onH264Failure(run, config, status.cause)
+                        onH264Failure(run, config, status.cause, NanoKvmVideoFailureReason.Decoder)
                     }
                 }
 
@@ -405,12 +432,13 @@ class NanoKvmVideoSession(
                             run,
                             config,
                             IllegalStateException("H.264 WebSocket closed ($code)"),
+                            NanoKvmVideoFailureReason.Transport,
                         )
                     }
                 }
 
                 override fun onFailure(cause: Throwable, responseCode: Int?) {
-                    if (isCurrent(run)) onH264Failure(run, config, cause)
+                    onH264Failure(run, config, cause, transportFailureReason(responseCode))
                 }
             },
             maxAccessUnitBytes = config.decoder.maxInputSizeBytes,
@@ -457,6 +485,7 @@ class NanoKvmVideoSession(
         run: Long,
         config: NanoKvmVideoConfig,
         cause: Throwable,
+        reason: NanoKvmVideoFailureReason,
         expectedWatchdogEpoch: Long? = null,
     ) {
         val oldSource: DirectH264WebSocketSource?
@@ -484,13 +513,16 @@ class NanoKvmVideoSession(
 
         val h264Index = config.preference.transportChain().indexOf(NanoKvmVideoTransport.H264)
         val nextTransport = config.preference.transportChain().getOrNull(h264Index + 1)
-        if (nextTransport == NanoKvmVideoTransport.MJPEG) {
+        if (nextTransport == NanoKvmVideoTransport.MJPEG &&
+            reason != NanoKvmVideoFailureReason.HttpRejected(401)
+        ) {
             notifyStatus(
                 run,
                 NanoKvmVideoStatus.FallingBack(
                     from = NanoKvmVideoTransport.H264,
                     to = NanoKvmVideoTransport.MJPEG,
                     cause = cause,
+                    reason = reason,
                 ),
             )
             if (decoderReleased == null) {
@@ -503,7 +535,7 @@ class NanoKvmVideoSession(
         } else {
             // A MediaCodec in its error state must not keep receiving frames. Reconnect is an
             // explicit fresh decoder/session attempt for the H.264-only preference.
-            notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.H264, cause))
+            notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.H264, cause, reason))
         }
     }
 
@@ -515,12 +547,14 @@ class NanoKvmVideoSession(
     ) {
         cancelH264WatchdogLocked()
         val watchdogEpoch = h264WatchdogEpoch
+        val reason = frameTimeoutReason(h264HasRendered)
         h264Watchdog = watchdogExecutor.schedule(
             {
                 onH264Failure(
                     run,
                     config,
                     IllegalStateException(message),
+                    reason,
                     expectedWatchdogEpoch = watchdogEpoch,
                 )
             },
@@ -555,11 +589,16 @@ class NanoKvmVideoSession(
                 }
 
                 override fun onClosed() {
-                    onMjpegFailure(run, IllegalStateException("MJPEG stream closed"))
+                    onMjpegFailure(
+                        run,
+                        IllegalStateException("MJPEG stream closed"),
+                        NanoKvmVideoFailureReason.Transport,
+                    )
                 }
 
                 override fun onFailure(cause: Throwable, responseCode: Int?) {
-                    onMjpegFailure(run, cause)
+                    val rejection = responseCode?.takeUnless { it in 200..299 }
+                    onMjpegFailure(run, cause, transportFailureReason(rejection))
                 }
             },
             maxFrameBytes = config.maxMjpegFrameBytes,
@@ -593,12 +632,18 @@ class NanoKvmVideoSession(
             )
             value
         }
-        if (first) notifyStatus(run, NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.MJPEG))
+        if (first) {
+            dispatchForGeneration(run) {
+                val active = synchronized(stateLock) { generation == run && !mjpegFailureClaimed }
+                if (active) listener.onStatusChanged(NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.MJPEG))
+            }
+        }
     }
 
     private fun onMjpegFailure(
         run: Long,
         cause: Throwable,
+        reason: NanoKvmVideoFailureReason,
         expectedWatchdogEpoch: Long? = null,
     ) {
         val oldSource: MjpegStreamReader?
@@ -617,17 +662,19 @@ class NanoKvmVideoSession(
         if (expectedWatchdogEpoch != null) {
             dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.MJPEG) }
         }
-        notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.MJPEG, cause))
+        notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.MJPEG, cause, reason))
     }
 
     private fun armMjpegWatchdogLocked(run: Long, delayMillis: Long, message: String) {
         cancelMjpegWatchdogLocked()
         val watchdogEpoch = mjpegWatchdogEpoch
+        val reason = frameTimeoutReason(mjpegHasRendered)
         mjpegWatchdog = watchdogExecutor.schedule(
             {
                 onMjpegFailure(
                     run,
                     IllegalStateException(message),
+                    reason,
                     expectedWatchdogEpoch = watchdogEpoch,
                 )
             },
@@ -767,3 +814,11 @@ class NanoKvmVideoSession(
         val stallTimeoutMillis: Long,
     )
 }
+
+private fun transportFailureReason(responseCode: Int?): NanoKvmVideoFailureReason =
+    if (responseCode == null) NanoKvmVideoFailureReason.Transport
+    else NanoKvmVideoFailureReason.HttpRejected(responseCode)
+
+private fun frameTimeoutReason(hasRendered: Boolean): NanoKvmVideoFailureReason =
+    if (hasRendered) NanoKvmVideoFailureReason.Stalled
+    else NanoKvmVideoFailureReason.FirstFrameTimeout

@@ -51,6 +51,8 @@ class NanoKvmMjpegSessionInstrumentedTest {
             assertTrue("The session must recycle a rejected bitmap", checkNotNull(fixture.bitmap.get()).isRecycled)
             assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.Streaming })
             assertEquals(listOf(NanoKvmVideoTransport.MJPEG), fixture.stalls)
+            val error = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Error>().single()
+            assertEquals(NanoKvmVideoFailureReason.FirstFrameTimeout, error.reason)
         }
     }
 
@@ -79,6 +81,7 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 val fallback = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.FallingBack>().single()
                 assertEquals(NanoKvmVideoTransport.H264, fallback.from)
                 assertEquals(NanoKvmVideoTransport.MJPEG, fallback.to)
+                assertEquals(NanoKvmVideoFailureReason.HttpRejected(503), fallback.reason)
                 val streaming = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Streaming>().single()
                 assertEquals(NanoKvmVideoTransport.MJPEG, streaming.transport)
                 assertTrue(fixture.statuses.indexOf(fallback) < fixture.statuses.indexOf(streaming))
@@ -87,7 +90,23 @@ class NanoKvmMjpegSessionInstrumentedTest {
         }
     }
 
-    private class MjpegFixture(onBitmap: (Bitmap) -> Boolean) : AutoCloseable {
+    @Test
+    fun expiredLoginStopsFallbackChain() {
+        ImageReader.newInstance(1_920, 1_080, ImageFormat.PRIVATE, 2).use { target ->
+            MjpegFixture(h264ResponseCode = 401) { true }.use { fixture ->
+                fixture.startAuto(target.surface)
+                assertTrue(fixture.failed.await(5, TimeUnit.SECONDS))
+                val error = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Error>().single()
+                assertEquals(NanoKvmVideoFailureReason.HttpRejected(401), error.reason)
+                assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.FallingBack })
+            }
+        }
+    }
+
+    private class MjpegFixture(
+        private val h264ResponseCode: Int = 503,
+        onBitmap: (Bitmap) -> Boolean,
+    ) : AutoCloseable {
         private val server = MockWebServer().apply { start() }
         private val client = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
         private val callbacks = Executors.newSingleThreadExecutor()
@@ -164,7 +183,7 @@ class NanoKvmMjpegSessionInstrumentedTest {
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
                     "/api/stream/mjpeg" -> response
-                    "/api/stream/h264/direct" -> MockResponse().setResponseCode(503)
+                    "/api/stream/h264/direct" -> MockResponse().setResponseCode(h264ResponseCode)
                     else -> MockResponse().setResponseCode(404)
                 }
             }

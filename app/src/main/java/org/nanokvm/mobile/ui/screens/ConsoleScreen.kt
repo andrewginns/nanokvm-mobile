@@ -141,6 +141,7 @@ import org.nanokvm.mobile.runtime.ApprovedPasteRequest
 import org.nanokvm.mobile.runtime.ApprovedPhase3Destination
 import org.nanokvm.mobile.runtime.ApprovedPicoClawDestination
 import org.nanokvm.mobile.runtime.ConnectionState
+import org.nanokvm.mobile.runtime.ConsoleMessage
 import org.nanokvm.mobile.runtime.isSessionUsable
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
@@ -806,8 +807,8 @@ internal fun ConsoleScreen(
             onViewportAction = requestViewportAction,
             onCtrlAltDelete = { requestPowerAction(PowerAction.CtrlAltDelete) },
             onRetryConnection = {
-                contextualInput.releaseAllInput()
-                if (session.status == org.nanokvm.mobile.runtime.ConsoleMessage.AuthenticationExpired) {
+                if (!session.connection.isSessionUsable) contextualInput.releaseAllInput()
+                if (session.status == ConsoleMessage.AuthenticationExpired) {
                     onReauthenticate()
                 } else {
                     coreControls.reconnect()
@@ -993,6 +994,7 @@ internal fun ConsoleScreen(
             initial = session.videoSettings,
             supportsManualResolution = session.supportsManualResolution,
             appliedTransport = session.streamLabel.displayText(),
+            fallbackDetail = session.lastVideoFallback?.displayText(),
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
             onDismiss = { overlay = ConsoleOverlay.None },
             onApply = { settings, frameDetectionEnabled ->
@@ -1039,7 +1041,6 @@ internal fun ConsoleScreen(
             onDismiss = { overlay = ConsoleOverlay.None },
             onReconnect = {
                 overlay = ConsoleOverlay.None
-                contextualInput.releaseAllInput()
                 coreControls.reconnect()
             },
             onResetHid = {
@@ -1595,42 +1596,13 @@ private fun ConsoleBody(
                             color = consoleColors.onSurfaceMuted,
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Text(
-                            session.status?.displayText()
-                                ?: stringResource(R.string.console_waiting_for_video),
-                            color = consoleColors.onSurfaceMuted,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (
-                            session.connection == ConnectionState.Reconnecting &&
-                            session.reconnectAttempt != null &&
-                            session.reconnectMaximumAttempts != null
-                        ) {
+                        if (session.connection != ConnectionState.Reconnecting) {
                             Text(
-                                stringResource(
-                                    R.string.console_reconnect_progress,
-                                    session.reconnectAttempt,
-                                    session.reconnectMaximumAttempts,
-                                ),
-                                style = MaterialTheme.typography.labelMedium,
+                                session.status?.displayText()
+                                    ?: stringResource(R.string.console_waiting_for_video),
+                                color = consoleColors.onSurfaceMuted,
+                                style = MaterialTheme.typography.bodySmall,
                             )
-                            session.nextReconnectDelayMillis?.let { delayMillis ->
-                                val seconds = ((delayMillis + 999L) / 1_000L)
-                                    .coerceAtLeast(1L)
-                                    .coerceAtMost(Int.MAX_VALUE.toLong())
-                                    .toInt()
-                                Text(
-                                    stringResource(
-                                        R.string.console_reconnect_delay,
-                                        pluralStringResource(
-                                            R.plurals.console_message_reconnect_delay,
-                                            seconds,
-                                            seconds,
-                                        ),
-                                    ),
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
                         }
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1688,15 +1660,20 @@ private fun ConsoleBody(
                     shape = MaterialTheme.shapes.large,
                     shadowElevation = 4.dp,
                 ) {
-                    Text(
-                        listOfNotNull(
-                            connectionLabel(ConnectionState.Degraded),
-                            session.streamLabel.displayText(),
-                            session.status?.displayText(),
-                        ).joinToString(stringResource(R.string.console_status_separator)),
+                    Column(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            session.status?.displayText() ?: connectionLabel(ConnectionState.Degraded),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        if (session.status is ConsoleMessage.VideoFailed) {
+                            TextButton(onClick = onRetryConnection) {
+                                Text(stringResource(R.string.console_reconnect_stream))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2772,6 +2749,7 @@ private fun VideoSettingsDialog(
     initial: VideoSettings,
     supportsManualResolution: Boolean,
     appliedTransport: String,
+    fallbackDetail: String?,
     initialMjpegFrameDetectionEnabled: Boolean,
     onDismiss: () -> Unit,
     onApply: (VideoSettings, Boolean) -> Unit,
@@ -2799,6 +2777,14 @@ private fun VideoSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag("video-applied-transport"),
                 )
+                if (fallbackDetail != null) {
+                    Text(
+                        fallbackDetail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("video-fallback-detail"),
+                    )
+                }
                 TransportChoiceRow(transport) { transport = it }
                 if (supportsManualResolution) {
                     ChoiceRow(

@@ -51,22 +51,10 @@ internal fun ReconnectFailure.disposition(): ReconnectFailureDisposition {
 private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean =
     generateSequence(this) { it.cause }.any { it is T }
 
-internal sealed interface ReconnectAttemptResult {
-    data object Connected : ReconnectAttemptResult
-    data class Failed(val failure: ReconnectFailure) : ReconnectAttemptResult
+internal sealed interface ReconnectResult {
+    data object Connected : ReconnectResult
+    data class Failed(val failure: ReconnectFailure) : ReconnectResult
 }
-
-internal sealed interface ReconnectRunResult {
-    data object Connected : ReconnectRunResult
-    data class Terminal(val failure: ReconnectFailure) : ReconnectRunResult
-    data class Exhausted(val failure: ReconnectFailure, val attempts: Int) : ReconnectRunResult
-}
-
-internal data class ReconnectProgress(
-    val attempt: Int,
-    val maximumAttempts: Int,
-    val delayMillis: Long,
-)
 
 /** Foreground reconnect schedule. No input or control command is retained or replayed. */
 internal class ReconnectPolicy(
@@ -80,36 +68,31 @@ internal class ReconnectPolicy(
         require(jitterFraction in 0.0..1.0) { "Reconnect jitter must be between zero and one" }
     }
 
-    val maximumAttempts: Int get() = baseDelaysMillis.size
-
     suspend fun execute(
         immediateFirstAttempt: Boolean,
         wait: suspend (Long) -> Unit = { delay(it) },
-        onWaiting: (ReconnectProgress) -> Unit = {},
-        attempt: suspend (attemptNumber: Int) -> ReconnectAttemptResult,
-    ): ReconnectRunResult {
-        var lastFailure: ReconnectFailure? = null
+        attempt: suspend () -> ReconnectResult,
+    ): ReconnectResult {
+        var lastFailure: ReconnectResult.Failed? = null
         baseDelaysMillis.indices.forEach { index ->
-            val attemptNumber = index + 1
             val delayMillis = if (immediateFirstAttempt && index == 0) {
                 0L
             } else {
                 jittered(baseDelaysMillis[index])
             }
-            onWaiting(ReconnectProgress(attemptNumber, maximumAttempts, delayMillis))
             if (delayMillis > 0L) wait(delayMillis)
 
-            when (val result = attempt(attemptNumber)) {
-                ReconnectAttemptResult.Connected -> return ReconnectRunResult.Connected
-                is ReconnectAttemptResult.Failed -> {
-                    lastFailure = result.failure
+            when (val result = attempt()) {
+                ReconnectResult.Connected -> return ReconnectResult.Connected
+                is ReconnectResult.Failed -> {
                     if (result.failure.disposition() == ReconnectFailureDisposition.TERMINAL) {
-                        return ReconnectRunResult.Terminal(result.failure)
+                        return result
                     }
+                    lastFailure = result
                 }
             }
         }
-        return ReconnectRunResult.Exhausted(checkNotNull(lastFailure), maximumAttempts)
+        return checkNotNull(lastFailure)
     }
 
     private fun jittered(baseDelayMillis: Long): Long {

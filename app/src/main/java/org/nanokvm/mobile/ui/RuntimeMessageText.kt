@@ -2,6 +2,7 @@ package org.nanokvm.mobile.ui
 
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
+import org.nanokvm.video.NanoKvmVideoFailureReason
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import org.nanokvm.mobile.R
@@ -123,32 +124,6 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
         R.string.console_message_clipboard_byte_limit,
         maximumBytes,
     )
-    ConsoleMessage.PreparingToReconnect ->
-        stringResource(R.string.console_message_preparing_reconnect)
-    is ConsoleMessage.ReconnectAttempt -> stringResource(
-        R.string.console_message_reconnect_attempt,
-        attempt,
-        maximumAttempts,
-    )
-    is ConsoleMessage.ReconnectAttemptDelayed -> stringResource(
-        R.string.console_message_reconnect_attempt_delayed,
-        attempt,
-        maximumAttempts,
-        pluralStringResource(
-            R.plurals.console_message_reconnect_delay,
-            delaySeconds,
-            delaySeconds,
-        ),
-    )
-    is ConsoleMessage.ReconnectStopped -> stringResource(
-        R.string.console_message_reconnect_stopped,
-        pluralStringResource(
-            R.plurals.console_message_reconnect_attempt_count,
-            attempts,
-            attempts,
-        ),
-        failure.displayText(),
-    )
     ConsoleMessage.ReconnectCancelled ->
         stringResource(R.string.console_message_reconnect_cancelled)
     is ConsoleMessage.ConnectionFailed -> failure.displayText()
@@ -195,6 +170,12 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
         R.string.console_message_video_fallback,
         from.displayText(),
         to.displayText(),
+        reason.displayText(),
+    )
+    is ConsoleMessage.VideoFailed -> stringResource(
+        R.string.console_message_video_failed,
+        transport.displayText(),
+        reason.displayText(),
     )
     ConsoleMessage.MjpegFrameDetectionUnavailable ->
         stringResource(R.string.console_message_mjpeg_detection_unavailable)
@@ -290,4 +271,14 @@ internal fun credentialNoticeResource(notice: CredentialNotice): Int = when (not
         R.string.notice_credential_authentication_start_failed
     CredentialNotice.AuthenticationFailedUsePassword ->
         R.string.notice_credential_authentication_failed
+}
+
+@Composable
+private fun NanoKvmVideoFailureReason.displayText(): String = when (this) {
+    NanoKvmVideoFailureReason.Unavailable -> stringResource(R.string.console_video_reason_unavailable)
+    NanoKvmVideoFailureReason.FirstFrameTimeout -> stringResource(R.string.console_video_reason_first_frame)
+    NanoKvmVideoFailureReason.Stalled -> stringResource(R.string.console_video_reason_stalled)
+    NanoKvmVideoFailureReason.Decoder -> stringResource(R.string.console_video_reason_decoder)
+    NanoKvmVideoFailureReason.Transport -> stringResource(R.string.console_video_reason_transport)
+    is NanoKvmVideoFailureReason.HttpRejected -> stringResource(R.string.console_video_reason_http, statusCode)
 }

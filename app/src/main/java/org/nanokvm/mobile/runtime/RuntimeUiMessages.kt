@@ -1,5 +1,7 @@
 package org.nanokvm.mobile.runtime
 
+import org.nanokvm.video.NanoKvmVideoFailureReason
+
 /**
  * A closed, presentation-independent description of a connection failure.
  *
@@ -81,23 +83,6 @@ sealed interface ConsoleMessage {
     data object VideoSettingsApplied : ActionFeedback
     data class VideoSettingsNotApplied(val failure: ConnectionFailure) : ActionFeedback
     data class ClipboardTextOutsideByteLimit(val maximumBytes: Int) : ActionFeedback
-    data object PreparingToReconnect : Status
-    data class ReconnectAttempt(
-        val attempt: Int,
-        val maximumAttempts: Int,
-    ) : Status
-
-    data class ReconnectAttemptDelayed(
-        val attempt: Int,
-        val maximumAttempts: Int,
-        val delaySeconds: Int,
-    ) : Status
-
-    data class ReconnectStopped(
-        val attempts: Int,
-        val failure: ConnectionFailure,
-    ) : Status
-
     data object ReconnectCancelled : Status
     data class ConnectionFailed(val failure: ConnectionFailure) : Status
     data class CommandFailed(val failure: ConnectionFailure) : ActionFeedback
@@ -125,6 +110,12 @@ sealed interface ConsoleMessage {
     data class VideoFallback(
         val from: VideoTransportDescriptor,
         val to: VideoTransportDescriptor,
+        val reason: NanoKvmVideoFailureReason,
+    ) : Status
+
+    data class VideoFailed(
+        val transport: VideoTransportDescriptor,
+        val reason: NanoKvmVideoFailureReason,
     ) : Status
 
     data object MjpegFrameDetectionUnavailable : ActionFeedback

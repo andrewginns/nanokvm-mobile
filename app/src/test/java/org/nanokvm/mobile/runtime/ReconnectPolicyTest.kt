@@ -13,7 +13,7 @@ class ReconnectPolicyTest {
     @Test
     fun `bounded policy exhausts exact configured attempts and delays`() = runBlocking {
         val waits = mutableListOf<Long>()
-        val attempts = mutableListOf<Int>()
+        var attempts = 0
         val policy = ReconnectPolicy(
             baseDelaysMillis = listOf(1L, 2L, 4L),
             jitterFraction = 0.0,
@@ -22,15 +22,15 @@ class ReconnectPolicyTest {
         val result = policy.execute(
             immediateFirstAttempt = false,
             wait = { waits += it },
-            attempt = { number ->
-                attempts += number
-                ReconnectAttemptResult.Failed(ReconnectFailure(IOException("offline")))
+            attempt = {
+                attempts++
+                ReconnectResult.Failed(ReconnectFailure(IOException("offline")))
             },
         )
 
         assertEquals(listOf(1L, 2L, 4L), waits)
-        assertEquals(listOf(1, 2, 3), attempts)
-        assertEquals(3, (result as ReconnectRunResult.Exhausted).attempts)
+        assertEquals(3, attempts)
+        assertEquals(ReconnectFailureDisposition.RETRY, (result as ReconnectResult.Failed).failure.disposition())
     }
 
     @Test
@@ -44,13 +44,13 @@ class ReconnectPolicyTest {
             wait = {},
             attempt = {
                 attempts++
-                if (attempts == 2) ReconnectAttemptResult.Connected else {
-                    ReconnectAttemptResult.Failed(ReconnectFailure(IOException("transient")))
+                if (attempts == 2) ReconnectResult.Connected else {
+                    ReconnectResult.Failed(ReconnectFailure(IOException("transient")))
                 }
             },
         )
 
-        assertEquals(ReconnectRunResult.Connected, result)
+        assertEquals(ReconnectResult.Connected, result)
         assertEquals(2, attempts)
     }
 
@@ -72,12 +72,12 @@ class ReconnectPolicyTest {
                 wait = {},
                 attempt = {
                     attempts++
-                    ReconnectAttemptResult.Failed(failure)
+                    ReconnectResult.Failed(failure)
                 },
             )
 
             assertEquals(1, attempts)
-            assertEquals(failure, (result as ReconnectRunResult.Terminal).failure)
+            assertEquals(failure, (result as ReconnectResult.Failed).failure)
         }
     }
 
@@ -107,7 +107,7 @@ class ReconnectPolicyTest {
                     wait = { throw CancellationException("backgrounded") },
                     attempt = {
                         attempts++
-                        ReconnectAttemptResult.Connected
+                        ReconnectResult.Connected
                     },
                 )
             }
@@ -125,7 +125,7 @@ class ReconnectPolicyTest {
         ).execute(
             immediateFirstAttempt = false,
             wait = { waits += it },
-            attempt = { ReconnectAttemptResult.Failed(ReconnectFailure(IOException())) },
+            attempt = { ReconnectResult.Failed(ReconnectFailure(IOException())) },
         )
 
         assertEquals(listOf(1_000L), waits)

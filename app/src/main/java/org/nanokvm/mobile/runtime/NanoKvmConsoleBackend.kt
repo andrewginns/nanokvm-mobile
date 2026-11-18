@@ -105,6 +105,7 @@ import org.nanokvm.protocol.TrustPreflightRejection
 import org.nanokvm.video.H264FrameDropReason
 import org.nanokvm.video.H264DecoderConfig
 import org.nanokvm.video.NanoKvmVideoConfig
+import org.nanokvm.video.NanoKvmVideoFailureReason
 import org.nanokvm.video.NanoKvmVideoListener
 import org.nanokvm.video.NanoKvmVideoPreference
 import org.nanokvm.video.NanoKvmWebRtcRuntime
@@ -451,6 +452,14 @@ internal class NanoKvmConsoleBackend internal constructor(
     }
 
     override fun reconnect() {
+        val (inputUsable, videoToRestart) = synchronized(stateLock) {
+            (currentSessionBindingLocked() != null) to video
+        }
+        if (inputUsable) {
+            // A missing video session will be started by the next Surface attachment.
+            videoToRestart?.let(::restartVideo)
+            return
+        }
         scheduleReconnect(
             ReconnectFailure(IOException("Manual reconnect requested")),
             immediateFirstAttempt = true,
@@ -467,9 +476,6 @@ internal class NanoKvmConsoleBackend internal constructor(
             mutableSession.value = mutableSession.value.copy(
                 connection = ConnectionState.Failed,
                 status = ConsoleMessage.ReconnectCancelled,
-                reconnectAttempt = null,
-                reconnectMaximumAttempts = null,
-                nextReconnectDelayMillis = null,
             )
             job
         }
@@ -526,9 +532,6 @@ internal class NanoKvmConsoleBackend internal constructor(
                         connection = ConnectionState.Disconnected,
                         status = ConsoleMessage.PausedInBackground,
                         lastActionFeedback = null,
-                        reconnectAttempt = null,
-                        reconnectMaximumAttempts = null,
-                        nextReconnectDelayMillis = null,
                     )
                 }
             }
@@ -2294,31 +2297,29 @@ internal class NanoKvmConsoleBackend internal constructor(
         expectedBinding: NanoKvmSessionBinding? = null,
     ) {
         if (failure.cause is CancellationException) return
+        val binding = expectedBinding ?: synchronized(stateLock) {
+            authenticatedSessionBindingLocked()
+        } ?: return
         if (failure.isAuthenticationExpiry()) {
-            expectedBinding?.let(::expireAuthenticatedSession)
+            expireAuthenticatedSession(binding)
             return
         }
-        if (!closeCommandAcceptanceBarrier(expectedBinding)) return
+        if (!closeCommandAcceptanceBarrier(binding)) return
         if (failure.disposition() == ReconnectFailureDisposition.TERMINAL) {
-            if (expectedBinding == null) {
-                publishTerminalFailure(failure)
-            } else {
-                publishTerminalFailureWhenBindingStillCurrent(expectedBinding, failure)
-            }
+            publishTerminalFailureWhenBindingStillCurrent(binding, failure)
             return
         }
         val created = synchronized(stateLock) {
             if (
-                closed || !foreground || client == null || reconnectJob?.isActive == true ||
-                (expectedBinding != null &&
-                    !matchesAuthenticatedSessionBindingLocked(expectedBinding))
+                !foreground || client == null || reconnectJob != null ||
+                !matchesAuthenticatedSessionBindingLocked(binding)
             ) {
                 return
             }
             scope.launch(start = CoroutineStart.LAZY) {
                 val self = checkNotNull(currentCoroutineContext()[Job])
                 try {
-                    runReconnectPolicy(immediateFirstAttempt, expectedBinding, self)
+                    runReconnectPolicy(immediateFirstAttempt, binding, self)
                 } finally {
                     synchronized(stateLock) {
                         if (reconnectJob === self) reconnectJob = null
@@ -2350,19 +2351,16 @@ internal class NanoKvmConsoleBackend internal constructor(
 
     private suspend fun runReconnectPolicy(
         immediateFirstAttempt: Boolean,
-        expectedBinding: NanoKvmSessionBinding?,
+        binding: NanoKvmSessionBinding,
         reconnectRun: Job,
     ) {
         cancelPasteAndJoin(userInitiated = false)
         val prepared = lifecycleMutex.withLock {
-            if (
-                !isReconnectRunCurrent(reconnectRun) || closed || !foreground || client == null ||
-                (expectedBinding != null && !synchronized(stateLock) {
-                    matchesAuthenticatedSessionBindingLocked(expectedBinding)
-                })
-            ) {
-                return@withLock false
+            val isCurrent = synchronized(stateLock) {
+                isReconnectRunCurrentLocked(reconnectRun) && foreground && client != null &&
+                    matchesAuthenticatedSessionBindingLocked(binding)
             }
+            if (!isCurrent) return@withLock false
             // This is serialized with connect/replacement ownership. A late failure cannot clear
             // feature owners installed by a newer binding after its initial callback check.
             invalidateSessionFeatureSet()
@@ -2370,7 +2368,7 @@ internal class NanoKvmConsoleBackend internal constructor(
                 if (!isReconnectRunCurrentLocked(reconnectRun)) return@withLock false
                 mutableSession.value = mutableSession.value.copy(
                     connection = ConnectionState.Reconnecting,
-                    status = ConsoleMessage.PreparingToReconnect,
+                    status = null,
                 )
             }
             stopStreamingLocked()
@@ -2388,76 +2386,28 @@ internal class NanoKvmConsoleBackend internal constructor(
 
         val result = reconnectPolicy.execute(
             immediateFirstAttempt = immediateFirstAttempt,
-            onWaiting = { progress ->
-                val delaySeconds = ((progress.delayMillis + 999L) / 1_000L)
-                    .coerceAtMost(Int.MAX_VALUE.toLong())
-                    .toInt()
-                synchronized(stateLock) {
-                    if (isReconnectRunCurrentLocked(reconnectRun)) {
-                        mutableSession.value = mutableSession.value.copy(
-                            connection = ConnectionState.Reconnecting,
-                            status = if (progress.delayMillis == 0L) {
-                                ConsoleMessage.ReconnectAttempt(
-                                    progress.attempt,
-                                    progress.maximumAttempts,
-                                )
-                            } else {
-                                ConsoleMessage.ReconnectAttemptDelayed(
-                                    progress.attempt,
-                                    progress.maximumAttempts,
-                                    delaySeconds,
-                                )
-                            },
-                            reconnectAttempt = progress.attempt,
-                            reconnectMaximumAttempts = progress.maximumAttempts,
-                            nextReconnectDelayMillis = progress.delayMillis,
-                        )
-                    }
-                }
-            },
             attempt = { reconnectInputOnce(reconnectRun) },
         )
 
         if (!isReconnectRunCurrent(reconnectRun)) return
-        when (result) {
-            ReconnectRunResult.Connected -> Unit
-            is ReconnectRunResult.Terminal -> if (result.failure.isAuthenticationExpiry()) {
-                if (isReconnectRunCurrent(reconnectRun)) {
-                    expectedBinding?.let(::expireAuthenticatedSession)
-                }
+        if (result is ReconnectResult.Failed) {
+            if (result.failure.isAuthenticationExpiry()) {
+                expireAuthenticatedSession(binding)
             } else {
                 synchronized(stateLock) {
                     if (!isReconnectRunCurrentLocked(reconnectRun)) return
                     mutableSession.value = mutableSession.value.copy(
                         connection = ConnectionState.Failed,
-                        status = ConsoleMessage.ConnectionFailed(
-                            result.failure.toConnectionFailure(),
-                        ),
-                        reconnectAttempt = null,
-                        reconnectMaximumAttempts = null,
-                        nextReconnectDelayMillis = null,
+                        status = ConsoleMessage.ConnectionFailed(result.failure.toConnectionFailure()),
                     )
                 }
-            }
-            is ReconnectRunResult.Exhausted -> synchronized(stateLock) {
-                if (!isReconnectRunCurrentLocked(reconnectRun)) return
-                mutableSession.value = mutableSession.value.copy(
-                    connection = ConnectionState.Failed,
-                    status = ConsoleMessage.ReconnectStopped(
-                        result.attempts,
-                        result.failure.toConnectionFailure(),
-                    ),
-                    reconnectAttempt = null,
-                    reconnectMaximumAttempts = null,
-                    nextReconnectDelayMillis = null,
-                )
             }
         }
     }
 
     private suspend fun reconnectInputOnce(
         reconnectRun: Job,
-    ): ReconnectAttemptResult = lifecycleMutex.withLock {
+    ): ReconnectResult = lifecycleMutex.withLock {
         if (!isReconnectRunCurrent(reconnectRun) || closed || !foreground) {
             throw CancellationException("Reconnect is no longer applicable")
         }
@@ -2494,12 +2444,11 @@ internal class NanoKvmConsoleBackend internal constructor(
                         pasteProgress = null,
                         status = null,
                         lastActionFeedback = null,
-                        reconnectAttempt = null,
-                        reconnectMaximumAttempts = null,
-                        nextReconnectDelayMillis = null,
                     )
                 }
                 openCommandAcceptanceLocked()
+                // Future input failures belong to the replacement generation.
+                reconnectJob = null
             }
             pendingInput = null
             activateOfflineUpdateGatewayIfCurrent()
@@ -2510,11 +2459,11 @@ internal class NanoKvmConsoleBackend internal constructor(
             startAdministrationSurfaceWorkIfNeeded()
             startOperatorSurfaceWorkIfNeeded()
             startPicoClawSurfaceWorkIfNeeded()
-            ReconnectAttemptResult.Connected
+            ReconnectResult.Connected
         } catch (error: Throwable) {
             pendingInput?.close()
             if (error is CancellationException) throw error
-            ReconnectAttemptResult.Failed(ReconnectFailure(error, failureStatus))
+            ReconnectResult.Failed(ReconnectFailure(error, failureStatus))
         }
     }
 
@@ -2547,6 +2496,7 @@ internal class NanoKvmConsoleBackend internal constructor(
             } else {
                 activeVideoListener = boundListener
                 video = created
+                mutableSession.update { it.copy(status = null, framesPerSecond = null) }
                 if (config.preference == NanoKvmVideoPreference.MJPEG) {
                     created.startMjpeg(config)
                 } else {
@@ -2558,6 +2508,20 @@ internal class NanoKvmConsoleBackend internal constructor(
         if (!accepted) {
             boundListener.invalidate()
             created.closeAndAwaitDecoderRelease().awaitCompletion()
+        }
+    }
+
+    private fun restartVideo(expectedVideo: NanoKvmVideoSession) {
+        scope.launch {
+            lifecycleMutex.withLock {
+                val current = synchronized(stateLock) {
+                    video === expectedVideo && currentSessionBindingLocked() != null
+                }
+                if (!current) return@withLock
+                closeVideoAndAwaitDecoderReleaseLocked()
+                forgetVideoSurfaceLocked()
+                mutableSession.update { it.copy(videoSurfaceGeneration = it.videoSurfaceGeneration + 1) }
+            }
         }
     }
 
@@ -2716,8 +2680,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     private fun beginVideoCloseLocked(): CompletableFuture<Unit>? {
         activeVideoListener?.invalidate()
         activeVideoListener = null
-        val oldVideo = video ?: return null
-        video = null
+        val oldVideo = synchronized(stateLock) { video.also { video = null } } ?: return null
         return oldVideo.closeAndAwaitDecoderRelease()
     }
 
@@ -2862,18 +2825,20 @@ internal class NanoKvmConsoleBackend internal constructor(
 
     private fun currentSessionBindingLocked(): NanoKvmSessionBinding? {
         check(Thread.holdsLock(stateLock))
-        val activeSession = authenticatedSession ?: return null
-        val current = mutableSession.value
-        if (
-            closed || !foreground || !acceptingCommands ||
-            !current.connection.isSessionUsable
-        ) {
+        if (!foreground || !acceptingCommands || !mutableSession.value.connection.isSessionUsable) {
             return null
         }
+        return authenticatedSessionBindingLocked()
+    }
+
+    private fun authenticatedSessionBindingLocked(): NanoKvmSessionBinding? {
+        check(Thread.holdsLock(stateLock))
+        if (closed) return null
+        val activeSession = authenticatedSession ?: return null
         return NanoKvmSessionBinding(
             profileId = activeSession.profileId,
             authority = activeSession.authority,
-            sessionGeneration = current.sessionGeneration,
+            sessionGeneration = mutableSession.value.sessionGeneration,
         )
     }
 
@@ -5769,9 +5734,6 @@ internal class NanoKvmConsoleBackend internal constructor(
             it.copy(
                 connection = ConnectionState.Failed,
                 status = ConsoleMessage.ConnectionFailed(failure.toConnectionFailure()),
-                reconnectAttempt = null,
-                reconnectMaximumAttempts = null,
-                nextReconnectDelayMillis = null,
             )
         }
     }
@@ -5975,18 +5937,13 @@ internal class NanoKvmConsoleBackend internal constructor(
                         mjpegFrameDetectionCoordinator.onMjpegInactive()
                     }
                     updateSessionFromVideo {
-                        if (it.connection == ConnectionState.Degraded && it.streamLabel.isFallback) {
-                            it
-                        } else {
-                            it.copy(
-                                streamLabel = status.transport.toVideoStreamDescriptor(),
-                                status = if (it.connection.isSessionUsable) {
-                                    ConsoleMessage.ConnectingVideo(
-                                        status.transport.toVideoTransportDescriptor(),
-                                    )
-                                } else it.status,
-                            )
+                        if (!it.connection.isSessionUsable || it.status is ConsoleMessage.VideoFallback) {
+                            return@updateSessionFromVideo it
                         }
+                        it.copy(
+                            streamLabel = status.transport.toVideoStreamDescriptor(),
+                            status = ConsoleMessage.ConnectingVideo(status.transport.toVideoTransportDescriptor()),
+                        )
                     }
                 }
                 is NanoKvmVideoStatus.Streaming -> {
@@ -5997,19 +5954,14 @@ internal class NanoKvmConsoleBackend internal constructor(
                     }
                     updateSessionFromVideo { current ->
                         if (!current.connection.isSessionUsable) return@updateSessionFromVideo current
-                        val transport = status.transport.toVideoTransportDescriptor()
-                        val remainsOnFallback = current.connection == ConnectionState.Degraded &&
-                            current.streamLabel.isFallback &&
-                            current.streamLabel.transport == transport
-                        if (remainsOnFallback) {
-                            current
-                        } else {
-                            current.copy(
-                                connection = ConnectionState.Connected,
-                                streamLabel = status.transport.toVideoStreamDescriptor(),
-                                status = null,
-                            )
-                        }
+                        val fallback = (current.status as? ConsoleMessage.VideoFallback)
+                            ?.takeIf { it.to == status.transport.toVideoTransportDescriptor() }
+                        current.copy(
+                            connection = ConnectionState.Connected,
+                            streamLabel = status.transport.toVideoStreamDescriptor(fallback = fallback != null),
+                            status = null,
+                            lastVideoFallback = fallback,
+                        )
                     }
                 }
                 is NanoKvmVideoStatus.FallingBack -> {
@@ -6020,31 +5972,41 @@ internal class NanoKvmConsoleBackend internal constructor(
                     }
                     updateSessionFromVideo { current ->
                         if (!current.connection.isSessionUsable) return@updateSessionFromVideo current
+                        val fallback = ConsoleMessage.VideoFallback(
+                            from = status.from.toVideoTransportDescriptor(),
+                            to = status.to.toVideoTransportDescriptor(),
+                            reason = status.reason,
+                        )
                         current.copy(
                             connection = ConnectionState.Degraded,
                             streamLabel = status.to.toVideoStreamDescriptor(fallback = true),
-                            status = ConsoleMessage.VideoFallback(
-                                from = status.from.toVideoTransportDescriptor(),
-                                to = status.to.toVideoTransportDescriptor(),
-                            ),
+                            status = fallback,
+                            lastVideoFallback = fallback,
                         )
                     }
                 }
                 is NanoKvmVideoStatus.Error -> {
                     mjpegFrameDetectionCoordinator.onMjpegInactive()
-                    val shouldReconnect = synchronized(stateLock) {
-                        !closed && mutableSession.value.connection.isSessionUsable
+                    val reason = status.reason
+                    if (reason is NanoKvmVideoFailureReason.HttpRejected && reason.statusCode == 401) {
+                        val binding = synchronized(stateLock) { authenticatedSessionBindingLocked() }
+                        binding?.let(::expireAuthenticatedSession)
+                        return
                     }
-                    if (shouldReconnect) {
-                        scheduleReconnect(
-                            ReconnectFailure(
-                                IOException(
-                                    "Video transport failed",
-                                    status.cause,
-                                ),
-                            ),
-                            immediateFirstAttempt = false,
+                    val failedVideo = synchronized(stateLock) {
+                        val current = mutableSession.value
+                        if (closed || !current.connection.isSessionUsable) return
+                        mutableSession.value = current.copy(
+                            connection = ConnectionState.Degraded,
+                            status = ConsoleMessage.VideoFailed(status.transport.toVideoTransportDescriptor(), reason),
+                            framesPerSecond = null,
                         )
+                        video
+                    }
+                    // A stall proves this transport previously rendered frames. A fresh attempt that
+                    // never renders stops here with a Retry action.
+                    if (reason == NanoKvmVideoFailureReason.Stalled && failedVideo != null) {
+                        restartVideo(failedVideo)
                     }
                 }
                 NanoKvmVideoStatus.Stopped -> {
@@ -6359,34 +6321,12 @@ private object InputSocketPacedPasteSender : PacedPasteSender {
     )
 }
 
-/**
- * Records accepted encoder settings without claiming that a degraded video path recovered.
- * Recovery is published only by a subsequent streaming callback for the newly validated transport.
- */
-internal fun BackendSession.withAppliedVideoSettings(settings: VideoSettings): BackendSession {
-    val unresolvedFallback =
-        connection == ConnectionState.Degraded && streamLabel.isFallback
-    val adoptsCurrentTransportAsPrimary = unresolvedFallback &&
-        settings.transportPreference.explicitTransport() == streamLabel.transport
-    return copy(
+internal fun BackendSession.withAppliedVideoSettings(settings: VideoSettings): BackendSession =
+    copy(
         videoSettings = settings,
-        streamLabel = if (adoptsCurrentTransportAsPrimary) {
-            streamLabel.copy(isFallback = false)
-        } else {
-            streamLabel
-        },
         videoSurfaceGeneration = videoSurfaceGeneration + 1,
         framesPerSecond = null,
-        status = if (unresolvedFallback) status else null,
     ).withActionFeedback(ConsoleMessage.VideoSettingsApplied)
-}
-
-private fun VideoTransportPreference.explicitTransport(): VideoTransportDescriptor? = when (this) {
-    VideoTransportPreference.Auto -> null
-    VideoTransportPreference.WEBRTC -> VideoTransportDescriptor.WebRtc
-    VideoTransportPreference.H264 -> VideoTransportDescriptor.DirectH264
-    VideoTransportPreference.MJPEG -> VideoTransportDescriptor.Mjpeg
-}
 
 /** Maps transport/protocol failures to a bounded presentation contract without exposing details. */
 internal fun Throwable.toConnectionFailure(responseCode: Int? = null): ConnectionFailure {
