@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.text.InputType
 import android.util.Xml
 import android.util.Log
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -338,6 +339,64 @@ class NativeKeyboardInstrumentedTest {
     }
 
     @Test
+    fun softKeyEventsPreserveShiftAndCapsLockMetadata() {
+        renderKeyboard()
+        composeRule.runOnIdle {
+            val connection = connection()
+            assertTrue(connection.setComposingText("z", 1))
+            sendVirtualKey(connection, KeyEvent.KEYCODE_A, KeyEvent.META_SHIFT_RIGHT_ON)
+            sendVirtualKey(connection, KeyEvent.KEYCODE_CAPS_LOCK, 0)
+            sendVirtualKey(connection, KeyEvent.KEYCODE_B, KeyEvent.META_CAPS_LOCK_ON)
+            sendVirtualKey(connection, KeyEvent.KEYCODE_C, 0)
+            sendVirtualKey(connection, KeyEvent.KEYCODE_1, KeyEvent.META_SHIFT_ON)
+
+            assertEquals("zABc!", sink.remoteText.value)
+            assertEquals("zABc!", connection.getTextBeforeCursor(10, 0).toString())
+            assertEquals(emptyList<Pair<RemoteKey, Boolean>>(), sink.keyEvents)
+        }
+    }
+
+    @Test
+    fun virtualKeyboardShiftKeyPairDoesNotInterruptMixedCaseText() {
+        renderKeyboard()
+        composeRule.runOnIdle {
+            val connection = connection()
+            val keyMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
+            val events = checkNotNull(keyMap.getEvents("aBc".toCharArray()))
+            assertTrue(events.any { it.keyCode == KeyEvent.KEYCODE_SHIFT_LEFT && it.action == KeyEvent.ACTION_DOWN })
+            events.forEachIndexed { index, event ->
+                assertTrue("Rejected virtual key event at index $index", connection.sendKeyEvent(event))
+            }
+            assertEquals("aBc", sink.remoteText.value)
+            assertEquals(emptyList<Pair<RemoteKey, Boolean>>(), sink.keyEvents)
+        }
+    }
+
+    @Test
+    fun virtualKeypadEventsKeepTheirDistinctRemoteUsage() {
+        renderKeyboard()
+        composeRule.runOnIdle {
+            sendVirtualKey(connection(), KeyEvent.KEYCODE_NUMPAD_DIVIDE, 0)
+            assertEquals("", sink.remoteText.value)
+            assertEquals(
+                listOf(RemoteKey.NumpadDivide to true, RemoteKey.NumpadDivide to false),
+                sink.keyEvents,
+            )
+        }
+    }
+
+    private fun sendVirtualKey(connection: InputConnection, keyCode: Int, metaState: Int) {
+        val downTime = SystemClock.uptimeMillis()
+        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            val event = KeyEvent(
+                downTime, SystemClock.uptimeMillis(), action, keyCode, 0, metaState,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_SOFT_KEYBOARD,
+            )
+            assertTrue("Rejected software key event, action=$action key=$keyCode", connection.sendKeyEvent(event))
+        }
+    }
+
+    @Test
     fun shiftAloneDoesNotDiscardAWholeImeCommit() {
         renderKeyboard()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.console_key_shift))
@@ -411,7 +470,54 @@ class NativeKeyboardInstrumentedTest {
     }
 
     @Test
-    fun gboardContinuesTypingAfterRepeatedReopen() {
+    fun gboardShiftTypesAnUppercaseLetterInMixedCaseText() = withInstalledGboard {
+        renderKeyboard()
+        awaitInstalledKeyboardReady()
+        "cat".forEach { tapInstalledKeyboardKey(it.toString()) }
+        tapInstalledKeyboardKey("Space")
+        tapInstalledKeyboardKey("Shift")
+        "dog".forEach { tapInstalledKeyboardKey(it.toString()) }
+        tapInstalledKeyboardKey("Space")
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) { sink.remoteText.value == "cat Dog " }
+        composeRule.runOnIdle {
+            assertEquals(emptyList<Pair<RemoteKey, Boolean>>(), sink.keyEvents)
+        }
+    }
+
+    @Test
+    fun gboardContinuesTypingAfterRepeatedReopen() = withInstalledGboard {
+        renderKeyboard()
+        // Never request a test InputConnection or restartInput here: Android and the
+        // installed keyboard must retain/recreate their own connection on reopen.
+        listOf("cat" to "cat ", "dog" to "cat dog ", "fish" to "cat dog fish ")
+            .forEachIndexed { index, (typed, expected) ->
+                if (index > 0) {
+                    composeRule.onNodeWithContentDescription(
+                        composeRule.activity.getString(R.string.console_hide_native_keyboard),
+                    ).performScrollTo().performClick()
+                    composeRule.waitForIdle()
+                    composeRule.onNodeWithText("Reopen test keyboard").performClick()
+                    awaitEditor()
+                }
+                awaitInstalledKeyboardReady()
+                typed.forEach { tapInstalledKeyboardKey(it.toString()) }
+                tapInstalledKeyboardKey("Space")
+                fun state() = composeRule.runOnIdle {
+                    val focus = composeRule.activity.currentFocus
+                    "host=[${sink.remoteText.value}], editor=[${(focus as? EditText)?.text}], " +
+                        "focused=${focus?.hasFocus()}, visible=${visible.value}"
+                }
+                Log.i("NativeImeReopenQa", "Cycle $index expected [$expected]; ${state()}")
+                try {
+                    composeRule.waitUntil(timeoutMillis = 5_000L) { sink.remoteText.value == expected }
+                } catch (failure: Throwable) {
+                    throw AssertionError("Installed keyboard cycle $index expected [$expected]; ${state()}", failure)
+                }
+            }
+    }
+
+    private fun withInstalledGboard(block: () -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val ime = Settings.Secure.getString(
             instrumentation.targetContext.contentResolver,
@@ -424,34 +530,7 @@ class NativeKeyboardInstrumentedTest {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         try {
-            renderKeyboard()
-            // Never request a test InputConnection or restartInput here: Android and the
-            // installed keyboard must retain/recreate their own connection on reopen.
-            listOf("cat" to "cat ", "dog" to "cat dog ", "fish" to "cat dog fish ")
-                .forEachIndexed { index, (typed, expected) ->
-                    if (index > 0) {
-                        composeRule.onNodeWithContentDescription(
-                            composeRule.activity.getString(R.string.console_hide_native_keyboard),
-                        ).performScrollTo().performClick()
-                        composeRule.waitForIdle()
-                        composeRule.onNodeWithText("Reopen test keyboard").performClick()
-                        awaitEditor()
-                    }
-                    awaitInstalledKeyboardReady()
-                    typed.forEach { tapInstalledKeyboardKey(it.toString()) }
-                    tapInstalledKeyboardKey("Space")
-                    fun state() = composeRule.runOnIdle {
-                        val focus = composeRule.activity.currentFocus
-                        "host=[${sink.remoteText.value}], editor=[${(focus as? EditText)?.text}], " +
-                            "focused=${focus?.hasFocus()}, visible=${visible.value}"
-                    }
-                    Log.i("NativeImeReopenQa", "Cycle $index expected [$expected]; ${state()}")
-                    try {
-                        composeRule.waitUntil(timeoutMillis = 5_000L) { sink.remoteText.value == expected }
-                    } catch (failure: Throwable) {
-                        throw AssertionError("Installed keyboard cycle $index expected [$expected]; ${state()}", failure)
-                    }
-                }
+            block()
         } finally {
             automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
         }

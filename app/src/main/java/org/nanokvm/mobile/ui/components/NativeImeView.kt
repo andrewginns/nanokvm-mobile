@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.text.InputType
 import android.text.SpannableStringBuilder
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -372,7 +373,21 @@ internal class NativeImeView(context: Context) : EditText(context) {
             }
             if (!active) return false
             if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
-            val key = remoteKeyForAndroidKeyCode(event.keyCode) ?: return false
+            val key = remoteKeyForAndroidKeyCode(event.keyCode)
+            val isSoftwareKey = event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD ||
+                event.flags and KeyEvent.FLAG_SOFT_KEYBOARD != 0
+            val typedText = if (isSoftwareKey) {
+                // The IME encodes case on the printable event. A synthetic Shift/Caps Lock
+                // event should neither toggle the host's modifiers nor retire this connection.
+                when (key) {
+                    RemoteKey.Shift, RemoteKey.RightShift, RemoteKey.CapsLock ->
+                        return event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP
+                    else -> event.printableText()
+                }
+            } else {
+                null
+            }
+            if (key == null && typedText == null) return false
             if (key == RemoteKey.Backspace || key == RemoteKey.Delete) {
                 return when (event.action) {
                     KeyEvent.ACTION_DOWN -> if (key == RemoteKey.Delete && selectionStart == text.length && selectionEnd == text.length) {
@@ -390,7 +405,8 @@ internal class NativeImeView(context: Context) : EditText(context) {
                     if (!active) return false
                     if (event.repeatCount == 0) {
                         consumedKeyUps.add(event.keyCode)
-                        sendSoftKey(key)
+                        if (typedText != null) return commitText(typedText, 1)
+                        sendSoftKey(checkNotNull(key))
                     }
                     true
                 }
@@ -452,6 +468,16 @@ internal class NativeImeView(context: Context) : EditText(context) {
             super.closeConnection()
             batchDepth = 0
         }
+    }
+
+    private fun KeyEvent.printableText(): String? {
+        // The host can distinguish a keypad key from a key with the same printed character.
+        if (keyCode in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_RIGHT_PAREN) return null
+        if (!hasNoModifiers() && !hasModifiers(KeyEvent.META_SHIFT_ON)) return null
+        val codePoint = getUnicodeChar(KeyEvent.normalizeMetaState(metaState))
+        // Zero denotes a non-printing key. Dead-key values carry a flag outside the code point range.
+        if (codePoint == 0 || !Character.isValidCodePoint(codePoint) || Character.isISOControl(codePoint)) return null
+        return String(Character.toChars(codePoint))
     }
 
     private fun deleteKeyLocally(event: KeyEvent): Boolean = super.onKeyDown(event.keyCode, event)

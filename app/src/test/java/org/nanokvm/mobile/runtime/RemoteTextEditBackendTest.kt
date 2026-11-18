@@ -27,12 +27,12 @@ import org.nanokvm.protocol.NanoKvmInputSocket
 @OptIn(ExperimentalCoroutinesApi::class)
 class RemoteTextEditBackendTest {
     @Test
-    fun `text edit is queued before following Enter and replacement is contiguous`() = runTest {
+    fun `mixed case replacement sends shifted letters before the following Enter`() = runTest {
         val fixture = Fixture(StandardTestDispatcher(testScheduler))
         try {
             val context = RemoteTextEditContext()
             val edit = async(start = CoroutineStart.UNDISPATCHED) {
-                fixture.backend.applyTextEdit(2, "he ", KeyboardLayout.Us, context)
+                fixture.backend.applyTextEdit(2, "He ", KeyboardLayout.Us, context)
             }
             fixture.backend.tapKey(RemoteKey.Enter, context)
             advanceUntilIdle()
@@ -42,8 +42,9 @@ class RemoteTextEditBackendTest {
             )
             assertEquals(expected.size * 2, fixture.socket.frames.size)
             expected.forEachIndexed { index, key ->
+                val modifiers = if (key == HidUsage.H) setOf(HidModifier.LEFT_SHIFT) else emptySet()
                 assertArrayEquals(
-                    HidKeyboardReport.create(keys = listOf(key)).toWireFrame(),
+                    HidKeyboardReport.create(modifiers, listOf(key)).toWireFrame(),
                     fixture.socket.frames[index * 2],
                 )
                 assertArrayEquals(HidKeyboardReport.released().toWireFrame(), fixture.socket.frames[index * 2 + 1])
