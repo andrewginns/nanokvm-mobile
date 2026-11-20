@@ -341,12 +341,9 @@ class MediaCodecH264Renderer(
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
             if (!isActive(run) || run.codec !== codec) return
-            val width = format.visibleDimension(
-                MediaFormat.KEY_WIDTH, MediaFormat.KEY_CROP_LEFT, MediaFormat.KEY_CROP_RIGHT,
-            )
-            val height = format.visibleDimension(
-                MediaFormat.KEY_HEIGHT, MediaFormat.KEY_CROP_TOP, MediaFormat.KEY_CROP_BOTTOM,
-            )
+            // MediaCodec exposes these output-format keys on Android 8 and later.
+            val width = format.visibleDimension(MediaFormat.KEY_WIDTH, "crop-left", "crop-right")
+            val height = format.visibleDimension(MediaFormat.KEY_HEIGHT, "crop-top", "crop-bottom")
             dispatchForRun(run) {
                 listener.onVideoSizeChanged(width, height)
                 listener.onStatusChanged(H264RendererStatus.Rendering(width, height))
