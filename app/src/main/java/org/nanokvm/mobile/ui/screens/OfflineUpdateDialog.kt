@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -41,9 +42,14 @@ internal fun OfflineUpdateDialog(
 ) {
     if (state.phase == NanoKvmOfflineUpdatePhase.HIDDEN) return
 
+    val uploading = state.phase == NanoKvmOfflineUpdatePhase.UPLOADING
     AlertDialog(
         modifier = Modifier.testTag("offline-update-dialog"),
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!uploading) onDismiss() },
+        properties = DialogProperties(
+            dismissOnBackPress = !uploading,
+            dismissOnClickOutside = !uploading,
+        ),
         title = { Text(stringResource(R.string.offline_update_title)) },
         text = {
             Column(

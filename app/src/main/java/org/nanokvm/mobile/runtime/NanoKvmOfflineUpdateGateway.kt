@@ -129,7 +129,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
      * response is lost. Visibility and foreground changes must not erase that fact: doing so would
      * make the same package selectable again without the required reconnect/version verification.
      */
-    private var retainedUnknownOutcome: NanoKvmOfflineUpdateError? = null
+    private var retainedUploadOutcome: NanoKvmOfflineUpdateUiState? = null
 
     init {
         require(destinationAuthority.isNotBlank()) { "Destination authority must not be blank" }
@@ -170,7 +170,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
     fun select(source: NanoKvmOfflineUpdateSource): Boolean {
         var prior: NanoKvmOfflineUpdateSource? = null
         val accepted = synchronized(lock) {
-            if (retainedUnknownOutcome != null) return@synchronized false
+            if (retainedUploadOutcome != null) return@synchronized false
             val rejection = acceptanceErrorLocked()
             if (rejection != null || activeUpload != null) {
                 if (activeUpload == null) {
@@ -204,7 +204,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
     /** Clears any prior selection and reports only a redacted local validation failure. */
     fun rejectDocumentSelection() {
         synchronized(lock) {
-            if (closed || activeUpload != null || retainedUnknownOutcome != null) return
+            if (closed || activeUpload != null || retainedUploadOutcome != null) return
             selectedSource?.close()
             selectedSource = null
             pendingReview = null
@@ -217,7 +217,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
         var jobToStart: Job? = null
         var monitorToStart: Job? = null
         val accepted = synchronized(lock) {
-            if (retainedUnknownOutcome != null) return@synchronized false
+            if (retainedUploadOutcome != null) return@synchronized false
             val rejection = acceptanceErrorLocked()
             val currentReview = pendingReview
             val source = selectedSource
@@ -295,7 +295,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
     fun invalidateSession() {
         val detached = synchronized(lock) {
             if (closed) return
-            retainedUnknownOutcome = null
+            retainedUploadOutcome = null
             clearLocked(
                 if (surfaceVisible) {
                     NanoKvmOfflineUpdatePhase.SESSION_CHANGED
@@ -312,7 +312,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
         val detached = synchronized(lock) {
             if (closed) return
             closed = true
-            retainedUnknownOutcome = null
+            retainedUploadOutcome = null
             clearLocked(NanoKvmOfflineUpdatePhase.HIDDEN)
         }
         detached?.cancelAndClear("Offline update gateway closed")
@@ -385,13 +385,13 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
                     guidance = NanoKvmOfflineUpdateGuidance.RECONNECT_AND_VERIFY_VERSION,
                 )
                 active.invalidProgress.get() ->
-                    unknownState(NanoKvmOfflineUpdateError.INVALID_RESPONSE)
+                    retainUnknownOutcomeLocked(NanoKvmOfflineUpdateError.INVALID_RESPONSE)
                 else -> NanoKvmOfflineUpdateUiState(
                     phase = NanoKvmOfflineUpdatePhase.ACKNOWLEDGED_RESTARTING,
                     bytesTransferred = active.payload.contentLength,
                     totalBytes = active.payload.contentLength,
                     guidance = NanoKvmOfflineUpdateGuidance.RECONNECT_AND_VERIFY_VERSION,
-                )
+                ).also { retainedUploadOutcome = it }
             }
         }
     }
@@ -406,7 +406,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
                     failureState.error ?: NanoKvmOfflineUpdateError.UNEXPECTED,
                 )
             } else {
-                retainedUnknownOutcome = null
+                retainedUploadOutcome = null
                 failureState
             }
             error is AuthenticationExpiredException
@@ -465,7 +465,7 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
             phase = NanoKvmOfflineUpdatePhase.SESSION_CHANGED,
             error = NanoKvmOfflineUpdateError.SESSION_CHANGED,
         )
-        retainedUnknownOutcome != null -> unknownState(checkNotNull(retainedUnknownOutcome))
+        retainedUploadOutcome != null -> checkNotNull(retainedUploadOutcome)
         else -> NanoKvmOfflineUpdateUiState(
             phase = NanoKvmOfflineUpdatePhase.EMPTY,
             guidance = NanoKvmOfflineUpdateGuidance.SELECT_PACKAGE,
@@ -487,24 +487,15 @@ internal class NanoKvmOfflineUpdateGateway internal constructor(
 
     private fun clearForUiLifecycleLocked(phase: NanoKvmOfflineUpdatePhase): ActiveUpload? {
         val active = activeUpload
-        val unknownError = when {
-            active?.dispatched?.get() == true ->
-                NanoKvmOfflineUpdateError.CANCELLED_AFTER_DISPATCH
-            mutableState.value.phase == NanoKvmOfflineUpdatePhase.OUTCOME_UNKNOWN ->
-                mutableState.value.error ?: NanoKvmOfflineUpdateError.UNEXPECTED
-            else -> retainedUnknownOutcome
+        if (active?.dispatched?.get() == true) {
+            retainUnknownOutcomeLocked(NanoKvmOfflineUpdateError.CANCELLED_AFTER_DISPATCH)
         }
-        val detached = clearLocked(phase)
-        retainedUnknownOutcome = unknownError
-        return detached
+        return clearLocked(phase)
     }
 
     private fun retainUnknownOutcomeLocked(
         error: NanoKvmOfflineUpdateError,
-    ): NanoKvmOfflineUpdateUiState {
-        retainedUnknownOutcome = error
-        return unknownState(error)
-    }
+    ): NanoKvmOfflineUpdateUiState = unknownState(error).also { retainedUploadOutcome = it }
 
     private fun rejectionState(error: NanoKvmOfflineUpdateError): NanoKvmOfflineUpdateUiState =
         NanoKvmOfflineUpdateUiState(

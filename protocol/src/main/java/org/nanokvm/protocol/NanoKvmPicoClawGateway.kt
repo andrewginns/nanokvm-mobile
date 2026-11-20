@@ -450,7 +450,12 @@ class NanoKvmPicoClawGateway internal constructor(
                 val close = picoClose(code, reason)
                 socket = null
                 mutableState.value = NanoKvmPicoClawGatewayState.Closed(scope, close)
-                mutableManualHidLock.value = NanoKvmPicoClawManualHidLockState.Released(scope)
+                mutableManualHidLock.value = when (close.cause) {
+                    NanoKvmPicoClawCloseCause.ManualHidLockHeld,
+                    NanoKvmPicoClawCloseCause.SessionTakenOver ->
+                        NanoKvmPicoClawManualHidLockState.ReleaseUncertain(scope)
+                    else -> NanoKvmPicoClawManualHidLockState.Released(scope)
+                }
                 mutableEvents.tryEmit(NanoKvmPicoClawGatewayEvent.Closed(scope, close))
             }
         }

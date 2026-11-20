@@ -101,9 +101,22 @@ class AndroidClipboardGatewayInstrumentedTest {
     }
 
     @Test
-    fun rejectsRichTextAndUriWithoutCoercion() {
+    fun readsOnlyTheDirectPlainTextVersionOfHtmlClip() {
+        val clip = ClipData(
+            ClipDescription("rich", arrayOf("text/plain", "text/html")),
+            ClipData.Item("shown", "<b>different content</b>"),
+        )
+        val result = AndroidClipboardGateway { clip }.readDirectPlainText() as ClipboardReadResult.Available
+        assertEquals("shown", result.payload.text)
+    }
+
+    @Test
+    fun rejectsHtmlOnlyAndUriWithoutCoercion() {
         assertRejected(
-            ClipData.newHtmlText("rich", "shown", "<b>shown</b>"),
+            ClipData(
+                ClipDescription("rich", arrayOf("text/html")),
+                ClipData.Item("shown", "<b>shown</b>"),
+            ),
             ClipboardRejectionReason.RichText,
         )
         assertRejected(

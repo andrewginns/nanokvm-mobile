@@ -341,7 +341,7 @@ private class AdministrationReadOnlyBackend : ConsoleBackend {
 
     override suspend fun connect(request: ConnectRequest): ConnectOutcome = ConnectOutcome.Connected
     override suspend fun disconnect() = Unit
-    override fun setForeground(isForeground: Boolean) = Unit
+    override fun setForeground(isForeground: Boolean, abandonConnection: Boolean) = Unit
     override fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton>) = Unit
     override fun moveRelative(deltaX: Int, deltaY: Int, buttons: Set<MouseButton>) = Unit
     override fun mouseButton(button: MouseButton, pressed: Boolean) = Unit

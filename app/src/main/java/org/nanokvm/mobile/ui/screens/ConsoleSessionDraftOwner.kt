@@ -8,6 +8,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import org.nanokvm.mobile.runtime.BoundedOperatorOutputBuffer
 import org.nanokvm.mobile.runtime.NanoKvmAutomationGateway
+import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateGateway
+import org.nanokvm.mobile.platform.NanoKvmOfflineUpdateDocumentSelectionResult
 import org.nanokvm.mobile.runtime.OperatorEphemeralOutput
 import org.nanokvm.mobile.runtime.OperatorOutputKind
 import org.nanokvm.mobile.runtime.utf8SizeAtMost
@@ -20,6 +22,14 @@ internal data class ConsoleDraftSession(
     override fun toString(): String =
         "ConsoleDraftSession(profileId=<redacted>, authority=<redacted>, " +
             "sessionGeneration=$sessionGeneration)"
+}
+
+internal data class OfflineUpdatePickerIntent(
+    val profileId: String,
+    val authority: String,
+    val sensitiveWorkGeneration: Long,
+) {
+    override fun toString(): String = "OfflineUpdatePickerIntent(<redacted>)"
 }
 
 /**
@@ -35,6 +45,11 @@ internal class ConsoleSessionDraftOwner internal constructor(
     private var automationLeaderKeyAvailable: Boolean? = null
     private var automationController: AutomationDialogController? = null
     private var operatorMemory: OperatorDialogMemory? = null
+    internal val offlineDocumentHandoff = OfflineUpdateDocumentHandoff()
+    internal var offlinePickerIntent by mutableStateOf<OfflineUpdatePickerIntent?>(null)
+
+    internal fun takeOfflinePickerIntent(): OfflineUpdatePickerIntent? =
+        offlinePickerIntent.also { offlinePickerIntent = null }
 
     internal fun automationController(
         session: ConsoleDraftSession,
@@ -77,7 +92,11 @@ internal class ConsoleSessionDraftOwner internal constructor(
         releaseSessionIfEmpty()
     }
 
-    internal fun clear() {
+    internal fun clear(keepOfflinePicker: Boolean = false) {
+        if (!keepOfflinePicker) {
+            offlinePickerIntent = null
+            offlineDocumentHandoff.clear()
+        }
         automationController?.close()
         automationController = null
         automationGateway = null
@@ -93,7 +112,7 @@ internal class ConsoleSessionDraftOwner internal constructor(
         if (session == null) {
             session = next
         } else if (session != next) {
-            clear()
+            clear(keepOfflinePicker = session?.profileId == next.profileId && session?.authority == next.authority)
             session = next
         }
     }
@@ -148,14 +167,6 @@ internal class OperatorDialogMemory {
         }
     }
 
-    fun takeScriptContent(): ByteArray {
-        if (closed) return ByteArray(0)
-        return scriptContent.encodeToByteArray().also {
-            scriptContent = ""
-            scriptUtf8ByteCount = 0
-        }
-    }
-
     fun clearOutput() {
         if (closed) return
         outputBuffer.clear()
@@ -178,3 +189,42 @@ internal class OperatorDialogMemory {
 }
 
 internal const val MAX_RETAINED_OPERATOR_SCRIPT_BYTES: Int = 512 * 1_024
+
+/** Owns a single memory-only picker result until it can reach the matching gateway. */
+internal class OfflineUpdateDocumentHandoff {
+    var pending by mutableStateOf<PendingOfflineUpdateDocument?>(null)
+        private set
+
+    fun stage(
+        intent: OfflineUpdatePickerIntent,
+        generation: Long,
+        selection: NanoKvmOfflineUpdateDocumentSelectionResult?,
+    ) {
+        clear()
+        pending = PendingOfflineUpdateDocument(intent, generation, selection)
+    }
+
+    fun deliverTo(document: PendingOfflineUpdateDocument, gateway: NanoKvmOfflineUpdateGateway) {
+        if (pending !== document) return
+        pending = null
+        when (val selection = document.selection) {
+            is NanoKvmOfflineUpdateDocumentSelectionResult.Success -> gateway.select(selection.source)
+            is NanoKvmOfflineUpdateDocumentSelectionResult.Failure -> gateway.rejectDocumentSelection()
+            null -> Unit
+        }
+    }
+
+    fun clear() {
+        (pending?.selection as? NanoKvmOfflineUpdateDocumentSelectionResult.Success)?.source?.close()
+        pending = null
+    }
+}
+
+internal class PendingOfflineUpdateDocument(
+    private val intent: OfflineUpdatePickerIntent,
+    private val generation: Long,
+    val selection: NanoKvmOfflineUpdateDocumentSelectionResult?,
+) {
+    fun matches(profileId: String, authority: String, generation: Long): Boolean =
+        intent.profileId == profileId && intent.authority == authority && this.generation == generation
+}

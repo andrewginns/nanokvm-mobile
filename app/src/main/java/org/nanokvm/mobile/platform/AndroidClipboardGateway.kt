@@ -13,7 +13,7 @@ import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.clipboard.ClipboardReadResult
 import org.nanokvm.mobile.clipboard.ClipboardRejectionReason
 
-/** Android clipboard adapter that accepts one direct `text/plain` item and nothing else. */
+/** Android clipboard adapter that accepts one direct `text/plain` item without opening HTML, URIs, or intents. */
 class AndroidClipboardGateway internal constructor(
     private val primaryClipProvider: () -> ClipData?,
 ) : ClipboardGateway {
@@ -49,10 +49,16 @@ class AndroidClipboardGateway internal constructor(
 
         val description = clip.description
         val mimeTypes = description.mimeTypes()
-        if (item.htmlText != null || mimeTypes.any(::isHtmlMimeType)) {
-            return ClipboardReadResult.Rejected(ClipboardRejectionReason.RichText)
+        val hasPlainText = mimeTypes.any { it.equals(MIME_TEXT_PLAIN, ignoreCase = true) }
+        if (!hasPlainText) {
+            val reason = if (item.htmlText != null || mimeTypes.any(::isHtmlMimeType)) {
+                ClipboardRejectionReason.RichText
+            } else {
+                ClipboardRejectionReason.NonPlainText
+            }
+            return ClipboardReadResult.Rejected(reason)
         }
-        if (mimeTypes.size != 1 || !mimeTypes.single().equals(MIME_TEXT_PLAIN, ignoreCase = true)) {
+        if (mimeTypes.any { !it.equals(MIME_TEXT_PLAIN, ignoreCase = true) && !isHtmlMimeType(it) }) {
             return ClipboardReadResult.Rejected(ClipboardRejectionReason.NonPlainText)
         }
 

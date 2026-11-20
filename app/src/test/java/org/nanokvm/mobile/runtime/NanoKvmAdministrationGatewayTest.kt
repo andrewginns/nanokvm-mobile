@@ -1,7 +1,10 @@
 package org.nanokvm.mobile.runtime
 
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -32,6 +35,36 @@ import org.nanokvm.protocol.NanoKvmWifiSsid
 import org.nanokvm.protocol.NanoKvmWifiStatus
 
 class NanoKvmAdministrationGatewayTest {
+    @Test
+    fun `a pending update lookup does not delay an unrelated setting write`() = runTest {
+        val current = binding()
+        val port = FakeAdministrationPort()
+        val versionLookupStarted = CompletableDeferred<Unit>()
+        val releaseLookup = CompletableDeferred<Unit>()
+        val gateway = NanoKvmAdministrationGateway(
+            port = object : NanoKvmAdministrationPort by port {
+                override suspend fun applicationVersions(): NanoKvmApplicationVersions {
+                    versionLookupStarted.complete(Unit)
+                    releaseLookup.await()
+                    return port.applicationVersions()
+                }
+            },
+            binding = current,
+            currentBinding = { current },
+        )
+
+        val lookup = async { gateway.refreshUpdates() }
+        versionLookupStarted.await()
+        try {
+            assertApplied(withTimeout(500) { gateway.setHostname("rack-kvm") })
+            assertEquals(1, port.setHostnameCalls)
+            assertFalse(lookup.isCompleted)
+        } finally {
+            releaseLookup.complete(Unit)
+        }
+        success(lookup.await())
+    }
+
     @Test
     fun `missing optional DNS endpoint is unsupported but server failure is connection`() = runTest {
         val current = binding()

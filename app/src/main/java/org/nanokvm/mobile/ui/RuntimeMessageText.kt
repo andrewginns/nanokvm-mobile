@@ -112,6 +112,7 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
     )
     ConsoleMessage.ConnectBeforeChangingVideoSettings ->
         stringResource(R.string.console_message_connect_before_video_settings)
+    is ConsoleMessage.AdministrationReconnectResult -> notice.displayText()
     ConsoleMessage.ApplyingVideoSettings ->
         stringResource(R.string.console_message_applying_video_settings)
     ConsoleMessage.VideoSettingsApplied ->
@@ -201,6 +202,7 @@ internal fun profileStorageIssueMessageResource(issue: ProfileStorageIssue): Int
 @StringRes
 internal fun simpleNoticeResource(notice: SimpleNotice): Int = when (notice) {
     SimpleNotice.ScrollSensitivitySaveFailed -> R.string.notice_scroll_sensitivity_save_failed
+    SimpleNotice.ConsoleDefaultSaveFailed -> R.string.notice_console_default_save_failed
     SimpleNotice.ThemePreferenceSaveFailed -> R.string.notice_theme_preference_save_failed
     SimpleNotice.DeviceColourPreferenceSaveFailed ->
         R.string.notice_device_colour_preference_save_failed

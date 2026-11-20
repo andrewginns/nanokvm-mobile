@@ -153,8 +153,12 @@ class AutomationDialogControllerTest {
         controller.updateAutostartName("new.py")
         controller.updateAutostartText("print('safe')\n")
         controller.reviewAutostartWrite()
+        controller.cancelPendingAction()
+        assertEquals("new.py", controller.state.value.autostartName)
+        assertEquals("print('safe')\n", controller.state.value.autostartText)
+        assertNull(controller.state.value.pendingAction)
+        controller.reviewAutostartWrite()
         val pending = controller.state.value.pendingAction as PendingAutomationAction.AutostartWrite
-
         controller.close()
         val result = gateway.executeAutostartWrite(pending.approval)
 

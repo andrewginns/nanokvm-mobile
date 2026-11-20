@@ -49,6 +49,13 @@ Evidence abbreviations are **C** source/contract review, **U** automated unit or
 UI test, **E** emulator/device UI flow, **A** real NanoKVM appliance, and **R**
 signed release candidate. `open` is required work, not a passing result.
 
+## NanoKVM 2.5.x protocol coverage
+
+The 2.4.3 inventory remains the reference for appliance tools. The Android app also supports the 2.5.1 login cookie in its in-memory session store and continues to accept the earlier token response. The app suppresses manual resolution from 2.5.4 onward and uses the dimensions of rendered video for pointer mapping. The protocol tests cover these differences. [Sipeed release history](https://github.com/sipeed/NanoKVM/blob/main/CHANGELOG.md)
+
+Confirm frame-difference detection behavior, the 2.5.x storage surfaces, and role-scoped responses on exact firmware before expanding the parity claims in the inventory.
+
+
 ## Foundation and console
 
 | ID | Capability | State | Firmware/capability gate | Hardware dependency | Risk / confirmation | Phase | Evidence / exit proof |

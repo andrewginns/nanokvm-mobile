@@ -192,7 +192,12 @@ fun NanoKvmApp(
                         pendingSharedPaste = state.pendingSharedPaste,
                         onSharedPasteConsumed = viewModel::consumeSharedPlainText,
                         sensitiveWorkGeneration = state.sensitiveWorkGeneration,
+                        readSensitiveWorkGeneration = { viewModel.state.value.sensitiveWorkGeneration },
                         onScrollSensitivityChange = viewModel::setScrollSensitivity,
+                        defaultKeyboardLayout = state.keyboardLayout,
+                        onKeyboardDefaultChange = viewModel::setKeyboardLayout,
+                        defaultTrackpad = state.trackpadDefault,
+                        onTrackpadDefaultChange = viewModel::setTrackpadDefault,
                         mjpegFrameDetectionEnabled = state.mjpegFrameDetectionEnabled,
                         onMjpegFrameDetectionEnabledChange =
                             viewModel::setMjpegFrameDetectionEnabled,

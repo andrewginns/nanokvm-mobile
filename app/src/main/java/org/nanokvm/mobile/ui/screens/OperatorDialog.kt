@@ -73,6 +73,7 @@ import org.nanokvm.mobile.runtime.OperatorUiState
 import org.nanokvm.mobile.runtime.utf8SizeAtMost
 import org.nanokvm.mobile.ui.components.PoliteStatus
 import org.nanokvm.mobile.ui.displayText
+import org.nanokvm.mobile.ui.theme.NanoKvmMonospace
 
 @Composable
 internal fun OperatorDialog(
@@ -89,6 +90,7 @@ internal fun OperatorDialog(
     val memory = retainedMemory ?: localMemory
     // Terminal input may contain passwords or replayable commands; never retain or save it.
     var terminalInput by remember { mutableStateOf("") }
+    var confirmDiscard by remember { mutableStateOf(false) }
     var scriptName by rememberSaveable(
         destination.profileId,
         destination.authority,
@@ -136,9 +138,16 @@ internal fun OperatorDialog(
     }
 
     val controlsEnabled = state.available && !state.operationInProgress
+    val requestDismiss = {
+        if (scriptName.isNotBlank() || memory.scriptContent.isNotEmpty()) {
+            confirmDiscard = true
+        } else {
+            onDismiss()
+        }
+    }
     AlertDialog(
         modifier = Modifier.fillMaxWidth(),
-        onDismissRequest = onDismiss,
+        onDismissRequest = requestDismiss,
         title = {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -231,10 +240,15 @@ internal fun OperatorDialog(
                                         )
                                         terminalInput = ""
                                     },
-                                    enabled = terminalInput.isNotEmpty(),
+                                    enabled = controlsEnabled,
                                     modifier = Modifier.weight(1f),
                                 ) {
-                                    Text(stringResource(R.string.console_operator_send_input))
+                                    Text(
+                                        stringResource(
+                                            if (terminalInput.isEmpty()) R.string.console_key_enter
+                                            else R.string.console_operator_send_input,
+                                        ),
+                                    )
                                 }
                                 Spacer(Modifier.width(8.dp))
                                 OutlinedButton(
@@ -245,6 +259,16 @@ internal fun OperatorDialog(
                                 ) {
                                     Text(stringResource(R.string.console_operator_resize_80x24))
                                 }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(
+                                    onClick = { controls.sendOperatorTerminalInput(destination, "\t") },
+                                    enabled = controlsEnabled,
+                                ) { Text(stringResource(R.string.console_key_tab)) }
+                                TextButton(
+                                    onClick = { controls.sendOperatorTerminalInput(destination, "\u0003") },
+                                    enabled = controlsEnabled,
+                                ) { Text(stringResource(R.string.console_operator_interrupt)) }
                             }
                             OutlinedButton(
                                 onClick = {
@@ -404,7 +428,7 @@ internal fun OperatorDialog(
                             onClick = {
                                 pendingAction = PendingOperatorAction.UploadScript(
                                     fileName = scriptName,
-                                    content = memory.takeScriptContent(),
+                                    content = memory.scriptContent.encodeToByteArray(),
                                 )
                             },
                             enabled = controlsEnabled && isSafeScriptName(scriptName) &&
@@ -435,6 +459,7 @@ internal fun OperatorDialog(
                                 Text(
                                     memory.outputText,
                                     style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = NanoKvmMonospace,
                                     modifier = Modifier.testTag("operator-output"),
                                 )
                             }
@@ -453,10 +478,16 @@ internal fun OperatorDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.console_close)) }
+            TextButton(onClick = requestDismiss) { Text(stringResource(R.string.console_close)) }
         },
     )
 
+    if (confirmDiscard) {
+        ConfirmScriptDiscardDialog(
+            onKeep = { confirmDiscard = false },
+            onDiscard = onDismiss,
+        )
+    }
     pendingAction?.let { action ->
         ConfirmOperatorActionDialog(
             destinationLabel = destinationLabel,
@@ -467,8 +498,13 @@ internal fun OperatorDialog(
                 pendingAction = null
             },
             onConfirm = {
-                action.execute(controls, destination)
-                pendingAction = null
+                if (pendingAction === action) {
+                    pendingAction = null
+                    action.execute(controls, destination) {
+                        memory.updateScriptContent("")
+                        scriptName = ""
+                    }
+                }
             },
         )
     }
@@ -758,15 +794,17 @@ private fun PendingOperatorAction.riskLabel(): String = stringResource(
 private fun PendingOperatorAction.execute(
     controls: OperatorControls,
     destination: ApprovedOperatorDestination,
+    onUploadAccepted: () -> Unit,
 ) {
     when (this) {
         PendingOperatorAction.OpenTerminal -> controls.enterOperatorTerminal(destination)
         is PendingOperatorAction.StartSerial ->
             controls.startOperatorSerial(destination, configuration)
-        is PendingOperatorAction.UploadScript -> controls.uploadOperatorScript(
-            destination,
-            OperatorScriptUploadRequest(fileName, takeContent()),
-        )
+        is PendingOperatorAction.UploadScript -> {
+            if (controls.uploadOperatorScript(destination, OperatorScriptUploadRequest(fileName, takeContent()))) {
+                onUploadAccepted()
+            }
+        }
         is PendingOperatorAction.RunScript ->
             controls.runOperatorScript(destination, script.id, mode)
         is PendingOperatorAction.DeleteScript ->

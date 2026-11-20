@@ -240,10 +240,23 @@ internal fun AdministrationDialog(
                 }
 
                 AdministrationSection(stringResource(R.string.console_admin_software)) {
-                    val updates = state.updates
-                    if (updates == null) {
+                    OutlinedButton(
+                        onClick = controls::refreshAdministrationUpdates,
+                        enabled = controlsEnabled && !state.updatesLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (state.updatesLoading) R.string.console_admin_checking_updates
+                                else R.string.console_admin_check_updates,
+                            ),
+                        )
+                    }
+                    if (state.updatesUnavailable) {
                         AdministrationUnavailable()
-                    } else {
+                    }
+                    val updates = state.updates
+                    if (updates != null) {
                         Text(
                             stringResource(
                                 R.string.console_admin_version_current,

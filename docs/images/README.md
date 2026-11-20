@@ -29,12 +29,14 @@ permission so that the visual-reference provenance is unambiguous.
 
 ## Interface screenshots
 
-The four `readme/*.png` phone screenshots were captured from the production
-Compose screens on 3 August 2026 using a controlled API 37 emulator. They use
-the reserved hostname `kvm.example.com`, TEST-NET address `192.0.2.44`, and no
-password or certificate fingerprint.
+The phone screenshots use real Compose surfaces on a controlled API 37
+emulator. The Connections and Video settings images were refreshed on
+20 November 2026. The profile editor and console captures are from
+3 August 2026. The profiles use the reserved hostname `kvm.example.com` and
+TEST-NET address `192.0.2.44`. The captures contain no password or certificate
+fingerprint.
 
-The console screenshots show a rights-clear synthetic framebuffer: a generic
+The console screenshot shows a rights-clear synthetic framebuffer: a generic
 dark code workspace and system-health dashboard containing no people, readable
 prose, credentials, private endpoints, logos, trademarks, personal data, or
 third-party interface branding. The capture path used instrumentation-only

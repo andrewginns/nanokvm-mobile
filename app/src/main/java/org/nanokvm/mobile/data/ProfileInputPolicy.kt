@@ -37,7 +37,7 @@ internal object ProfileInputPolicy {
 
     fun boundUsername(value: String): String = value.take(MAX_USERNAME_CHARS)
 
-    private fun issue(profile: HostProfile): ProfileInputIssue? {
+    fun issue(profile: HostProfile): ProfileInputIssue? {
         if (!validText(profile.id, MAX_ID_CHARS)) return ProfileInputIssue.InvalidId
         if (!validText(profile.name, MAX_NAME_CHARS)) return ProfileInputIssue.InvalidName
         if (!validText(profile.host, MAX_HOST_CHARS)) return ProfileInputIssue.InvalidHost
@@ -85,7 +85,7 @@ internal object ProfileInputPolicy {
     private const val MAX_CERTIFICATE_FINGERPRINT_CHARS: Int = 160
 }
 
-private enum class ProfileInputIssue(val message: String) {
+internal enum class ProfileInputIssue(val message: String) {
     InvalidId("Profile ID is invalid"),
     InvalidName("Profile name is invalid"),
     InvalidHost("Profile host is invalid"),

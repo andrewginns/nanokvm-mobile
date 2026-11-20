@@ -172,6 +172,19 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun videoStartingAndActionFeedbackAreVisibleWithoutOpeningControls() {
+        renderConsole(
+            connectedSession = BackendSession(
+                connection = ConnectionState.Connected,
+                status = ConsoleMessage.ConnectingVideo(VideoTransportDescriptor.DirectH264),
+            ).withActionFeedback(ConsoleMessage.VideoSettingsNotApplied(ConnectionFailure.TimedOut)),
+        )
+
+        composeRule.onNodeWithTag("console-video-starting").assertIsDisplayed()
+        composeRule.onNodeWithTag("console-action-feedback").assertIsDisplayed()
+    }
+
+    @Test
     fun nativeKeyboardUsesStandardImeModeAndForwardsCommittedText() {
         renderConsole()
 
@@ -1500,6 +1513,9 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText("2.4.3").assertIsDisplayed()
         composeRule.onNodeWithText("NanoKVM-Full").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("192.0.2.250").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Redacted diagnostics").performClick()
+        composeRule.onNodeWithText("Dropped before first frame", substring = true).assertExists()
+        composeRule.onNodeWithText("192.0.2.250", substring = true).assertDoesNotExist()
     }
 
     @Test
@@ -1938,7 +1954,8 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithContentDescription("Show keyboard")
             .assertIsDisplayed()
             .assertHasClickAction()
-        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Open console controls")
+            .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("console-control-scrim")
             .assertIsDisplayed()
@@ -1957,7 +1974,8 @@ class ConsoleScreenInstrumentedTest {
             .performClick()
         composeRule.onNodeWithTag("view-navigation-pad").assertDoesNotExist()
         composeRule.onNodeWithTag("console-quick-actions").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithContentDescription("Open console controls")
+            .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithContentDescription("Dock view pad")
             .performScrollTo()
             .assertIsDisplayed()
@@ -2845,8 +2863,8 @@ class ConsoleScreenInstrumentedTest {
         themeMode: ThemeMode = ThemeMode.SYSTEM,
         useDynamicColor: Boolean = true,
         activity: ComponentActivity? = null,
+        connectedSession: BackendSession = backend.session.value,
     ) {
-        val connectedSession = backend.session.value
         val content: @Composable () -> Unit = {
             NanoKvmTheme(themeMode = themeMode, useDynamicColor = useDynamicColor) {
                 Box(
@@ -3081,8 +3099,8 @@ private class RecordingConsoleBackend : ConsoleBackend {
     @Volatile var picoClawSurfaceIsVisible = false
     var picoClawEntryCalls = 0
     private val phase3Controls = object : NoOpPhase3Controls() {
-        override fun setPhase3SurfaceVisible(visible: Boolean) {
-            phase3SurfaceIsVisible = visible
+        override fun setPhase3Surface(surface: org.nanokvm.mobile.runtime.Phase3Surface?) {
+            phase3SurfaceIsVisible = surface != null
         }
 
         override fun setPhase3HidMode(
@@ -3134,7 +3152,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
 
     override fun reconnect() = Unit
     override fun cancelReconnect() = Unit
-    override fun setForeground(isForeground: Boolean) = Unit
+    override fun setForeground(isForeground: Boolean, abandonConnection: Boolean) = Unit
     override fun attachVideoSurface(surface: Surface) {
         attachSurfaceCalls++
         surfaceFillColor?.let { color ->

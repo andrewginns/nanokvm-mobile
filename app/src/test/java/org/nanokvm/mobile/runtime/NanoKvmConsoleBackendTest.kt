@@ -633,6 +633,42 @@ class NanoKvmConsoleBackendTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun abandonedConnectCannotResumeOnQuickForegroundReturn() = runTest {
+        val tokenStore = InMemorySessionTokenStore("abandoned-test-session")
+        val client = NanoKvmClient.create(
+            endpoint = NanoKvmEndpoint.parse("https://127.0.0.1:9"),
+            tokenStore = tokenStore,
+        )
+        val backend = NanoKvmConsoleBackend(
+            workerDispatcher = StandardTestDispatcher(testScheduler),
+            reconnectPolicy = ReconnectPolicy(listOf(0L), jitterFraction = 0.0),
+        )
+        try {
+            backend.setPrivateField(
+                "authenticatedSession",
+                AuthenticatedNanoKvmSession(
+                    client, "abandoned", "127.0.0.1:9",
+                    VmInfo(application = "2.4.3"), reflectedEmptyCapabilities(),
+                ),
+            )
+            @Suppress("UNCHECKED_CAST")
+            val session = backend.privateField("mutableSession") as MutableStateFlow<BackendSession>
+            session.value = BackendSession(connection = ConnectionState.Connected, sessionGeneration = 5L)
+
+            backend.setForeground(false, abandonConnection = true)
+            backend.setForeground(true)
+            runCurrent()
+
+            assertEquals(ConnectionState.Disconnected, backend.session.value.connection)
+            assertEquals(null, tokenStore.read())
+            assertEquals(null, backend.privateField("authenticatedSession"))
+        } finally {
+            backend.closeAndAwait()
+        }
+    }
+
     @Test
     fun `classified feature 401 tears down session and stale approval cannot dispatch`() =
         runBlocking {

@@ -1291,6 +1291,16 @@ private class FakeAppSettingsStore(
         mutableSettings.value = mutableSettings.value.copy(useDynamicColor = enabled)
     }
 
+    override suspend fun setKeyboardLayout(layout: KeyboardLayout) {
+        writeFailure?.let { throw it }
+        mutableSettings.value = mutableSettings.value.copy(keyboardLayout = layout)
+    }
+
+    override suspend fun setTrackpadDefault(enabled: Boolean) {
+        writeFailure?.let { throw it }
+        mutableSettings.value = mutableSettings.value.copy(trackpadDefault = enabled)
+    }
+
     override suspend fun setMjpegFrameDetectionEnabled(enabled: Boolean) {
         writeFailure?.let { throw it }
         savedFrameDetectionValues += enabled
@@ -1407,7 +1417,7 @@ private class FakeConsoleBackend(
     }
     override fun reconnect() = Unit
     override fun cancelReconnect() = Unit
-    override fun setForeground(isForeground: Boolean) = Unit
+    override fun setForeground(isForeground: Boolean, abandonConnection: Boolean) = Unit
     override fun attachVideoSurface(surface: Surface) = Unit
     override fun detachVideoSurface(surface: Surface) = Unit
     override fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton>) = Unit

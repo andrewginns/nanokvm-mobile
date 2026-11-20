@@ -335,7 +335,7 @@ class NanoKvmOperatorGatewayTest {
         result as NanoKvmOperatorScriptCommandResult.Completed<NanoKvmOperatorScriptExecution>
         val execution = result.value
         val output = execution.output
-        val terminalOutput = NanoKvmOperatorTerminalOutput("terminal-private".encodeToByteArray())
+        val terminalOutput = NanoKvmOperatorTerminalOutput("terminal-private")
         val approvalText = run {
             gateway.terminal.onForeground()
             requireNotNull(gateway.terminal.recordExplicitElevatedEntryApproval()).toString()

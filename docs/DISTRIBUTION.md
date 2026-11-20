@@ -128,3 +128,16 @@ an update from the preceding public APK on a physical phone.
 If a signing, trust, credential, unintended-input, data-loss, licence, or source
 defect is found, preserve evidence, publish a clear advisory, and withdraw or
 supersede the artifact. Never replace assets silently or reuse the version code.
+
+## ARM64 download experiment
+
+The standard build produces the universal APK. To measure a separate ARM64-only build locally, run the release assembly with the experimental property in a separate checkout or preserve the universal output before rebuilding.
+
+`.\gradlew.bat -Pnanokvm.experimentalArm64Apk=true --dependency-verification=strict :app:assembleRelease`
+
+The resulting unsigned APK is for size and alignment checks. Any published alternative belongs to the same release version and production signing lineage as the universal APK, carries its own checksum and provenance, and must pass the in-place upgrade matrix on an ARM64 phone. Keep the universal APK available for all supported ABIs.
+
+In the November 2026 audit, the ARM64-only unsigned build was 11,730,758
+bytes and the default universal build was 33,628,595 bytes. Both used
+`org.nanokvm.mobile` and passed the 16 KiB APK alignment check. The ARM64
+variant is still a local build experiment.

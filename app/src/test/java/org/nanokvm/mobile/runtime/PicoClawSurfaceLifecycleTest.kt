@@ -77,6 +77,17 @@ class PicoClawSurfaceLifecycleTest {
         }
     }
 
+    @Test
+    fun assistantUpdateReplacesOnlyItsOwnMessageInPlace() {
+        fun assistant(id: String, text: String) = PicoClawMessageUiState(
+            PicoClawMessageContent.ApplianceText(PicoClawMessageRole.Assistant, text),
+            assistantMessageId = id,
+        )
+        val original = listOf(assistant("first", "draft"), assistant("second", "other"))
+        val updated = appendBoundedPicoClawMessage(original, assistant("first", "final"))
+        assertEquals(listOf("final", "other"), updated.map { it.applianceText() })
+    }
+
     private fun PicoClawMessageUiState.applianceText(): String =
         (content as PicoClawMessageContent.ApplianceText).value
 

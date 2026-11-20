@@ -903,7 +903,7 @@ class NanoKvmApi internal constructor(
     }
 
     suspend fun renameWakeOnLanEntry(mac: NanoKvmMacAddress, name: String) {
-        val normalized = normalizeWakeOnLanName(name, allowEmpty = false)
+        val normalized = canonicalWakeOnLanName(name)
         postWithoutData(
             "/api/network/wol/mac/name",
             RenameWakeOnLanRequest(mac = mac.value, name = normalized),
@@ -1427,6 +1427,8 @@ private fun parseWakeOnLanHistoryEntry(value: String): NanoKvmWakeOnLanEntry {
         name = normalizeWakeOnLanName(nameValue, allowEmpty = true).ifEmpty { null },
     )
 }
+
+fun canonicalWakeOnLanName(value: String): String = normalizeWakeOnLanName(value, allowEmpty = false)
 
 private fun normalizeWakeOnLanName(value: String, allowEmpty: Boolean): String {
     require(value.utf8Size() <= MAX_WOL_NAME_UTF8_BYTES) { "WOL name is too long" }

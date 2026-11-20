@@ -139,6 +139,12 @@ generation, or saved-state behavior changes:
 .\gradlew.bat --no-problems-report --dependency-verification=strict '-Pandroid.testInstrumentationRunnerArguments.class=org.nanokvm.mobile.macrobenchmark.ProcessRestartInstrumentedTest' :macrobenchmark:connectedBenchmarkAndroidTest
 ```
 
+`ConsoleBenchmark` opens a synthetic console and exercises zoom and the
+on-screen keyboard with and without partial compilation. It reports startup
+and frame timing. `OfflinePickerRegressionTest` uses the Android system picker
+on API 29+ to cancel, reopen, rotate, and reach review with a synthetic
+package. Both use the benchmark app's isolated console fixture.
+
 Treat emulator timings as diagnostic. Performance claims need repeated runs on
 a named physical device with the APK hash, build mode, thermal state, and
 measurement method recorded.

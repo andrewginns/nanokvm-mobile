@@ -6,8 +6,8 @@
   "firstProductionVersionName": "0.3.6",
   "firstProductionVersionCode": 13,
   "previousProduction": {
-    "versionName": "0.3.16",
-    "versionCode": 26,
-    "apkSha256": "fd306b0e17bb0535e977d806c9b9714003a3584f995ab22f704c690304f7abc6"
+    "versionName": "0.3.17",
+    "versionCode": 27,
+    "apkSha256": "4eaab34d1e9848bc07c4eb99766a99db5c4ff93d7323ab781240abe54cdd01d4"
   }
 }

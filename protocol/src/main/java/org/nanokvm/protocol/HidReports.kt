@@ -254,6 +254,8 @@ object HidCharacterMapper {
     private val uk: Map<Char, HidKeystroke> = us.toMutableMap().apply {
         this['"'] = HidKeystroke(HidUsage.DIGIT_2, setOf(HidModifier.LEFT_SHIFT))
         this['@'] = HidKeystroke(HidUsage.APOSTROPHE, setOf(HidModifier.LEFT_SHIFT))
+        this['£'] = HidKeystroke(HidUsage.DIGIT_3, setOf(HidModifier.LEFT_SHIFT))
+        this['¬'] = HidKeystroke(HidUsage.GRAVE, setOf(HidModifier.LEFT_SHIFT))
         this['#'] = HidKeystroke(HidUsage.NON_US_HASH)
         this['~'] = HidKeystroke(HidUsage.NON_US_HASH, setOf(HidModifier.LEFT_SHIFT))
         this['\\'] = HidKeystroke(HidUsage.NON_US_BACKSLASH)

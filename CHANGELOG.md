@@ -7,6 +7,31 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.18] - 2026-11-20
+
+Android version code **28**.
+
+- Show when video is waiting for its first frame and put reconnect, sign-in
+  recovery, and disconnect near the console status. Retry an explicitly
+  selected MJPEG stream once when the first request delivers no frame.
+- Keep touch drags bound to the gesture that started them, improve physical
+  keyboard routing, and add the UK keyboard mappings for £ and ¬. Save keyboard
+  layout and pointer preferences.
+- Improve profile form validation, keyboard navigation, and Android Autofill.
+  Review pasted text before sending, including direct plain text from apps
+  that also copy HTML.
+- Keep offline update review available after canceling or rotating in Android's
+  file picker. Check for software updates independently of other Administration
+  settings and validate image URLs and Wake-on-LAN targets before review.
+- Group More Actions, improve terminal input and UTF-8 handling, and update
+  PicoClaw messages in place as replies arrive. Keep manual input blocked while
+  PicoClaw control ownership is unresolved.
+- Add a previewable local diagnostics report with connection timings and video
+  counters. The report excludes private addresses and credentials.
+
+Android 8.0 or later. The universal APK updates public v0.3.17 (build 27)
+using the existing production signing certificate.
+
 ## [0.3.17] - 2026-11-20
 
 Android version code **27**.

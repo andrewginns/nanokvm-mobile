@@ -113,6 +113,7 @@ interface NanoKvmVideoListener {
     fun onFramesDropped(count: Int, reason: H264FrameDropReason) = Unit
     /** Emitted only when the active transport's rendered-frame watchdog actually expires. */
     fun onVideoStalled(transport: NanoKvmVideoTransport) = Unit
+    fun onMjpegStartupTimedOut() = Unit
 }
 
 /**
@@ -562,7 +563,7 @@ class NanoKvmVideoSession(
     private fun startMjpeg(
         run: Long,
         config: NanoKvmVideoConfig,
-        retryOnFirstFrameTimeout: Boolean = config.preference != NanoKvmVideoPreference.MJPEG,
+        retryOnFirstFrameTimeout: Boolean = true,
     ) {
         val created = MjpegAttempt(run, config, retryOnFirstFrameTimeout)
         synchronized(stateLock) {
@@ -610,10 +611,15 @@ class NanoKvmVideoSession(
         }
         attempt.close()
         val run = attempt.run
-        if (expectedWatchdogEpoch != null) {
+        val startupTimedOut = reason == NanoKvmVideoFailureReason.FirstFrameTimeout
+        if (startupTimedOut) {
+            dispatchForGeneration(run) { listener.onMjpegStartupTimedOut() }
+        } else if (expectedWatchdogEpoch != null) {
             dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.MJPEG) }
         }
-        if (attempt.retryOnFirstFrameTimeout && reason == NanoKvmVideoFailureReason.FirstFrameTimeout) {
+        if (attempt.retryOnFirstFrameTimeout && startupTimedOut &&
+            (attempt.config.preference != NanoKvmVideoPreference.MJPEG || !attempt.receivedJpeg)
+        ) {
             startMjpeg(run, attempt.config, retryOnFirstFrameTimeout = false)
         } else {
             notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.MJPEG, cause, reason))
@@ -742,6 +748,7 @@ class NanoKvmVideoSession(
     ) : MjpegStreamListener {
         // Accessed only under the session state lock.
         var hasRendered = false
+        @Volatile var receivedJpeg = false
         val reader = MjpegStreamReader(client, baseUrl, token, this, config.maxMjpegFrameBytes)
         private val frames = LatestFrameDispatcher(
             executor = callbackExecutor,
@@ -755,6 +762,7 @@ class NanoKvmVideoSession(
 
         override fun onJpegFrame(jpeg: ByteArray) {
             if (!isMjpegActive(this)) return
+            receivedJpeg = true
             val bitmap = MjpegBitmapDecoder.decode(jpeg, config.mjpegBitmapOptions) ?: return
             if (isMjpegActive(this)) frames.offer(bitmap) else recycle(bitmap)
         }

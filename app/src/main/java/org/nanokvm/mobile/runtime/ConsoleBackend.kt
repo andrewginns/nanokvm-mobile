@@ -87,10 +87,12 @@ interface ConsoleCoreControls {
     fun cancelPaste()
 }
 
+enum class Phase3Surface { VirtualMedia, WakeOnLan }
+
 /** Commands owned by the virtual-media and Wake-on-LAN surface. */
 interface Phase3Controls {
     /** Opens/closes low-frequency Phase 3 polling; implementations must stop it in background. */
-    fun setPhase3SurfaceVisible(visible: Boolean)
+    fun setPhase3Surface(surface: Phase3Surface?)
     fun refreshPhase3()
     fun mountPhase3Image(
         destination: ApprovedPhase3Destination,
@@ -123,6 +125,7 @@ interface AdministrationControls {
     /** Opens/closes privileged administration loading; hidden/background surfaces perform no I/O. */
     fun setAdministrationSurfaceVisible(visible: Boolean)
     fun refreshAdministration()
+    fun refreshAdministrationUpdates()
     fun setAdministrationPreviewUpdates(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
@@ -218,7 +221,7 @@ interface OperatorControls {
     fun uploadOperatorScript(
         destination: ApprovedOperatorDestination,
         request: OperatorScriptUploadRequest,
-    )
+    ): Boolean
     fun runOperatorScript(
         destination: ApprovedOperatorDestination,
         scriptId: Long,
@@ -413,7 +416,10 @@ sealed interface PicoClawMessageContent {
     }
 }
 
-class PicoClawMessageUiState(val content: PicoClawMessageContent) {
+class PicoClawMessageUiState(
+    val content: PicoClawMessageContent,
+    internal val assistantMessageId: String? = null,
+) {
     val role: PicoClawMessageRole
         get() = content.role
 
@@ -893,6 +899,8 @@ data class AdministrationUiState(
     val operationInProgress: Boolean = false,
     val account: AdministrationAccountUiState? = null,
     val updates: AdministrationUpdateUiState? = null,
+    val updatesLoading: Boolean = false,
+    val updatesUnavailable: Boolean = false,
     val oled: AdministrationOledUiState? = null,
     val sshEnabled: Boolean? = null,
     val hostname: String? = null,
@@ -1048,7 +1056,7 @@ interface ConsoleBackend :
 
     suspend fun connect(request: ConnectRequest): ConnectOutcome
     suspend fun disconnect()
-    fun setForeground(isForeground: Boolean)
+    fun setForeground(isForeground: Boolean, abandonConnection: Boolean = false)
 
     /** Updates app-local intent only; settings collection must not perform appliance I/O. */
     fun setMjpegFrameDetectionPreference(enabled: Boolean)
@@ -1111,6 +1119,13 @@ data class CertificateDetails(
     val metadataTruncated: Boolean = true,
 )
 
+data class ConsoleConnectionTiming(
+    val backendTrustMillis: Long,
+    val loginMillis: Long,
+    val capabilityReadsMillis: Long,
+    val inputConnectMillis: Long,
+)
+
 data class BackendSession(
     val connection: ConnectionState = ConnectionState.Disconnected,
     /** Changes for each authenticated/reconnected control session to invalidate stale approvals. */
@@ -1125,9 +1140,13 @@ data class BackendSession(
     val videoSurfaceGeneration: Long = 0,
     val framesPerSecond: Int? = null,
     val roundTripMs: Int? = null,
-    /** Cumulative diagnostics for this authenticated connection; never drawn over video. */
+    val connectionTiming: ConsoleConnectionTiming? = null,
+    val videoFirstFrameMillis: Long? = null,
+    /** Cumulative diagnostics for the current video session; never drawn over video. */
     val droppedFrames: Long = 0L,
+    val droppedBeforeFirstFrame: Long = 0L,
     val videoStallEvents: Long = 0L,
+    val mjpegStartupTimeouts: Long = 0L,
     val deviceStatus: NanoKvmDeviceStatus = NanoKvmDeviceStatus(),
     val capabilities: NanoKvmServerCapabilities? = null,
     val phase3: Phase3FeatureUiState = Phase3FeatureUiState(),
@@ -1162,7 +1181,14 @@ internal fun BackendSession.recordDroppedFrames(count: Int): BackendSession {
     } else {
         droppedFrames + increment
     }
-    return copy(droppedFrames = updated)
+    return copy(
+        droppedFrames = updated,
+        droppedBeforeFirstFrame = if (videoFirstFrameMillis == null) {
+            droppedBeforeFirstFrame + minOf(increment, Long.MAX_VALUE - droppedBeforeFirstFrame)
+        } else {
+            droppedBeforeFirstFrame
+        },
+    )
 }
 
 internal fun BackendSession.recordVideoStall(): BackendSession = copy(

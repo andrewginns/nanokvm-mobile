@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="console_diagnostics_title">Redacted diagnostics</string>
     <string name="console_device_details">Device details</string>
     <string name="console_device_identity">Identity</string>
     <string name="console_device_application_version">Application version</string>

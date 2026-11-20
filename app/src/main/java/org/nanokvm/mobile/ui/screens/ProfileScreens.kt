@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,6 +67,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -74,11 +76,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.data.HostProfile
+import org.nanokvm.mobile.data.ProfileInputIssue
 import org.nanokvm.mobile.data.ProfileInputPolicy
 import org.nanokvm.mobile.data.ThemeMode
 import org.nanokvm.mobile.ui.ProfileStorageIssue
@@ -550,7 +554,7 @@ private fun ProfileCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                if (profile.trustedCertificateSha256 != null) Icons.Default.Lock else Icons.Default.LockOpen,
+                Icons.Default.Lock,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
                 tint = securityColor,
@@ -591,6 +595,9 @@ private fun PasswordDialog(
 ) {
     var password by remember(profile.id) { mutableStateOf("") }
     var savePassword by remember(profile.id) { mutableStateOf(false) }
+    val submit = {
+        if (password.isNotEmpty()) onConnect(password, savePassword)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Lock, contentDescription = null) },
@@ -604,11 +611,15 @@ private fun PasswordDialog(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().semantics { contentType = ContentType.Password },
                     label = { Text(stringResource(R.string.password_label)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Go,
+                    ),
+                    keyboardActions = KeyboardActions(onGo = { submit() }),
                 )
                 if (canSavePassword) {
                     Row(
@@ -651,7 +662,7 @@ private fun PasswordDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onConnect(password, savePassword) }, enabled = password.isNotEmpty()) {
+            Button(onClick = submit, enabled = password.isNotEmpty()) {
                 Text(
                     stringResource(
                         if (savePassword) R.string.password_save_connect_action else R.string.profile_connect_action,
@@ -694,7 +705,11 @@ fun ProfileEditorScreen(
         useHttps = true,
         username = username.trim(),
     )
-    val valid = portValue != null && ProfileInputPolicy.isValid(prospectiveProfile)
+    val issue = ProfileInputPolicy.issue(prospectiveProfile)
+    val valid = portValue != null && issue == null
+    val hostError = host.isNotEmpty() && (
+        issue == ProfileInputIssue.InvalidHost || issue == ProfileInputIssue.InvalidEndpoint
+    )
     val mutationInProgress = mutation != ProfileMutationUiState.Idle
 
     Scaffold(
@@ -742,6 +757,8 @@ fun ProfileEditorScreen(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_name_label)) },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            isError = name.isNotEmpty() && issue == ProfileInputIssue.InvalidName,
                         )
                         OutlinedTextField(
                             value = host,
@@ -752,7 +769,14 @@ fun ProfileEditorScreen(
                             label = { Text(stringResource(R.string.profile_host_label)) },
                             placeholder = { Text(stringResource(R.string.profile_host_placeholder)) },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Next,
+                            ),
+                            isError = hostError,
+                            supportingText = if (hostError) {
+                                { Text(stringResource(R.string.profile_host_error)) }
+                            } else null,
                         )
                         OutlinedTextField(
                             value = port,
@@ -760,7 +784,10 @@ fun ProfileEditorScreen(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_port_label)) },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Next,
+                            ),
                             isError = port.isNotEmpty() && portValue !in 1..65535,
                             supportingText = if (port.isNotEmpty() && portValue !in 1..65535) {
                                 { Text(stringResource(R.string.profile_port_error)) }
@@ -780,6 +807,8 @@ fun ProfileEditorScreen(
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.profile_username_label)) },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            isError = username.isNotEmpty() && issue == ProfileInputIssue.InvalidUsername,
                         )
                         if (hasSavedPassword) {
                             Surface(

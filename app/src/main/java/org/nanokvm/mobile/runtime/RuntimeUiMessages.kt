@@ -105,6 +105,7 @@ sealed interface ConsoleMessage {
     data object HidInterfaceReset : ActionFeedback
     data object CtrlAltDeleteSent : ActionFeedback
     data object HostControlSent : ActionFeedback
+    data class AdministrationReconnectResult(val notice: AdministrationNotice) : ActionFeedback
     data object HostControlSessionChanged : ActionFeedback
     data class ConnectingVideo(val transport: VideoTransportDescriptor) : Status
     data class VideoFallback(

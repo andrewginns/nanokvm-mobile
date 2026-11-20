@@ -30,6 +30,7 @@
     <string name="picoclaw_delete_history">Delete</string>
     <string name="picoclaw_delete_history_title">Delete this history?</string>
     <string name="picoclaw_delete_history_body">This permanently deletes the selected PicoClaw history from %1$s. The request is sent once and is never replayed.</string>
+    <string name="picoclaw_open_again">Close and reopen PicoClaw to review access before starting another chat.</string>
     <string name="picoclaw_open_chat">Open control session</string>
     <string name="picoclaw_chat_message">Message</string>
     <string name="picoclaw_send">Send once</string>

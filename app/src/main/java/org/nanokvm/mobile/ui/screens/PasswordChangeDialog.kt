@@ -1,6 +1,8 @@
 package org.nanokvm.mobile.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,7 +77,10 @@ internal fun PasswordChangeDialog(
         },
         title = { Text(stringResource(R.string.password_change_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
                     stringResource(R.string.password_change_destination, destinationLabel),
                     style = MaterialTheme.typography.bodyMedium,
@@ -104,6 +109,9 @@ internal fun PasswordChangeDialog(
                     label = { Text(stringResource(R.string.password_change_new_password)) },
                     singleLine = true,
                     isError = password.isNotEmpty() && !passwordValid,
+                    supportingText = if (password.isNotEmpty() && !passwordValid) {
+                        { Text(stringResource(R.string.password_change_invalid_password)) }
+                    } else null,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         autoCorrectEnabled = false,

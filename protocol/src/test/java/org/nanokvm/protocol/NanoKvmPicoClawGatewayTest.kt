@@ -228,7 +228,7 @@ class NanoKvmPicoClawGatewayTest {
     }
 
     @Test
-    fun `official close codes map to typed cause and release lock`() = runBlocking {
+    fun `takeover close marks control ownership uncertain`() = runBlocking {
         val peer = RecordingPicoPeer()
         server.enqueue(MockResponse().withWebSocketUpgrade(peer))
         val gateway = newGateway()
@@ -246,7 +246,7 @@ class NanoKvmPicoClawGatewayTest {
 
         assertEquals(4004, close.code)
         assertEquals(NanoKvmPicoClawCloseCause.SessionTakenOver, close.cause)
-        assertTrue(gateway.manualHidLock.value is NanoKvmPicoClawManualHidLockState.Released)
+        assertTrue(gateway.manualHidLock.value is NanoKvmPicoClawManualHidLockState.ReleaseUncertain)
         assertNull(gateway.sendMessage("must not replay"))
     }
 

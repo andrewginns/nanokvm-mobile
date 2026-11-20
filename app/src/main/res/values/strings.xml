@@ -9,6 +9,7 @@
     <string name="common_remove">Remove</string>
 
     <!-- Typed app notices -->
+    <string name="notice_console_default_save_failed">The console default could not be saved.</string>
     <string name="notice_scroll_sensitivity_save_failed">Scroll sensitivity could not be saved.</string>
     <string name="notice_theme_preference_save_failed">Theme preference could not be saved.</string>
     <string name="notice_device_colour_preference_save_failed">Device colour preference could not be saved.</string>
@@ -115,6 +116,7 @@
     <string name="profile_host_label">Host or IP address</string>
     <string name="profile_host_placeholder">Device hostname or IP address</string>
     <string name="profile_port_label">Port</string>
+    <string name="profile_host_error">Enter a hostname, IPv4 address, or bracketed IPv6 address without https://.</string>
     <string name="profile_port_error">Enter a port from 1 to 65535</string>
     <string name="profile_username_label">Username</string>
     <string name="profile_saved_password_title">Saved password</string>

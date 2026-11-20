@@ -8,6 +8,7 @@
     <string name="console_hide_native_keyboard">Hide native keyboard</string>
     <string name="console_open_controls">Open console controls</string>
     <string name="console_close_controls">Close controls</string>
+    <string name="console_dismiss_feedback">Dismiss action feedback</string>
     <string name="console_waiting_for_video">Waiting for remote video…</string>
     <string name="console_connection_disconnected">Disconnected</string>
     <string name="console_connection_connecting">Connecting</string>
@@ -185,7 +186,7 @@
     <string name="console_clipboard_error_title">Clipboard unavailable</string>
     <string name="console_clipboard_unavailable">Android could not read the clipboard. Keep NanoKVM in the foreground and try again.</string>
     <string name="console_clipboard_empty">The Android clipboard does not contain direct plain text.</string>
-    <string name="console_clipboard_rejected">Only one direct plain-text clipboard item can be typed. Rich text, links, files, and shared content providers are not opened.</string>
+    <string name="console_clipboard_rejected">Only one clipboard item with a direct plain-text version can be typed. HTML, links, files, and shared content providers are never opened.</string>
     <string name="console_clipboard_too_long">Clipboard text exceeds NanoKVM’s %1$d-byte retained paste limit and was not retained.</string>
     <string name="console_clipboard_connect_first">Connect to NanoKVM before typing clipboard text.</string>
     <string name="console_clipboard_session_changed">The NanoKVM session changed. Review the clipboard destination again.</string>
@@ -206,7 +207,8 @@
     <string name="console_h264_settings">H.264 stream settings</string>
     <string name="console_bitrate_value">%1$d Mbps</string>
     <string name="console_mjpeg_quality">MJPEG quality</string>
-    <string name="console_mjpeg_settings">MJPEG fallback settings</string>
+    <string name="console_mjpeg_settings">MJPEG settings</string>
+    <string name="console_mjpeg_fallback_settings">MJPEG fallback settings</string>
     <string name="console_mjpeg_frame_detection">MJPEG frame-difference detection</string>
     <string name="console_mjpeg_frame_detection_detail">Reduces unchanged MJPEG frames. Off by default; when enabled, each MJPEG start gets one 10-second startup grace period to avoid an initially black preview.</string>
     <string name="console_mjpeg_frame_detection_state_on">Enabled</string>
@@ -244,6 +246,9 @@
     <string name="console_confirm_reset_action">Reset host</string>
     <string name="console_confirm_force_off_action">Force power off</string>
     <string name="console_confirm_ctrl_alt_delete_action">Send Ctrl-Alt-Delete</string>
+    <string name="console_actions_session_group">Session</string>
+    <string name="console_actions_device_group">Appliance</string>
+    <string name="picoclaw_unsupported_firmware">PicoClaw is unavailable on this NanoKVM firmware.</string>
     <string name="console_actions_title">Console actions</string>
     <string name="console_reconnect_stream">Reconnect stream</string>
     <string name="console_reset_keyboard_mouse">Reset keyboard and mouse</string>
@@ -251,6 +256,7 @@
     <string name="console_disconnect_title">Disconnect from %1$s?</string>
     <string name="console_disconnect_detail">Target: %1$s\n\nThis ends the remote session. It does not power off or restart the host.</string>
     <string name="console_retry">Retry</string>
+    <string name="console_sign_in_again">Sign in again</string>
     <string name="console_stop_reconnecting">Stop reconnecting</string>
 
     <!-- Virtual media and Wake-on-LAN -->
@@ -401,6 +407,8 @@
     <string name="console_admin_preview_updates_off">Preview updates: off</string>
     <string name="console_admin_enable_preview">Enable preview updates</string>
     <string name="console_admin_disable_preview">Disable preview updates</string>
+    <string name="console_admin_check_updates">Check for updates</string>
+    <string name="console_admin_checking_updates">Checking for updates…</string>
     <string name="console_admin_install_update">Install update</string>
     <string name="console_admin_system">System</string>
     <string name="console_admin_reboot">Reboot NanoKVM</string>
@@ -486,7 +494,7 @@
     <string name="console_admin_swap_disabled">Off</string>
     <string name="console_admin_swap_megabytes">%1$d MB</string>
     <string name="console_admin_enable_tls">Enable appliance TLS…</string>
-    <string name="console_admin_tls_enable_only">Enable-only. The app never offers a TLS disable action; update this profile to HTTPS after enabling it.</string>
+    <string name="console_admin_tls_enable_only">Enabling TLS can replace the appliance certificate. Review the certificate again if prompted.</string>
     <string name="console_admin_value_reset_hdmi">Reset HDMI once</string>
     <string name="console_admin_value_enable_tls">Enable TLS once</string>
     <string name="console_admin_consequence_hdmi">Video or USB input may pause. Input is released first, the request is sent once, and state-changing requests are read back without replay.</string>
@@ -494,6 +502,8 @@
 
     <!-- Explicitly elevated root terminal and scripts -->
     <string name="console_operator_tools">Operator tools</string>
+    <string name="console_discard_script_draft">Discard the unsaved script draft?</string>
+    <string name="console_discard_script_draft_action">Discard draft</string>
     <string name="console_operator_title">Root terminal and scripts</string>
     <string name="console_operator_root_warning">High risk: NanoKVM opens an unrestricted root shell on the appliance. Commands and scripts can damage the device, expose credentials, or interrupt KVM access. Nothing is sandboxed, replayed, or restored after backgrounding.</string>
     <string name="console_operator_terminal">Root terminal</string>
@@ -505,6 +515,7 @@
     <string name="console_operator_open_terminal">Open root terminal</string>
     <string name="console_operator_close_terminal">Close terminal</string>
     <string name="console_operator_terminal_input">Terminal input (sent once)</string>
+    <string name="console_operator_interrupt">Ctrl+C</string>
     <string name="console_operator_send_input">Send input</string>
     <string name="console_operator_resize_80x24">Resize 80 x 24</string>
     <string name="console_operator_resize_120x40">Resize 120 x 40</string>

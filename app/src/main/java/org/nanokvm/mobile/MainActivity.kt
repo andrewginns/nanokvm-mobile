@@ -74,8 +74,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         if (!isChangingConfigurations) {
-            appViewModel?.clearSensitiveWorkForBackground()
-            appViewModel?.setForeground(false)
+            appViewModel?.let { model ->
+                val abandonConnection = model.clearSensitiveWorkForBackground()
+                model.setForeground(false, abandonConnection)
+            }
         }
         super.onStop()
     }

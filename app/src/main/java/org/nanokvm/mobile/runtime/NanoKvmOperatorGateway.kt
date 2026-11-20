@@ -1,6 +1,9 @@
 package org.nanokvm.mobile.runtime
 
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -109,19 +112,8 @@ internal sealed interface NanoKvmOperatorTerminalState {
 }
 
 /** Ephemeral terminal output. The owner exposes it through a replay-free flow, never saved state. */
-internal class NanoKvmOperatorTerminalOutput internal constructor(bytes: ByteArray) {
-    private val retainedBytes = bytes.copyOf()
-
-    init {
-        require(retainedBytes.size <= 64 * 1024) { "Terminal output chunk exceeds the app limit" }
-    }
-
-    val size: Int
-        get() = retainedBytes.size
-
-    fun copyBytes(): ByteArray = retainedBytes.copyOf()
-
-    override fun toString(): String = "NanoKvmOperatorTerminalOutput(size=$size, data=<redacted>)"
+internal class NanoKvmOperatorTerminalOutput(val text: String) {
+    override fun toString(): String = "NanoKvmOperatorTerminalOutput(data=<redacted>)"
 }
 
 /**
@@ -511,7 +503,12 @@ internal class NanoKvmOperatorTerminalOwner internal constructor(
                         ),
                     )
                 } else {
-                    mutableOutput.tryEmit(NanoKvmOperatorTerminalOutput(event.copyBytes()))
+                    val text = connection.decodeOutput(event.copyBytes())
+                    synchronized(lock) {
+                        if (text.isNotEmpty() && isAcceptedEvent(connection, event.generation)) {
+                            mutableOutput.tryEmit(NanoKvmOperatorTerminalOutput(text))
+                        }
+                    }
                 }
             }
             is NanoKvmTerminalEvent.ProtocolViolation -> terminateActive(
@@ -609,6 +606,35 @@ internal class NanoKvmOperatorTerminalOwner internal constructor(
         var protocolGeneration: Long? = null
         var serialActive = false
         var serialExitRequested = false
+        private val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPLACE)
+            .onUnmappableCharacter(CodingErrorAction.REPLACE)
+        private val trailingBytes = ByteArray(3)
+        private var trailingCount = 0
+
+        fun decodeOutput(bytes: ByteArray): String {
+            val input = if (trailingCount == 0) {
+                ByteBuffer.wrap(bytes)
+            } else {
+                ByteBuffer.allocate(trailingCount + bytes.size).apply {
+                    put(trailingBytes, 0, trailingCount)
+                    put(bytes)
+                    flip()
+                }
+            }
+            val output = CharBuffer.allocate(input.remaining())
+            return try {
+                decoder.decode(input, output, false)
+                trailingCount = input.remaining()
+                trailingBytes.fill(0)
+                input.get(trailingBytes, 0, trailingCount)
+                output.flip()
+                output.toString()
+            } finally {
+                input.array().fill(0)
+                bytes.fill(0)
+            }
+        }
     }
 
     private companion object {

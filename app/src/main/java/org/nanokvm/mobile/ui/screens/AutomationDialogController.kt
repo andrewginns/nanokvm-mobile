@@ -86,6 +86,7 @@ internal data class AutomationDialogUiState(
     val recordedKeys: List<NanoKvmRecordedHidKey> = emptyList(),
     val autostartName: String = "",
     val autostartText: String = "",
+    val autostartDirty: Boolean = false,
     val editingScript: NanoKvmAutomationAutostartScript? = null,
     val loading: Boolean = true,
     val operationInProgress: Boolean = false,
@@ -213,13 +214,17 @@ internal class AutomationDialogController(
 
     fun updateAutostartName(value: String) {
         updateState { current ->
-            if (current.editingScript != null) current else current.copy(autostartName = value.take(255))
+            val name = value.take(255)
+            if (current.editingScript != null || current.autostartName == name) current
+            else current.copy(autostartName = name, autostartDirty = true)
         }
     }
 
     fun updateAutostartText(value: String) {
         if (!isSafeAutostartEditorText(value)) return
-        updateState { it.copy(autostartText = value) }
+        updateState {
+            if (it.autostartText == value) it else it.copy(autostartText = value, autostartDirty = true)
+        }
     }
 
     /** Takes ownership of [bytes] and guarantees that the caller's array is cleared. */
@@ -240,7 +245,7 @@ internal class AutomationDialogController(
         } finally {
             imported.close()
         }
-        return updateState { it.copy(autostartText = text) }
+        return updateState { it.copy(autostartText = text, autostartDirty = true) }
     }
 
     fun reportImportUnavailable() {
@@ -264,6 +269,7 @@ internal class AutomationDialogController(
                     it.copy(
                         autostartText = text,
                         autostartName = script.displayName,
+                        autostartDirty = false,
                         editingScript = script,
                     )
                 }
@@ -275,7 +281,7 @@ internal class AutomationDialogController(
 
     fun cancelAutostartEdit() {
         updateState {
-            it.copy(autostartName = "", autostartText = "", editingScript = null)
+            it.copy(autostartName = "", autostartText = "", autostartDirty = false, editingScript = null)
         }
     }
 
@@ -293,10 +299,7 @@ internal class AutomationDialogController(
         } ?: gateway.reviewAutostartCreate(catalog, snapshot.autostartName, editor)
         when (review) {
             is NanoKvmAutomationReviewResult.Ready -> {
-                val accepted = setPending(
-                    PendingAutomationAction.AutostartWrite(review.approval),
-                    clearEditor = true,
-                )
+                val accepted = setPending(PendingAutomationAction.AutostartWrite(review.approval))
                 if (!accepted) gateway.discardAutostartWrite(review.approval)
             }
             is NanoKvmAutomationReviewResult.Rejected -> {
@@ -345,7 +348,21 @@ internal class AutomationDialogController(
                         is PendingAutomationAction.AutostartDelete ->
                             gateway.executeAutostartDelete(action.approval)
                     }
-                    updateState { it.copy(pendingAction = null) }
+                    updateState {
+                        if (action is PendingAutomationAction.AutostartWrite &&
+                            result !is NanoKvmAutomationCommandResult.Rejected
+                        ) {
+                            it.copy(
+                                pendingAction = null,
+                                autostartName = "",
+                                autostartText = "",
+                                autostartDirty = false,
+                                editingScript = null,
+                            )
+                        } else {
+                            it.copy(pendingAction = null)
+                        }
+                    }
                     publishMutation(result)
                     when (action) {
                         is PendingAutomationAction.HidAction,
@@ -388,6 +405,7 @@ internal class AutomationDialogController(
                 recordedKeys = emptyList(),
                 autostartName = "",
                 autostartText = "",
+                autostartDirty = false,
                 editingScript = null,
                 pendingAction = null,
                 loading = false,
@@ -505,18 +523,10 @@ internal class AutomationDialogController(
         updateState { it.copy(notice = AutomationNotice.ACTION_REJECTED) }
     }
 
-    private fun setPending(
-        action: PendingAutomationAction,
-        clearEditor: Boolean = false,
-    ): Boolean = synchronized(lifecycleLock) {
+    private fun setPending(action: PendingAutomationAction): Boolean = synchronized(lifecycleLock) {
         val current = mutableState.value
         if (closed.get() || !current.controlsEnabled) return@synchronized false
-        mutableState.value = current.copy(
-            pendingAction = action,
-            autostartName = if (clearEditor) "" else current.autostartName,
-            autostartText = if (clearEditor) "" else current.autostartText,
-            editingScript = if (clearEditor) null else current.editingScript,
-        )
+        mutableState.value = current.copy(pendingAction = action)
         true
     }
 

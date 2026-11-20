@@ -62,7 +62,7 @@ class PicoClawDialogTest {
                 "Action: literal appliance text",
             ),
         )
-        val messages = values.map(::PicoClawMessageUiState)
+        val messages = values.map { PicoClawMessageUiState(it) }
 
         assertSame(values[0], messages[0].content)
         assertSame(values[1], messages[1].content)

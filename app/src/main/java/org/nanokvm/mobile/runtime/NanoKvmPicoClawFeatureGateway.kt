@@ -431,6 +431,7 @@ internal sealed interface NanoKvmPicoClawChatEvent {
 
     class AssistantMessage internal constructor(
         val kind: NanoKvmPicoClawAssistantUpdateKind,
+        val id: String,
         val text: String,
     ) : NanoKvmPicoClawChatEvent {
         override fun toString(): String =
@@ -858,6 +859,7 @@ internal class NanoKvmPicoClawChatOwner internal constructor(
                         NanoKvmPicoClawAssistantMessageKind.UPDATED ->
                             NanoKvmPicoClawAssistantUpdateKind.UPDATED
                     },
+                    id = id,
                     text = text.takeUtf8(MAX_UI_CHAT_EVENT_TEXT_BYTES),
                 )
             is NanoKvmPicoClawInboundMessage.Observation -> {

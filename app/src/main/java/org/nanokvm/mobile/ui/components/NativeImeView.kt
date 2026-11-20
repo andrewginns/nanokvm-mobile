@@ -168,6 +168,7 @@ internal class NativeImeView(context: Context) : EditText(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.isSystem) return super.onKeyDown(keyCode, event)
         if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
         val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) {
@@ -181,6 +182,7 @@ internal class NativeImeView(context: Context) : EditText(context) {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (event.isSystem) return super.onKeyUp(keyCode, event)
         if (localEscape.onKeyEvent(event, interceptLocalEscape, onLocalEscape)) return true
         val key = remoteKeyForAndroidKeyCode(keyCode) ?: return super.onKeyUp(keyCode, event)
         onRemoteKey(key, false)

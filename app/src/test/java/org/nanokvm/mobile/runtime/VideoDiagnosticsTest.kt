@@ -32,6 +32,10 @@ class VideoDiagnosticsTest {
         val updated = initial.recordDroppedFrames(3)
 
         assertEquals(7L, updated.droppedFrames)
+        assertEquals(3L, updated.droppedBeforeFirstFrame)
+        val afterFirstFrame = updated.copy(videoFirstFrameMillis = 25L).recordDroppedFrames(2)
+        assertEquals(9L, afterFirstFrame.droppedFrames)
+        assertEquals(3L, afterFirstFrame.droppedBeforeFirstFrame)
         assertEquals(
             ConsoleMessage.VideoSettingsApplied,
             updated.lastActionFeedback?.content,

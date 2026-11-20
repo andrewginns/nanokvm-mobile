@@ -213,12 +213,12 @@ internal sealed interface ExternalPointerCommand {
     data object ReleaseAll : ExternalPointerCommand
 }
 
-private data class RelativeMotionDelta(
+internal data class RelativeMotionDelta(
     val x: Int,
     val y: Int,
 )
 
-private class RelativeMotionAccumulator {
+internal class RelativeMotionAccumulator {
     private var remainderX = 0f
     private var remainderY = 0f
 

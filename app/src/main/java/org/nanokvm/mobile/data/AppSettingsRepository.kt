@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.withContext
+import org.nanokvm.mobile.runtime.KeyboardLayout
 
 const val DEFAULT_SCROLL_SENSITIVITY = 1f
 const val MIN_SCROLL_SENSITIVITY = 0.5f
@@ -43,6 +44,8 @@ data class AppSettings(
     val scrollSensitivity: Float = DEFAULT_SCROLL_SENSITIVITY,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val useDynamicColor: Boolean = true,
+    val keyboardLayout: KeyboardLayout = KeyboardLayout.Us,
+    val trackpadDefault: Boolean = false,
     /** Browser-equivalent local preference; NanoKVM 2.4.3 exposes no state read endpoint. */
     val mjpegFrameDetectionEnabled: Boolean = false,
 )
@@ -52,6 +55,8 @@ interface AppSettingsStore {
     suspend fun setScrollSensitivity(sensitivity: Float)
     suspend fun setThemeMode(themeMode: ThemeMode)
     suspend fun setUseDynamicColor(enabled: Boolean)
+    suspend fun setKeyboardLayout(layout: KeyboardLayout)
+    suspend fun setTrackpadDefault(enabled: Boolean)
     suspend fun setMjpegFrameDetectionEnabled(enabled: Boolean)
 }
 
@@ -67,6 +72,8 @@ class AppSettingsRepository(
     private val scrollSensitivityKey = floatPreferencesKey("scroll_sensitivity")
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val useDynamicColorKey = booleanPreferencesKey("use_dynamic_color")
+    private val keyboardLayoutKey = stringPreferencesKey("keyboard_layout")
+    private val trackpadDefaultKey = booleanPreferencesKey("trackpad_default")
     private val mjpegFrameDetectionKey = booleanPreferencesKey("mjpeg_frame_detection")
 
     override val settings: Flow<AppSettings> = context.appSettingsDataStore.data
@@ -76,6 +83,10 @@ class AppSettingsRepository(
                 scrollSensitivity = normalizeScrollSensitivity(preferences[scrollSensitivityKey]),
                 themeMode = ThemeMode.fromPersistedValue(preferences[themeModeKey]),
                 useDynamicColor = preferences[useDynamicColorKey] ?: true,
+                keyboardLayout = KeyboardLayout.entries.firstOrNull {
+                    it.name == preferences[keyboardLayoutKey]
+                } ?: KeyboardLayout.Us,
+                trackpadDefault = preferences[trackpadDefaultKey] ?: false,
                 mjpegFrameDetectionEnabled = preferences[mjpegFrameDetectionKey] ?: false,
             )
         }
@@ -99,6 +110,16 @@ class AppSettingsRepository(
         context.appSettingsDataStore.edit { preferences ->
             preferences[useDynamicColorKey] = enabled
         }
+        Unit
+    }
+
+    override suspend fun setKeyboardLayout(layout: KeyboardLayout) = withContext(ioDispatcher) {
+        context.appSettingsDataStore.edit { it[keyboardLayoutKey] = layout.name }
+        Unit
+    }
+
+    override suspend fun setTrackpadDefault(enabled: Boolean) = withContext(ioDispatcher) {
+        context.appSettingsDataStore.edit { it[trackpadDefaultKey] = enabled }
         Unit
     }
 

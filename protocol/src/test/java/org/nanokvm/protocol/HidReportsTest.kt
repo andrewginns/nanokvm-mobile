@@ -59,6 +59,14 @@ class HidReportsTest {
         assertEquals(HidUsage.NON_US_HASH, ukHash?.usage)
         assertTrue(HidModifier.LEFT_SHIFT in requireNotNull(ukAt).modifiers)
         assertFalse(HidModifier.LEFT_SHIFT in requireNotNull(ukHash).modifiers)
+        assertEquals(
+            HidKeystroke(HidUsage.DIGIT_3, setOf(HidModifier.LEFT_SHIFT)),
+            HidCharacterMapper.map('£', KeyboardLayout.UK),
+        )
+        assertEquals(
+            HidKeystroke(HidUsage.GRAVE, setOf(HidModifier.LEFT_SHIFT)),
+            HidCharacterMapper.map('¬', KeyboardLayout.UK),
+        )
     }
 
     @Test

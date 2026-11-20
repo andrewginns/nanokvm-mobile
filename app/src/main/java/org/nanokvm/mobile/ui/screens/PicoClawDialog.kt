@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -141,7 +142,9 @@ internal fun PicoClawDialog(
                         onEnter = { controls.enterPicoClaw(destination) },
                     )
                     else -> {
-                        PicoClawManualInputWarning(state)
+                        PicoClawManualInputWarning(state) {
+                            controls.closeAndReleasePicoClaw(destination)
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -208,7 +211,6 @@ internal fun PicoClawDialog(
                                     controls.sendPicoClawChatMessage(destination, content)
                                 },
                                 onCancel = { controls.cancelPicoClawChat(destination) },
-                                onRelease = { controls.closeAndReleasePicoClaw(destination) },
                             )
                         }
                     }
@@ -316,7 +318,7 @@ private fun PicoClawConsent(enabled: Boolean, onEnter: () -> Unit) {
 }
 
 @Composable
-private fun PicoClawManualInputWarning(state: PicoClawUiState) {
+private fun PicoClawManualInputWarning(state: PicoClawUiState, onRelease: () -> Unit) {
     if (!state.manualInputBlockedOrUncertain) return
     Card(
         modifier = Modifier
@@ -335,6 +337,13 @@ private fun PicoClawManualInputWarning(state: PicoClawUiState) {
                     },
                 ),
             )
+            Button(
+                onClick = onRelease,
+                enabled = !state.operationInProgress,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.picoclaw_release))
+            }
         }
     }
 }
@@ -365,6 +374,17 @@ private fun PicoClawRuntimeSection(
             stringResource(picoClawRuntimePhaseLabelResource(state.runtimePhase)),
         ),
     )
+    if (state.installing) {
+        val progress = state.installProgress
+        if (progress == null) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0, 100) / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = onRefresh, enabled = enabled) { Text(stringResource(R.string.picoclaw_refresh)) }
         OutlinedButton(onClick = onInstall, enabled = enabled && !state.installed) { Text(stringResource(R.string.picoclaw_install)) }
@@ -439,13 +459,15 @@ private fun PicoClawChatSection(
     onOpen: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
-    onRelease: () -> Unit,
 ) {
     val open = state.chatPhase == PicoClawChatUiPhase.Open
-    if (!open && !state.manualInputBlockedOrUncertain) {
+    if (state.chatPhase == PicoClawChatUiPhase.Inactive && !state.manualInputBlockedOrUncertain) {
         Button(onClick = onOpen, enabled = !state.operationInProgress, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.picoclaw_open_chat))
         }
+    }
+    if (state.chatPhase == PicoClawChatUiPhase.Closed || state.chatPhase == PicoClawChatUiPhase.Failed) {
+        Text(stringResource(R.string.picoclaw_open_again))
     }
     PicoClawMessages(state.chatMessages)
     OutlinedTextField(
@@ -459,11 +481,6 @@ private fun PicoClawChatSection(
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = onSend, enabled = open && message.isNotBlank()) { Text(stringResource(R.string.picoclaw_send)) }
         OutlinedButton(onClick = onCancel, enabled = open) { Text(stringResource(R.string.picoclaw_cancel_run)) }
-    }
-    if (state.manualInputBlockedOrUncertain) {
-        Button(onClick = onRelease, enabled = !state.operationInProgress, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.picoclaw_release))
-        }
     }
 }
 

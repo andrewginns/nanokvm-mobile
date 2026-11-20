@@ -64,6 +64,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -97,6 +98,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -151,13 +153,14 @@ import org.nanokvm.mobile.runtime.isSessionUsable
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
+import org.nanokvm.mobile.runtime.Phase3Surface
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateGateway
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdatePhase
-import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateSource
 import org.nanokvm.mobile.runtime.NanoKvmOfflineUpdateUiState
-import org.nanokvm.mobile.platform.NanoKvmOfflineUpdateDocumentSelectionResult
 import org.nanokvm.mobile.platform.NanoKvmOfflineUpdateDocumentSource
 import org.nanokvm.mobile.runtime.RemoteInputSink
+import org.nanokvm.mobile.runtime.RemoteKey
+import org.nanokvm.mobile.ui.components.remoteKeyForAndroidKeyCode
 import org.nanokvm.mobile.runtime.RemotePastePhase
 import org.nanokvm.mobile.runtime.VideoSurfaceSink
 import org.nanokvm.mobile.runtime.PowerAction
@@ -177,6 +180,7 @@ import org.nanokvm.mobile.ui.input.KeyboardContextBoundary
 import org.nanokvm.mobile.ui.input.PointerCaptureController
 import org.nanokvm.mobile.ui.input.PointerCaptureReleaseReason
 import org.nanokvm.mobile.ui.input.PointerCaptureState
+import org.nanokvm.mobile.ui.components.PoliteStatus
 import org.nanokvm.mobile.ui.theme.ConsoleMaterialTheme
 import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
 import org.nanokvm.protocol.NanoKvmCapability
@@ -274,6 +278,11 @@ internal fun ConsoleScreen(
     pendingSharedPaste: ClipboardPayload? = null,
     onSharedPasteConsumed: (ClipboardPayload) -> Unit,
     sensitiveWorkGeneration: Long = 0,
+    readSensitiveWorkGeneration: (() -> Long)? = null,
+    defaultKeyboardLayout: KeyboardLayout = KeyboardLayout.Us,
+    onKeyboardDefaultChange: (KeyboardLayout) -> Unit = {},
+    defaultTrackpad: Boolean = false,
+    onTrackpadDefaultChange: (Boolean) -> Unit = {},
     scrollSensitivity: Float = DEFAULT_SCROLL_SENSITIVITY,
     onScrollSensitivityChange: (Float) -> Unit,
     mjpegFrameDetectionEnabled: Boolean = false,
@@ -286,7 +295,7 @@ internal fun ConsoleScreen(
         password: CharArray,
         saveProtectedCredential: Boolean,
     ) -> Unit,
-) {
+) = ConsoleMaterialTheme {
     val drafts = sessionDraftOwner
     val keyboardContextBoundary = remember { KeyboardContextBoundary() }
     val contextualInput = remember(input, keyboardContextBoundary) {
@@ -318,12 +327,12 @@ internal fun ConsoleScreen(
     val automationOwner = features.automation
     val offlineUpdateOwner = features.offlineUpdate
     var pointerMode by rememberSaveable(stateSaver = pointerModeSaver) {
-        mutableStateOf(PointerMode.Direct)
+        mutableStateOf(if (defaultTrackpad) PointerMode.Trackpad else PointerMode.Direct)
     }
     val pointerCaptureController = remember { PointerCaptureController() }
     val pointerCaptureState = pointerCaptureController.state
     var keyboardVisible by rememberSaveable { mutableStateOf(false) }
-    var keyboardLayout by rememberSaveable { mutableStateOf(KeyboardLayout.Us) }
+    var keyboardLayout by rememberSaveable { mutableStateOf(defaultKeyboardLayout) }
     var viewNavigationVisible by rememberSaveable { mutableStateOf(true) }
     var controlsExpanded by rememberSaveable { mutableStateOf(false) }
     var fitRequest by rememberSaveable(
@@ -336,60 +345,45 @@ internal fun ConsoleScreen(
     var overlay by rememberSaveable(stateSaver = consoleOverlaySaver) {
         mutableStateOf<ConsoleOverlay>(ConsoleOverlay.None)
     }
-    val offlineDocumentHandoff = remember { OfflineUpdateDocumentHandoff() }
-    var offlineDocumentSequence by remember { mutableLongStateOf(0L) }
-    var offlineDocumentPending by remember { mutableStateOf(false) }
-    var offlinePickerTarget by remember { mutableStateOf<OfflineUpdatePickerTarget?>(null) }
-    var offlineResultSensitiveGeneration by remember { mutableLongStateOf(-1L) }
+    val offlineDocumentHandoff = drafts.offlineDocumentHandoff
+    val pendingDocument = offlineDocumentHandoff.pending
     val currentSensitiveWorkGeneration by rememberUpdatedState(sensitiveWorkGeneration)
-    val currentOfflinePickerTarget by rememberUpdatedState(
-        OfflineUpdatePickerTarget(profile.id, profile.authority),
-    )
+    fun liveSensitiveGeneration(): Long =
+        readSensitiveWorkGeneration?.invoke() ?: currentSensitiveWorkGeneration
     val context = LocalContext.current
-    val offlineDocumentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        val target = offlinePickerTarget
-        offlinePickerTarget = null
-        if (uri == null || target != currentOfflinePickerTarget) {
-            offlineDocumentHandoff.clear()
-            offlineDocumentPending = false
-            if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
-            return@rememberLauncherForActivityResult
-        }
-        val selection = NanoKvmOfflineUpdateDocumentSource.select(
-            contentResolver = context.contentResolver,
-            uri = uri,
-        )
-        offlineDocumentHandoff.replace(selection)
-        offlineDocumentPending = true
-        offlineResultSensitiveGeneration = currentSensitiveWorkGeneration
-        offlineDocumentSequence++
-        offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(true)
-        overlay = if (offlineUpdateOwner != null) {
-            ConsoleOverlay.OfflineUpdate
-        } else {
-            ConsoleOverlay.None
-        }
-        if (offlineUpdateOwner == null) {
-            offlineDocumentHandoff.clear()
-            offlineDocumentPending = false
+    val offlineDocumentLauncher = key(profile.id, profile.authority) {
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val intent = drafts.takeOfflinePickerIntent() ?: return@rememberLauncherForActivityResult
+            val resultGeneration = liveSensitiveGeneration()
+            if (intent.profileId != profile.id || intent.authority != profile.authority ||
+                resultGeneration - intent.sensitiveWorkGeneration !in 0L..1L ||
+                offlineUpdateOwner == null
+            ) {
+                return@rememberLauncherForActivityResult
+            }
+            offlineDocumentHandoff.stage(
+                intent,
+                resultGeneration,
+                uri?.let { NanoKvmOfflineUpdateDocumentSource.select(context.contentResolver, it) },
+            )
+            offlineUpdateOwner.setOfflineUpdateSurfaceVisible(true)
+            overlay = ConsoleOverlay.OfflineUpdate
         }
     }
     val closeOfflineUpdate = {
-        offlinePickerTarget = null
+        drafts.takeOfflinePickerIntent()
         offlineDocumentHandoff.clear()
-        offlineDocumentPending = false
         if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
         offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(false)
         Unit
     }
-    val chooseOfflineUpdateDocument = {
-        offlinePickerTarget = currentOfflinePickerTarget
+    val chooseOfflineUpdateDocument = choose@{
+        if (drafts.offlinePickerIntent != null) return@choose Unit
+        drafts.offlinePickerIntent = OfflineUpdatePickerIntent(profile.id, profile.authority, liveSensitiveGeneration())
         try {
             offlineDocumentLauncher.launch(OFFLINE_UPDATE_MIME_TYPES)
         } catch (_: RuntimeException) {
-            offlinePickerTarget = null
+            drafts.takeOfflinePickerIntent()
             offlineUpdateOwner?.currentOfflineUpdateGateway()?.rejectDocumentSelection()
         }
         Unit
@@ -460,17 +454,20 @@ internal fun ConsoleScreen(
         authority = profile.authority,
         sessionGeneration = session.sessionGeneration,
     )
-    val phase3SurfaceVisible = overlay == ConsoleOverlay.VirtualMedia ||
-        overlay == ConsoleOverlay.WakeOnLan
+    val phase3Surface = when (overlay) {
+        ConsoleOverlay.VirtualMedia -> Phase3Surface.VirtualMedia
+        ConsoleOverlay.WakeOnLan -> Phase3Surface.WakeOnLan
+        else -> null
+    }
     val administrationSurfaceVisible = overlay == ConsoleOverlay.Administration
     val offlineUpdateSurfaceVisible = overlay == ConsoleOverlay.OfflineUpdate
     val operatorSurfaceVisible = overlay == ConsoleOverlay.OperatorTools
     val automationSurfaceVisible = overlay == ConsoleOverlay.Automation
     val picoClawSurfaceVisible = overlay == ConsoleOverlay.PicoClaw
-    DisposableEffect(phase3SurfaceVisible, phase3Controls) {
-        if (phase3SurfaceVisible) phase3Controls?.setPhase3SurfaceVisible(true)
+    DisposableEffect(phase3Surface, phase3Controls) {
+        if (phase3Surface != null) phase3Controls?.setPhase3Surface(phase3Surface)
         onDispose {
-            if (phase3SurfaceVisible) phase3Controls?.setPhase3SurfaceVisible(false)
+            if (phase3Surface != null) phase3Controls?.setPhase3Surface(null)
         }
     }
     DisposableEffect(administrationSurfaceVisible, administrationControls) {
@@ -486,9 +483,6 @@ internal fun ConsoleScreen(
         onDispose {
             offlineUpdateOwner?.setOfflineUpdateSurfaceVisible(false)
         }
-    }
-    DisposableEffect(offlineDocumentHandoff) {
-        onDispose { offlineDocumentHandoff.close() }
     }
     DisposableEffect(operatorSurfaceVisible, operatorControls) {
         if (operatorSurfaceVisible) operatorControls?.setOperatorSurfaceVisible(true)
@@ -532,7 +526,7 @@ internal fun ConsoleScreen(
             if (pointerMode == PointerMode.Captured) pointerMode = PointerMode.Trackpad
             if (
                 session.connection == ConnectionState.Failed ||
-                (!offlineDocumentPending && offlinePickerTarget == null)
+                (offlineDocumentHandoff.pending == null && drafts.offlinePickerIntent == null)
             ) {
                 closeOfflineUpdate()
             }
@@ -545,18 +539,28 @@ internal fun ConsoleScreen(
         null
     }
     LaunchedEffect(
+        profile.id,
+        profile.authority,
         offlineUpdateSurfaceVisible,
         session.connection,
         session.sessionGeneration,
-        offlineDocumentSequence,
+        pendingDocument,
+        sensitiveWorkGeneration,
         offlineUpdateGateway,
     ) {
-        if (
-            offlineUpdateSurfaceVisible && offlineDocumentPending &&
-            session.connection.isSessionUsable && offlineUpdateGateway != null
+        val document = pendingDocument ?: return@LaunchedEffect
+        if (!document.matches(profile.id, profile.authority, liveSensitiveGeneration())) {
+            offlineDocumentHandoff.clear()
+        } else if (session.connection.isSessionUsable && offlineUpdateOwner != null &&
+            sensitiveWorkGeneration == liveSensitiveGeneration()
         ) {
-            if (offlineDocumentHandoff.deliverTo(offlineUpdateGateway)) {
-                offlineDocumentPending = false
+            if (!offlineUpdateSurfaceVisible) {
+                overlay = ConsoleOverlay.OfflineUpdate
+            } else {
+                offlineUpdateOwner.setOfflineUpdateSurfaceVisible(true)
+                offlineUpdateOwner.currentOfflineUpdateGateway()?.let { gateway ->
+                    offlineDocumentHandoff.deliverTo(document, gateway)
+                }
             }
         }
     }
@@ -603,10 +607,10 @@ internal fun ConsoleScreen(
             pasteError = null
             revealSensitivePaste = false
             pendingPhase3Action = null
-            if (offlineResultSensitiveGeneration != sensitiveWorkGeneration) {
-                offlineDocumentHandoff.clear()
-                offlineDocumentPending = false
-                if (overlay == ConsoleOverlay.OfflineUpdate) overlay = ConsoleOverlay.None
+            if (offlineDocumentHandoff.pending == null && drafts.offlinePickerIntent == null &&
+                overlay == ConsoleOverlay.OfflineUpdate
+            ) {
+                overlay = ConsoleOverlay.None
             }
             overlay = overlay.dismissSessionBoundOverlay()
             observedSensitiveWorkGeneration = sensitiveWorkGeneration
@@ -621,15 +625,21 @@ internal fun ConsoleScreen(
             pointerMode = PointerMode.Trackpad
         }
     }
-    LaunchedEffect(immersiveMode, keyboardVisible, pointerCaptureState) {
-        if (
-            immersiveMode &&
-            !keyboardVisible &&
-            pointerCaptureState != PointerCaptureState.Active &&
-            pointerCaptureState != PointerCaptureState.Requesting
-        ) {
-            consoleFocusRequester.requestFocus()
-        }
+    val hardwareKeyboardEnabled = session.connection.isSessionUsable && !keyboardVisible &&
+        !controlsExpanded && overlay == ConsoleOverlay.None && pasteRequest == null &&
+        pendingPowerAction == null && !disconnectConfirmationVisible &&
+        pointerMode != PointerMode.Captured && pointerCaptureState == PointerCaptureState.Idle
+    var consoleOwnsFocus by remember { mutableStateOf(false) }
+    val heldHardwareKeys = remember(contextualInput) { mutableSetOf<RemoteKey>() }
+    fun releaseHardwareKeys() {
+        heldHardwareKeys.forEach { contextualInput.key(it, false) }
+        heldHardwareKeys.clear()
+    }
+    DisposableEffect(hardwareKeyboardEnabled, contextualInput, session.inputReleaseGeneration) {
+        onDispose { releaseHardwareKeys() }
+    }
+    LaunchedEffect(hardwareKeyboardEnabled, immersiveMode) {
+        if (hardwareKeyboardEnabled) consoleFocusRequester.requestFocus()
     }
     LaunchedEffect(
         pendingSharedPaste,
@@ -665,6 +675,7 @@ internal fun ConsoleScreen(
             contextualInput.moveRelative(0, 0)
         }
         pointerMode = selected
+        if (selected != PointerMode.Captured) onTrackpadDefaultChange(selected == PointerMode.Trackpad)
         if (selected == PointerMode.Captured) {
             controlsExpanded = false
             keyboardVisible = false
@@ -730,37 +741,62 @@ internal fun ConsoleScreen(
         }
     }
 
-    ConsoleMaterialTheme {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .onPreviewKeyEvent { event ->
-                    val handled = immersiveEscape.onKeyEvent(
-                        event = event.nativeKeyEvent,
-                        enabled = immersiveMode,
-                        onEscape = { immersiveMode = false },
-                    )
-                    if (
-                        handled &&
-                        event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE
-                    ) {
-                        immersiveEscapeInProgress = when (event.nativeKeyEvent.action) {
-                            android.view.KeyEvent.ACTION_DOWN -> true
-                            android.view.KeyEvent.ACTION_UP -> false
-                            else -> immersiveEscapeInProgress
-                        }
-                    }
-                    handled
-                }
-                .then(
-                    if ((immersiveMode || immersiveEscapeInProgress) && !keyboardVisible) {
-                        Modifier.focusRequester(consoleFocusRequester).focusable()
-                    } else {
-                        Modifier
-                    },
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                val handled = immersiveEscape.onKeyEvent(
+                    event = event.nativeKeyEvent,
+                    enabled = immersiveMode,
+                    onEscape = { immersiveMode = false },
                 )
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .imePadding(),
+                if (
+                    handled &&
+                    event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE
+                ) {
+                    immersiveEscapeInProgress = when (event.nativeKeyEvent.action) {
+                        android.view.KeyEvent.ACTION_DOWN -> true
+                        android.view.KeyEvent.ACTION_UP -> false
+                        else -> immersiveEscapeInProgress
+                    }
+                }
+                if (handled) return@onPreviewKeyEvent true
+                val nativeEvent = event.nativeKeyEvent
+                if (!hardwareKeyboardEnabled || !consoleOwnsFocus || nativeEvent.isSystem ||
+                    nativeEvent.flags and android.view.KeyEvent.FLAG_SOFT_KEYBOARD != 0
+                ) {
+                    return@onPreviewKeyEvent false
+                }
+                val key = remoteKeyForAndroidKeyCode(nativeEvent.keyCode)
+                    ?: return@onPreviewKeyEvent false
+                when (nativeEvent.action) {
+                    android.view.KeyEvent.ACTION_DOWN -> {
+                        if (nativeEvent.repeatCount == 0 && heldHardwareKeys.add(key)) {
+                            contextualInput.key(key, true)
+                        }
+                        true
+                    }
+                    android.view.KeyEvent.ACTION_UP -> {
+                        if (heldHardwareKeys.remove(key)) contextualInput.key(key, false)
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .then(
+                if ((hardwareKeyboardEnabled || immersiveEscapeInProgress) && !keyboardVisible) {
+                    Modifier.focusRequester(consoleFocusRequester)
+                        .onFocusChanged {
+                            consoleOwnsFocus = it.isFocused
+                            if (!it.isFocused) releaseHardwareKeys()
+                        }
+                        .focusable()
+                } else {
+                    Modifier
+                },
+            )
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .imePadding(),
         ) {
         val availableWidth = maxWidth
         val availableHeight = maxHeight
@@ -797,7 +833,10 @@ internal fun ConsoleScreen(
             immersiveMode = immersiveMode,
             onExitImmersive = { immersiveMode = false },
             onKeyboard = toggleKeyboard,
-            onKeyboardLayoutChange = { keyboardLayout = it },
+            onKeyboardLayoutChange = {
+                keyboardLayout = it
+                onKeyboardDefaultChange(it)
+            },
             onClipboard = {
                 if (session.pasteProgress != null) {
                     coreControls.cancelPaste()
@@ -870,6 +909,16 @@ internal fun ConsoleScreen(
                 onMore = {
                     controlsExpanded = false
                     overlay = ConsoleOverlay.MoreMenu
+                },
+                onReconnect = consoleContentState.onRetryConnection,
+                onImmersiveMode = {
+                    controlsExpanded = false
+                    immersiveMode = !immersiveMode
+                },
+                immersiveMode = immersiveMode,
+                onDisconnect = {
+                    controlsExpanded = false
+                    requestDisconnect()
                 },
                 modifier = controlsModifier,
             )
@@ -992,7 +1041,6 @@ internal fun ConsoleScreen(
                     )
                 }
             }
-        }
     }
 
     if (overlay == ConsoleOverlay.VideoSettings) {
@@ -1078,6 +1126,8 @@ internal fun ConsoleScreen(
                 overlay = ConsoleOverlay.Automation
             },
             picoClawAvailable = picoClawControls != null,
+            picoClawUnsupported =
+                session.capabilities?.get(NanoKvmCapability.PICOCLAW) is NanoKvmCapabilitySupport.Unsupported,
             onPicoClaw = {
                 if (picoClawControls != null) overlay = ConsoleOverlay.PicoClaw
             },
@@ -1368,53 +1418,11 @@ private fun OfflineUpdateGatewayDialog(
         onChoosePackage = onChoosePackage,
         onConfirm = gateway::confirmAndStart,
         onCancelUpload = gateway::cancelUpload,
-        onDismiss = onDismiss,
+        onDismiss = {
+            if (gateway.state.value.phase != NanoKvmOfflineUpdatePhase.UPLOADING) onDismiss()
+        },
     )
 }
-
-/** Owns at most one transient document opener and exposes no URI, path, grant, or filename. */
-private class OfflineUpdateDocumentHandoff : AutoCloseable {
-    private var pending: PendingOfflineUpdateDocument? = null
-
-    fun replace(result: NanoKvmOfflineUpdateDocumentSelectionResult) {
-        clear()
-        pending = when (result) {
-            is NanoKvmOfflineUpdateDocumentSelectionResult.Success ->
-                PendingOfflineUpdateDocument.Source(result.source)
-            is NanoKvmOfflineUpdateDocumentSelectionResult.Failure ->
-                PendingOfflineUpdateDocument.Invalid
-        }
-    }
-
-    fun deliverTo(gateway: NanoKvmOfflineUpdateGateway): Boolean {
-        val selection = pending ?: return false
-        pending = null
-        when (selection) {
-            is PendingOfflineUpdateDocument.Source -> gateway.select(selection.source)
-            PendingOfflineUpdateDocument.Invalid -> gateway.rejectDocumentSelection()
-        }
-        return true
-    }
-
-    fun clear() {
-        (pending as? PendingOfflineUpdateDocument.Source)?.source?.close()
-        pending = null
-    }
-
-    override fun close() = clear()
-
-    override fun toString(): String = "OfflineUpdateDocumentHandoff(pending=${pending != null})"
-}
-
-private sealed interface PendingOfflineUpdateDocument {
-    class Source(val source: NanoKvmOfflineUpdateSource) : PendingOfflineUpdateDocument
-    data object Invalid : PendingOfflineUpdateDocument
-}
-
-private data class OfflineUpdatePickerTarget(
-    val profileId: String,
-    val authority: String,
-)
 
 private data class PendingClipboardPaste(
     val confirmation: PasteConfirmationRequest,
@@ -1508,7 +1516,7 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
                 onKeyboard = state.onKeyboard,
                 onClipboard = state.onClipboard,
                 onOpenControls = state.onOpenControls,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp, end = 8.dp),
             )
         }
     }
@@ -1650,7 +1658,15 @@ private fun ConsoleBody(
                                         contentColor = consoleColors.onSurface,
                                     ),
                                 ) {
-                                    Text(stringResource(R.string.console_retry))
+                                    Text(
+                                        stringResource(
+                                            if (session.status == ConsoleMessage.AuthenticationExpired) {
+                                                R.string.console_sign_in_again
+                                            } else {
+                                                R.string.console_retry
+                                            },
+                                        ),
+                                    )
                                 }
                                 ConnectionState.Connecting,
                                 ConnectionState.Connected,
@@ -1671,29 +1687,74 @@ private fun ConsoleBody(
                     }
                 }
             }
-            if (session.connection == ConnectionState.Degraded) {
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(8.dp)
-                        .testTag("console-degraded-status")
-                        .semantics { liveRegion = LiveRegionMode.Polite },
-                    color = consoleColors.controlSurfaceElevated,
-                    contentColor = consoleColors.warning,
-                    shape = MaterialTheme.shapes.large,
-                    shadowElevation = 4.dp,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+            Column(
+                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val degraded = session.connection == ConnectionState.Degraded
+                if (degraded || session.status is ConsoleMessage.ConnectingVideo) {
+                    Surface(
+                        color = consoleColors.controlSurfaceElevated,
+                        contentColor = if (degraded) consoleColors.warning else consoleColors.onSurface,
+                        shape = MaterialTheme.shapes.large,
+                        shadowElevation = 4.dp,
                     ) {
-                        Text(
-                            session.status?.displayText() ?: connectionLabel(ConnectionState.Degraded),
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                        if (session.status is ConsoleMessage.VideoFailed) {
-                            TextButton(onClick = onRetryConnection) {
-                                Text(stringResource(R.string.console_reconnect_stream))
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            PoliteStatus(
+                                Modifier.testTag(
+                                    if (degraded) "console-degraded-status" else "console-video-starting",
+                                ),
+                            ) {
+                                Text(
+                                    session.status?.displayText()
+                                        ?: connectionLabel(ConnectionState.Degraded),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            }
+                            if (session.status is ConsoleMessage.VideoFailed) {
+                                TextButton(onClick = onRetryConnection) {
+                                    Text(stringResource(R.string.console_reconnect_stream))
+                                }
+                            }
+                        }
+                    }
+                }
+                session.lastActionFeedback?.let { feedback ->
+                    val feedbackGeneration = if (feedback.content is ConsoleMessage.AdministrationReconnectResult) {
+                        0L
+                    } else {
+                        session.sessionGeneration
+                    }
+                    var dismissed by remember(authority, feedbackGeneration, feedback) { mutableStateOf(false) }
+                    if (!dismissed) {
+                        key(authority, session.sessionGeneration, feedback.revision) {
+                            Surface(
+                                color = consoleColors.controlSurfaceElevated,
+                                contentColor = consoleColors.onSurface,
+                                shape = MaterialTheme.shapes.large,
+                                shadowElevation = 4.dp,
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    PoliteStatus(
+                                        Modifier.weight(1f, fill = false)
+                                            .testTag("console-action-feedback"),
+                                    ) {
+                                        Text(feedback.content.displayText())
+                                    }
+                                    IconButton(onClick = { dismissed = true }) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = stringResource(R.string.console_dismiss_feedback),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -2091,7 +2152,7 @@ private fun ClipboardPasteDialog(
                         isError = editTooLarge,
                         keyboardOptions = KeyboardOptions(
                             autoCorrectEnabled = false,
-                            keyboardType = KeyboardType.Password,
+                            keyboardType = if (payload.isSensitive) KeyboardType.Password else KeyboardType.Text,
                         ),
                         minLines = 3,
                         maxLines = 6,
@@ -2279,6 +2340,10 @@ private fun ConsoleControlContent(
     onVideo: () -> Unit,
     onPower: () -> Unit,
     onMore: () -> Unit,
+    onReconnect: () -> Unit,
+    onImmersiveMode: () -> Unit,
+    immersiveMode: Boolean,
+    onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -2294,12 +2359,25 @@ private fun ConsoleControlContent(
         )
         SideSessionStatus(profile, session)
         SheetAction(
-            Icons.Default.OpenWith,
+            Icons.Default.Refresh,
             stringResource(
-                R.string.console_scroll_sensitivity_value,
-                scrollSensitivity.formatZoom(),
+                if (session.status == ConsoleMessage.AuthenticationExpired) R.string.console_sign_in_again
+                else R.string.console_reconnect_stream,
             ),
-            onScrollSettings,
+            onReconnect,
+            enabled = session.connection != ConnectionState.Reconnecting,
+        )
+        SheetAction(
+            Icons.Default.FitScreen,
+            stringResource(
+                if (immersiveMode) R.string.console_exit_immersive else R.string.console_enter_immersive,
+            ),
+            onImmersiveMode,
+        )
+        SheetAction(
+            Icons.Default.LinkOff,
+            stringResource(R.string.console_disconnect),
+            onDisconnect,
         )
         SheetToggle(
             Icons.Default.Keyboard,
@@ -2374,6 +2452,14 @@ private fun ConsoleControlContent(
             Icons.Default.MoreVert,
             stringResource(R.string.console_more_actions),
             onMore,
+        )
+        SheetAction(
+            Icons.Default.OpenWith,
+            stringResource(
+                R.string.console_scroll_sensitivity_value,
+                scrollSensitivity.formatZoom(),
+            ),
+            onScrollSettings,
         )
     }
 }
@@ -2606,18 +2692,6 @@ private fun SideSessionStatus(profile: HostProfile, session: BackendSession) {
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-        session.lastActionFeedback?.let { feedback ->
-            key(feedback.revision) {
-                Text(
-                    feedback.content.displayText(),
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = consoleColors.onSurfaceMuted,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
     }
 }
@@ -2884,7 +2958,10 @@ private fun VideoSettingsDialog(
                 }
                 if (transport != VideoTransportPreference.H264) {
                     Text(
-                        stringResource(R.string.console_mjpeg_settings),
+                        stringResource(
+                            if (transport == VideoTransportPreference.MJPEG) R.string.console_mjpeg_settings
+                            else R.string.console_mjpeg_fallback_settings,
+                        ),
                         style = MaterialTheme.typography.titleSmall,
                     )
                     ChoiceRow(
@@ -3166,6 +3243,7 @@ private fun MoreActionsDialog(
     automationAvailable: Boolean,
     onAutomation: () -> Unit,
     picoClawAvailable: Boolean,
+    picoClawUnsupported: Boolean,
     onPicoClaw: () -> Unit,
     immersiveMode: Boolean,
     onImmersiveMode: () -> Unit,
@@ -3179,6 +3257,7 @@ private fun MoreActionsDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Text(stringResource(R.string.console_actions_session_group), style = MaterialTheme.typography.titleSmall)
                 OutlinedButton(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Refresh, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
@@ -3189,6 +3268,31 @@ private fun MoreActionsDialog(
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.console_reset_keyboard_mouse))
                 }
+                OutlinedButton(
+                    onClick = onImmersiveMode,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("immersive-mode-action"),
+                ) {
+                    Icon(Icons.Default.FitScreen, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(
+                            if (immersiveMode) {
+                                R.string.console_exit_immersive
+                            } else {
+                                R.string.console_enter_immersive
+                            },
+                        ),
+                    )
+                }
+                OutlinedButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.LinkOff, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.console_disconnect))
+                }
+                HorizontalDivider()
+                Text(stringResource(R.string.console_actions_device_group), style = MaterialTheme.typography.titleSmall)
                 OutlinedButton(
                     onClick = onDeviceInfo,
                     modifier = Modifier
@@ -3260,6 +3364,7 @@ private fun MoreActionsDialog(
                 if (picoClawAvailable) {
                     OutlinedButton(
                         onClick = onPicoClaw,
+                        enabled = !picoClawUnsupported,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("picoclaw-action"),
@@ -3268,30 +3373,14 @@ private fun MoreActionsDialog(
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(R.string.picoclaw_action))
                     }
+                    if (picoClawUnsupported) {
+                        Text(
+                            stringResource(R.string.picoclaw_unsupported_firmware),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
-                OutlinedButton(
-                    onClick = onImmersiveMode,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("immersive-mode-action"),
-                ) {
-                    Icon(Icons.Default.FitScreen, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(
-                            if (immersiveMode) {
-                                R.string.console_exit_immersive
-                            } else {
-                                R.string.console_enter_immersive
-                            },
-                        ),
-                    )
-                }
-                OutlinedButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.LinkOff, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_disconnect))
-                }
+
             }
         },
         confirmButton = {},

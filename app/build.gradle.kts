@@ -39,6 +39,10 @@ val compactDevelopmentApk = providers
     .gradleProperty("nanokvm.compactDevelopmentApk")
     .map(String::toBooleanStrict)
     .orElse(false)
+val experimentalArm64Apk = providers
+    .gradleProperty("nanokvm.experimentalArm64Apk")
+    .map(String::toBooleanStrict)
+    .orElse(false)
 val developmentStorePassword = providers
     .gradleProperty("nanokvm.developmentStorePassword")
     .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_STORE_PASSWORD"))
@@ -583,7 +587,7 @@ android {
         applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 27
+        versionCode = 28
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -613,6 +617,7 @@ android {
         }
         release {
             isMinifyEnabled = true
+            if (experimentalArm64Apk.get()) ndk.abiFilters.add("arm64-v8a")
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField(

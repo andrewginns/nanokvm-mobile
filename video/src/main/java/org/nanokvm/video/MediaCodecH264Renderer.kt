@@ -341,8 +341,12 @@ class MediaCodecH264Renderer(
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
             if (!isActive(run) || run.codec !== codec) return
-            val width = format.getInteger(MediaFormat.KEY_WIDTH)
-            val height = format.getInteger(MediaFormat.KEY_HEIGHT)
+            val width = format.visibleDimension(
+                MediaFormat.KEY_WIDTH, MediaFormat.KEY_CROP_LEFT, MediaFormat.KEY_CROP_RIGHT,
+            )
+            val height = format.visibleDimension(
+                MediaFormat.KEY_HEIGHT, MediaFormat.KEY_CROP_TOP, MediaFormat.KEY_CROP_BOTTOM,
+            )
             dispatchForRun(run) {
                 listener.onVideoSizeChanged(width, height)
                 listener.onStatusChanged(H264RendererStatus.Rendering(width, height))
@@ -354,6 +358,17 @@ class MediaCodecH264Renderer(
             run.inputs.clear()
             failRun(run, error, recoverable = error.isRecoverable)
         }
+    }
+
+    private fun MediaFormat.visibleDimension(sizeKey: String, startKey: String, endKey: String): Int {
+        val size = getInteger(sizeKey)
+        if (!containsKey(startKey) || !containsKey(endKey)) return size
+        val (start, end) = try {
+            getInteger(startKey) to getInteger(endKey)
+        } catch (_: ClassCastException) {
+            return size
+        }
+        return if (start >= 0 && end >= start && end < size) end - start + 1 else size
     }
 
     private class DecoderRun(

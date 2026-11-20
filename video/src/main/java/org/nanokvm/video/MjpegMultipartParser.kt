@@ -27,11 +27,12 @@ class MjpegMultipartParser(
      */
     @Throws(IOException::class)
     fun read(input: InputStream, onFrame: (ByteArray) -> Boolean) {
+        val lineBuffer = ByteArray(maxHeaderLineBytes)
         while (true) {
-            val marker = findNextDelimiter(input) ?: return
+            val marker = findNextDelimiter(input, lineBuffer) ?: return
             if (marker == closingDelimiter) return
 
-            val headers = readHeaders(input)
+            val headers = readHeaders(input, lineBuffer)
             val lengthText = headers["content-length"]
                 ?: throw IOException("MJPEG part is missing Content-Length")
             val length = lengthText.toIntOrNull()
@@ -46,18 +47,18 @@ class MjpegMultipartParser(
         }
     }
 
-    private fun findNextDelimiter(input: InputStream): String? {
+    private fun findNextDelimiter(input: InputStream, lineBuffer: ByteArray): String? {
         while (true) {
-            val line = readAsciiLine(input) ?: return null
+            val line = readAsciiLine(input, lineBuffer) ?: return null
             if (line == delimiter || line == closingDelimiter) return line
         }
     }
 
-    private fun readHeaders(input: InputStream): Map<String, String> {
+    private fun readHeaders(input: InputStream, lineBuffer: ByteArray): Map<String, String> {
         val result = LinkedHashMap<String, String>()
         var count = 0
         while (true) {
-            val line = readAsciiLine(input) ?: throw EOFException("EOF in MJPEG headers")
+            val line = readAsciiLine(input, lineBuffer) ?: throw EOFException("EOF in MJPEG headers")
             if (line.isEmpty()) return result
             if (++count > MAX_HEADER_COUNT) throw IOException("Too many MJPEG part headers")
             val colon = line.indexOf(':')
@@ -67,8 +68,7 @@ class MjpegMultipartParser(
         }
     }
 
-    private fun readAsciiLine(input: InputStream): String? {
-        val bytes = ByteArray(maxHeaderLineBytes)
+    private fun readAsciiLine(input: InputStream, bytes: ByteArray): String? {
         var size = 0
         while (true) {
             val value = input.read()

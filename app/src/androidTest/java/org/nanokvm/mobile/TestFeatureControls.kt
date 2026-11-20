@@ -30,7 +30,7 @@ import org.nanokvm.mobile.runtime.PicoClawUiState
 
 /** Focused androidTest stubs: production feature contracts intentionally provide no defaults. */
 internal open class NoOpPhase3Controls : Phase3Controls {
-    override fun setPhase3SurfaceVisible(visible: Boolean) = Unit
+    override fun setPhase3Surface(surface: org.nanokvm.mobile.runtime.Phase3Surface?) = Unit
     override fun refreshPhase3() = Unit
     override fun mountPhase3Image(
         destination: ApprovedPhase3Destination,
@@ -73,6 +73,7 @@ internal open class NoOpPhase3Controls : Phase3Controls {
 internal open class NoOpAdministrationControls : AdministrationControls {
     override fun setAdministrationSurfaceVisible(visible: Boolean) = Unit
     override fun refreshAdministration() = Unit
+    override fun refreshAdministrationUpdates() = Unit
     override fun setAdministrationPreviewUpdates(
         destination: ApprovedAdministrationDestination,
         enabled: Boolean,
@@ -171,7 +172,10 @@ internal open class NoOpOperatorControls : OperatorControls {
     override fun uploadOperatorScript(
         destination: ApprovedOperatorDestination,
         request: OperatorScriptUploadRequest,
-    ) = Unit
+    ): Boolean {
+        request.clear()
+        return false
+    }
     override fun runOperatorScript(
         destination: ApprovedOperatorDestination,
         scriptId: Long,

@@ -96,6 +96,7 @@ import org.nanokvm.mobile.ui.input.ExternalPointerRoutingMode
 import org.nanokvm.mobile.ui.input.PointerCaptureController
 import org.nanokvm.mobile.ui.input.PointerCaptureHost
 import org.nanokvm.mobile.ui.input.PointerCaptureReleaseReason
+import org.nanokvm.mobile.ui.input.RelativeMotionAccumulator
 import org.nanokvm.mobile.ui.input.dispatchTo
 import org.nanokvm.mobile.ui.input.routeExternalMouseInput
 import org.nanokvm.mobile.ui.theme.LocalConsoleColorScheme
@@ -530,35 +531,42 @@ fun RemoteViewport(
                             },
                         )
                     }
-                    .pointerInput(pointerMode, remoteWidth, remoteHeight) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                if (pointerMode == PointerMode.Direct && absoluteAt(offset)) {
-                                    input.mouseButton(MouseButton.Left, true)
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                when (pointerMode) {
-                                    PointerMode.Direct -> absoluteAt(
-                                        change.position,
-                                        setOf(MouseButton.Left),
-                                    )
-                                    PointerMode.Trackpad,
-                                    PointerMode.Captured,
-                                    -> input.moveRelative(
-                                        deltaX = dragAmount.x.roundToInt().coerceIn(-127, 127),
-                                        deltaY = dragAmount.y.roundToInt().coerceIn(-127, 127),
-                                    )
-                                }
-                            },
-                            onDragEnd = {
-                                if (pointerMode == PointerMode.Direct) {
-                                    input.mouseButton(MouseButton.Left, false)
-                                }
-                            },
-                            onDragCancel = { input.releaseAllInput() },
-                        )
+                    .pointerInput(pointerMode, remoteWidth, remoteHeight, input, videoSurfaceGeneration) {
+                        val motion = RelativeMotionAccumulator()
+                        var directDragActive = false
+                        fun finishDrag() {
+                            if (directDragActive) {
+                                directDragActive = false
+                                input.mouseButton(MouseButton.Left, false)
+                            }
+                            motion.reset()
+                        }
+                        try {
+                            detectDragGestures(
+                                orientationLock = null,
+                                onDragStart = { down, _, _ ->
+                                    directDragActive = pointerMode == PointerMode.Direct &&
+                                        absoluteAt(down.position)
+                                    if (directDragActive) input.mouseButton(MouseButton.Left, true)
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    when (pointerMode) {
+                                        PointerMode.Direct -> if (directDragActive) {
+                                            absoluteAt(change.position, setOf(MouseButton.Left))
+                                        }
+                                        PointerMode.Trackpad, PointerMode.Captured ->
+                                            motion.add(dragAmount.x, dragAmount.y).forEach { delta ->
+                                                input.moveRelative(delta.x, delta.y)
+                                            }
+                                    }
+                                },
+                                onDragEnd = { finishDrag() },
+                                onDragCancel = { finishDrag() },
+                            )
+                        } finally {
+                            finishDrag()
+                        }
                     },
             )
 
@@ -1147,6 +1155,8 @@ private class BackendTextureView(
     var videoSurface: VideoSurfaceSink = videoSurface
     private var outputSurface: Surface? = null
     private val contentTransform = Matrix()
+    private var transformedRect: FloatRect? = null
+    private var transformedViewport = IntSize.Zero
     private var remoteWidth = remoteWidth.coerceAtLeast(1)
     private var remoteHeight = remoteHeight.coerceAtLeast(1)
 
@@ -1184,6 +1194,9 @@ private class BackendTextureView(
 
     fun updateContentTransform(rect: FloatRect, viewport: IntSize) {
         if (viewport.width <= 0 || viewport.height <= 0) return
+        if (transformedRect == rect && transformedViewport == viewport) return
+        transformedRect = rect
+        transformedViewport = viewport
         contentTransform.reset()
         contentTransform.setRectToRect(
             RectF(0f, 0f, viewport.width.toFloat(), viewport.height.toFloat()),

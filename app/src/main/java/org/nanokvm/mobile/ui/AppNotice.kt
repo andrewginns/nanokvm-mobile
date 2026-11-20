@@ -22,6 +22,7 @@ sealed interface AppNotice {
 
 enum class SimpleNotice {
     ScrollSensitivitySaveFailed,
+    ConsoleDefaultSaveFailed,
     ThemePreferenceSaveFailed,
     DeviceColourPreferenceSaveFailed,
     MjpegFrameDetectionPreferenceSaveFailed,

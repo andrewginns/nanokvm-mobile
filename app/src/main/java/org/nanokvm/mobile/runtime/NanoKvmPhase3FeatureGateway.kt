@@ -4,6 +4,7 @@ import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.nanokvm.protocol.canonicalWakeOnLanName
 import org.nanokvm.protocol.ApiResponseException
 import org.nanokvm.protocol.AuthenticationExpiredException
 import org.nanokvm.protocol.HttpResponseException
@@ -474,22 +475,27 @@ internal class NanoKvmPhase3FeatureGateway internal constructor(
             it.macAddress == target.macAddress
         } ?: return@withLock rejected(NanoKvmPhase3Error.Kind.FOREIGN_OR_STALE_STATE)
         requireCurrentBinding()?.let { return@withLock rejected(it) }
+        val canonicalName = try {
+            canonicalWakeOnLanName(name)
+        } catch (_: IllegalArgumentException) {
+            return@withLock rejected(NanoKvmPhase3Error.Kind.INVALID_REQUEST)
+        }
 
         try {
-            port.renameWakeOnLanEntry(currentTarget.macAddress, name)
+            port.renameWakeOnLanEntry(currentTarget.macAddress, canonicalName)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
             if (isDefiniteRejection(error)) return@withLock NanoKvmPhase3MutationResult.Rejected(error.safeError())
             return@withLock reconcileWakeOnLanFailure(error) { refreshed ->
                 refreshed.targets.any {
-                    it.macAddress == currentTarget.macAddress && it.name == name.trim()
+                    it.macAddress == currentTarget.macAddress && it.name == canonicalName
                 }
             }
         }
         wakeOnLanResultAfterAcknowledgement { refreshed ->
             refreshed.targets.any {
-                it.macAddress == currentTarget.macAddress && it.name == name.trim()
+                it.macAddress == currentTarget.macAddress && it.name == canonicalName
             }
         }
     }

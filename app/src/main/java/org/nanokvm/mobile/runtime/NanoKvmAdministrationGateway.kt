@@ -303,14 +303,17 @@ internal class NanoKvmAdministrationGateway internal constructor(
     private val currentBinding: () -> NanoKvmSessionBinding?,
 ) {
     private val operationMutex = Mutex()
+    private val updateCheckMutex = Mutex()
 
     suspend fun refreshAccount():
         NanoKvmAdministrationReadResult<NanoKvmAdministrationAccountSnapshot> =
         operationMutex.withLock { refreshAccountLocked() }
 
+    // A slow external version lookup can continue after cancellation. It must not hold the
+    // mutation lock or overlap a subsequent dialog lookup.
     suspend fun refreshUpdates():
         NanoKvmAdministrationReadResult<NanoKvmAdministrationUpdateSnapshot> =
-        operationMutex.withLock { refreshUpdatesLocked() }
+        updateCheckMutex.withLock { readUpdates() }
 
     suspend fun refreshOled():
         NanoKvmAdministrationReadResult<NanoKvmAdministrationOledSnapshot> =
@@ -396,7 +399,7 @@ internal class NanoKvmAdministrationGateway internal constructor(
         operationMutex.withLock {
             setDesiredLocked(
                 impact = NanoKvmAdministrationImpact.ROUTINE,
-                readState = ::refreshUpdatesLocked,
+                readState = ::readUpdates,
                 isDesired = { it.previewUpdatesEnabled == enabled },
                 dispatch = { port.setPreviewUpdates(enabled) },
             )
@@ -405,7 +408,7 @@ internal class NanoKvmAdministrationGateway internal constructor(
     suspend fun startOnlineUpdate():
         NanoKvmAdministrationMutationResult<NanoKvmAdministrationUpdateSnapshot> =
         operationMutex.withLock {
-            val before = when (val read = refreshUpdatesLocked()) {
+            val before = when (val read = readUpdates()) {
                 is NanoKvmAdministrationReadResult.Success -> read.state
                 is NanoKvmAdministrationReadResult.Failure ->
                     return@withLock NanoKvmAdministrationMutationResult.Rejected(
@@ -742,7 +745,7 @@ internal class NanoKvmAdministrationGateway internal constructor(
             )
         }
 
-    private suspend fun refreshUpdatesLocked():
+    private suspend fun readUpdates():
         NanoKvmAdministrationReadResult<NanoKvmAdministrationUpdateSnapshot> =
         guardedRead {
             val versions = port.applicationVersions()
@@ -1101,7 +1104,7 @@ internal class NanoKvmAdministrationGateway internal constructor(
         error: Throwable,
         before: NanoKvmAdministrationUpdateSnapshot,
     ): NanoKvmAdministrationMutationResult<NanoKvmAdministrationUpdateSnapshot> =
-        when (val refreshed = refreshUpdatesLocked()) {
+        when (val refreshed = readUpdates()) {
             is NanoKvmAdministrationReadResult.Success -> {
                 val expected = before.latestVersion
                 val changed =

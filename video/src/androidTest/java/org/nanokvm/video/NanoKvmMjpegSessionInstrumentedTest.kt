@@ -54,7 +54,9 @@ class NanoKvmMjpegSessionInstrumentedTest {
             fixture.awaitCallbacks()
             assertTrue("The session must recycle a rejected bitmap", checkNotNull(fixture.bitmap.get()).isRecycled)
             assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.Streaming })
-            assertEquals(listOf(NanoKvmVideoTransport.MJPEG), fixture.stalls)
+            assertTrue(fixture.stalls.isEmpty())
+            assertEquals(1, fixture.startupTimeouts.get())
+            assertEquals(1, fixture.mjpegRequests.get())
             val error = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Error>().single()
             assertEquals(NanoKvmVideoFailureReason.FirstFrameTimeout, error.reason)
         }
@@ -127,7 +129,8 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.Error })
                 val fallback = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.FallingBack>().single()
                 assertEquals(NanoKvmVideoFailureReason.FirstFrameTimeout, fallback.reason)
-                assertEquals(listOf(NanoKvmVideoTransport.H264, NanoKvmVideoTransport.MJPEG), fixture.stalls)
+                assertEquals(listOf(NanoKvmVideoTransport.H264), fixture.stalls)
+                assertEquals(1, fixture.startupTimeouts.get())
             }
         } finally {
             surface.release()
@@ -146,8 +149,20 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 val error = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Error>().single()
                 assertEquals(NanoKvmVideoTransport.MJPEG, error.transport)
                 assertEquals(NanoKvmVideoFailureReason.FirstFrameTimeout, error.reason)
-                assertEquals(listOf(NanoKvmVideoTransport.MJPEG, NanoKvmVideoTransport.MJPEG), fixture.stalls)
+                assertTrue(fixture.stalls.isEmpty())
+                assertEquals(2, fixture.startupTimeouts.get())
             }
+        }
+    }
+
+    @Test
+    fun explicitMjpegRetriesOneSilentRequestWithoutReportingAPlaybackStall() {
+        MjpegFixture(silentMjpegRequests = 1) { true }.use { fixture ->
+            fixture.start(firstFrameTimeoutMillis = 1_000L)
+            assertTrue(fixture.streaming.await(5, TimeUnit.SECONDS))
+            assertEquals(2, fixture.mjpegRequests.get())
+            assertEquals(1, fixture.startupTimeouts.get())
+            assertTrue(fixture.stalls.isEmpty())
         }
     }
 
@@ -163,6 +178,7 @@ class NanoKvmMjpegSessionInstrumentedTest {
         val statuses = CopyOnWriteArrayList<NanoKvmVideoStatus>()
         val stalls = CopyOnWriteArrayList<NanoKvmVideoTransport>()
         val mjpegRequests = AtomicInteger()
+        val startupTimeouts = AtomicInteger()
         val streaming = CountDownLatch(1)
         val failed = CountDownLatch(1)
         val stopped = CountDownLatch(1)
@@ -185,6 +201,10 @@ class NanoKvmMjpegSessionInstrumentedTest {
                         NanoKvmVideoStatus.Stopped -> stopped.countDown()
                         else -> Unit
                     }
+                }
+
+                override fun onMjpegStartupTimedOut() {
+                    startupTimeouts.incrementAndGet()
                 }
 
                 override fun onVideoStalled(transport: NanoKvmVideoTransport) {

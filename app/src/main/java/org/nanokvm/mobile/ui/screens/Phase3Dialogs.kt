@@ -41,6 +41,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import org.nanokvm.protocol.NanoKvmMacAddress
+import org.nanokvm.protocol.NanoKvmRemoteImageUrl
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.runtime.ApprovedPhase3Destination
 import org.nanokvm.mobile.runtime.Phase3FeatureUiState
@@ -274,6 +276,9 @@ internal fun VirtualMediaDialog(
                 }
 
                 item(key = "remote-transfer") {
+                    val validSource = remember(sourceUrl) {
+                        runCatching { NanoKvmRemoteImageUrl.parse(sourceUrl) }.isSuccess
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         HorizontalDivider()
                         Text(
@@ -300,11 +305,12 @@ internal fun VirtualMediaDialog(
                             enabled = !busy && media.remoteTransferEnabled == true,
                             singleLine = true,
                             label = { Text(stringResource(R.string.console_image_url)) },
+                            isError = sourceUrl.isNotBlank() && !validSource,
                             supportingText = { Text(stringResource(R.string.console_image_url_hint)) },
                         )
                         Button(
                             onClick = { onStartTransfer(sourceUrl) },
-                            enabled = !busy && sourceUrl.isNotBlank() &&
+                            enabled = !busy && validSource &&
                                 media.remoteTransferEnabled == true,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -431,6 +437,7 @@ internal fun WakeOnLanDialog(
     onDelete: (Phase3WakeOnLanTargetUiState) -> Unit,
 ) {
     var macAddress by rememberSaveable { mutableStateOf("") }
+    val validMac = remember(macAddress) { runCatching { NanoKvmMacAddress.parse(macAddress) }.isSuccess }
     var renameTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
     var renameName by rememberSaveable { mutableStateOf("") }
     val renameTarget = state.wakeOnLanTargets.firstOrNull { it.id == renameTargetId }
@@ -473,13 +480,14 @@ internal fun WakeOnLanDialog(
                             enabled = !busy,
                             singleLine = true,
                             label = { Text(stringResource(R.string.console_mac_address)) },
+                            isError = macAddress.isNotBlank() && !validMac,
                             supportingText = {
                                 Text(stringResource(R.string.console_mac_address_hint))
                             },
                         )
                         Button(
                             onClick = { onWake(macAddress) },
-                            enabled = !busy && macAddress.isNotBlank(),
+                            enabled = !busy && validMac,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(stringResource(R.string.console_send_wake_packet)) }
                         HorizontalDivider()

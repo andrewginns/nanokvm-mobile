@@ -23,6 +23,7 @@ import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.clipboard.ClipboardPayload
 import org.nanokvm.mobile.data.AppSettings
 import org.nanokvm.mobile.data.AppSettingsStore
+import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.data.DEFAULT_SCROLL_SENSITIVITY
 import org.nanokvm.mobile.data.ThemeMode
 import org.nanokvm.mobile.data.normalizeScrollSensitivity
@@ -106,6 +107,8 @@ data class AppUiState(
     val profileCatalogResolved: Boolean = false,
     val savedPasswordProfileIds: Set<String> = emptySet(),
     val scrollSensitivity: Float = DEFAULT_SCROLL_SENSITIVITY,
+    val keyboardLayout: KeyboardLayout = KeyboardLayout.Us,
+    val trackpadDefault: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val useDynamicColor: Boolean = true,
     val mjpegFrameDetectionEnabled: Boolean = false,
@@ -221,7 +224,9 @@ class AppViewModel internal constructor(
                     session.connection == ConnectionState.Disconnected ||
                     session.connection == ConnectionState.Failed
                 ) {
-                    consoleSessionDraftOwner.clear()
+                    consoleSessionDraftOwner.clear(
+                        keepOfflinePicker = session.connection != ConnectionState.Failed,
+                    )
                 }
                 mutableState.update { it.copy(backendSession = session) }
             }
@@ -270,6 +275,22 @@ class AppViewModel internal constructor(
         }
     }
 
+    fun setKeyboardLayout(layout: KeyboardLayout) = persistConsoleDefault { setKeyboardLayout(layout) }
+
+    fun setTrackpadDefault(enabled: Boolean) = persistConsoleDefault { setTrackpadDefault(enabled) }
+
+    private fun persistConsoleDefault(write: suspend AppSettingsStore.() -> Unit) {
+        viewModelScope.launch {
+            try {
+                settingsWriteMutex.withLock { appSettingsStore.write() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                updateWithNotice(AppNotice.Simple(SimpleNotice.ConsoleDefaultSaveFailed))
+            }
+        }
+    }
+
     fun setMjpegFrameDetectionEnabled(enabled: Boolean) {
         val currentIntent = pendingMjpegFrameDetectionEnabled
             ?: mutableState.value.mjpegFrameDetectionEnabled
@@ -302,6 +323,8 @@ class AppViewModel internal constructor(
         mutableState.update {
             it.copy(
                 scrollSensitivity = settings.scrollSensitivity,
+                keyboardLayout = settings.keyboardLayout,
+                trackpadDefault = settings.trackpadDefault,
                 themeMode = settings.themeMode,
                 useDynamicColor = settings.useDynamicColor,
                 mjpegFrameDetectionEnabled = settings.mjpegFrameDetectionEnabled,
@@ -978,7 +1001,7 @@ class AppViewModel internal constructor(
         }
     }
 
-    fun setForeground(foreground: Boolean) {
+    fun setForeground(foreground: Boolean, abandonConnection: Boolean = false) {
         this.foreground = foreground
         if (!foreground) backend.releaseAllInput()
         val networkFlowActive = mutableState.value.screen.let { screen ->
@@ -992,13 +1015,15 @@ class AppViewModel internal constructor(
             backend.setForeground(false)
             return
         }
-        backend.setForeground(foreground)
+        backend.setForeground(foreground, abandonConnection)
     }
 
     /** Called only for a genuine background transition, never configuration recreation. */
-    fun clearSensitiveWorkForBackground() {
+    fun clearSensitiveWorkForBackground(): Boolean {
+        val interruptedScreen = mutableState.value.screen
         foreground = false
-        consoleSessionDraftOwner.clear()
+        consoleSessionDraftOwner.offlineDocumentHandoff.clear()
+        consoleSessionDraftOwner.clear(keepOfflinePicker = interruptedScreen is AppScreen.Console)
         connectJob?.cancel()
         connectJob = null
         clearActiveAttempt()
@@ -1008,7 +1033,6 @@ class AppViewModel internal constructor(
         val promptInProgress = mutableState.value.credentialPrompt != null
         if (!promptInProgress) clearPendingCredentialAction()
         if (!promptInProgress) cancelPasswordChange()
-        val interruptedScreen = mutableState.value.screen
         val mustReturnToProfiles = interruptedScreen is AppScreen.Connecting ||
             interruptedScreen is AppScreen.ReviewCertificate
         if (mustReturnToProfiles) persistRestorableScreen(AppScreen.Profiles)
@@ -1021,6 +1045,7 @@ class AppViewModel internal constructor(
                 sensitiveWorkGeneration = it.sensitiveWorkGeneration + 1,
             )
         }
+        return interruptedScreen is AppScreen.Connecting
     }
 
     fun releaseAllInput() {

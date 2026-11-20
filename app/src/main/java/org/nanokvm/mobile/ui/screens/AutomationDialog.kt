@@ -32,6 +32,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -89,14 +91,18 @@ internal fun AutomationDialog(
         }
     }
 
+    var discardDraft by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun dismiss() {
         localController?.close()
         onDismiss()
     }
+    fun requestDismiss() {
+        if (state.autostartDirty) discardDraft = ::dismiss else dismiss()
+    }
 
     AlertDialog(
         modifier = Modifier.fillMaxWidth(),
-        onDismissRequest = ::dismiss,
+        onDismissRequest = ::requestDismiss,
         title = {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -191,7 +197,13 @@ internal fun AutomationDialog(
                             }
                         },
                         onEdit = { controller.editAutostart(it) },
-                        onCancelEdit = controller::cancelAutostartEdit,
+                        onCancelEdit = {
+                            if (state.autostartDirty) {
+                                discardDraft = controller::cancelAutostartEdit
+                            } else {
+                                controller.cancelAutostartEdit()
+                            }
+                        },
                         onReviewWrite = controller::reviewAutostartWrite,
                         onReviewDelete = controller::reviewAutostartDelete,
                     )
@@ -200,10 +212,19 @@ internal fun AutomationDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = ::dismiss) { Text(stringResource(R.string.automation_close)) }
+            TextButton(onClick = ::requestDismiss) { Text(stringResource(R.string.automation_close)) }
         },
     )
 
+    discardDraft?.let { discard ->
+        ConfirmScriptDiscardDialog(
+            onKeep = { discardDraft = null },
+            onDiscard = {
+                discardDraft = null
+                discard()
+            },
+        )
+    }
     state.pendingAction?.let { action ->
         AutomationConfirmationDialog(
             action = action,
@@ -466,8 +487,10 @@ private fun LazyListScope.autostartAutomationContent(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(onClick = onImport, enabled = enabled && importAvailable) {
-                    Text(stringResource(R.string.automation_import))
+                if (importAvailable) {
+                    OutlinedButton(onClick = onImport, enabled = enabled) {
+                        Text(stringResource(R.string.automation_import))
+                    }
                 }
                 Button(onClick = onReviewWrite, enabled = enabled && content.isNotEmpty()) {
                     Text(
@@ -536,6 +559,20 @@ private fun AutomationConfirmationDialog(
             TextButton(onClick = onCancel, enabled = !operationInProgress) {
                 Text(stringResource(R.string.automation_cancel))
             }
+        },
+    )
+}
+
+@Composable
+internal fun ConfirmScriptDiscardDialog(onKeep: () -> Unit, onDiscard: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onKeep,
+        title = { Text(stringResource(R.string.console_discard_script_draft)) },
+        confirmButton = {
+            TextButton(onClick = onDiscard) { Text(stringResource(R.string.console_discard_script_draft_action)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onKeep) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }

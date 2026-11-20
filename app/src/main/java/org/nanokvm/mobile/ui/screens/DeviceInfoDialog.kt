@@ -1,5 +1,8 @@
 package org.nanokvm.mobile.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Build
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,24 +12,34 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import org.nanokvm.mobile.BuildConfig
 import org.nanokvm.mobile.R
 import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.NanoKvmNetworkInterfaceStatus
+import org.nanokvm.protocol.NanoKvmApplicationVersion
 import org.nanokvm.protocol.NanoKvmCapability
+import org.nanokvm.video.NanoKvmVideoFailureReason
 import org.nanokvm.protocol.NanoKvmCapabilitySupport
 
 internal enum class DeviceCapabilityDisplayState {
@@ -121,6 +134,33 @@ internal fun DeviceInfoDialog(
     session: BackendSession,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var preview by remember(session.sessionGeneration) { mutableStateOf<String?>(null) }
+    preview?.let { snapshot ->
+        val label = stringResource(R.string.console_diagnostics_title)
+        AlertDialog(
+            onDismissRequest = { preview = null },
+            title = { Text(label) },
+            text = {
+                SelectionContainer(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(snapshot)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText(label, snapshot))
+                    preview = null
+                }) {
+                    Text(stringResource(android.R.string.copy))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { preview = null }) { Text(stringResource(android.R.string.cancel)) }
+            },
+        )
+        return
+    }
     val capabilityRows = deviceCapabilityDisplayRows(session.capabilities?.all)
     val availableCount = capabilityRows.count { it.state == DeviceCapabilityDisplayState.Available }
     val unavailableCount = capabilityRows.count { it.state == DeviceCapabilityDisplayState.Unavailable }
@@ -248,8 +288,48 @@ internal fun DeviceInfoDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.console_close)) }
         },
+        dismissButton = {
+            TextButton(onClick = { preview = redactedVideoDiagnostics(session) }) {
+                Text(stringResource(R.string.console_diagnostics_title))
+            }
+        },
     )
 }
+
+internal fun redactedVideoDiagnostics(session: BackendSession): String = buildString {
+    appendLine("NanoKVM Mobile " + BuildConfig.VERSION_NAME)
+    appendLine("Android API " + Build.VERSION.SDK_INT)
+    Build.SUPPORTED_ABIS?.firstOrNull()?.let { appendLine("ABI " + it) }
+    runCatching { NanoKvmApplicationVersion.parse(session.deviceStatus.applicationVersion) }
+        .getOrNull()?.let { version ->
+            appendLine("NanoKVM " + version.copy(preRelease = null, buildMetadata = null))
+        }
+    appendLine("Transport " + session.streamLabel.transport.name)
+    session.lastVideoFallback?.let { fallback ->
+        val reason = when (fallback.reason) {
+            NanoKvmVideoFailureReason.Unavailable -> "unavailable"
+            NanoKvmVideoFailureReason.FirstFrameTimeout -> "first-frame-timeout"
+            NanoKvmVideoFailureReason.Stalled -> "stalled"
+            NanoKvmVideoFailureReason.Decoder -> "decoder"
+            NanoKvmVideoFailureReason.Transport -> "transport"
+            is NanoKvmVideoFailureReason.HttpRejected -> "http-rejected"
+        }
+        appendLine("Fallback " + fallback.from.name + " to " + fallback.to.name + " (" + reason + ")")
+    }
+    appendLine("Dropped frames " + session.droppedFrames)
+    appendLine("Dropped before first frame " + session.droppedBeforeFirstFrame)
+    appendLine("Video stalls " + session.videoStallEvents)
+    appendLine("MJPEG startup timeouts " + session.mjpegStartupTimeouts)
+    session.framesPerSecond?.let { appendLine("FPS " + it) }
+    session.roundTripMs?.let { appendLine("Status request ms " + it) }
+    session.connectionTiming?.let { timing ->
+        appendLine("Backend trust ms " + timing.backendTrustMillis)
+        appendLine("Login ms " + timing.loginMillis)
+        appendLine("Capability reads ms " + timing.capabilityReadsMillis)
+        appendLine("Input connection ms " + timing.inputConnectMillis)
+    }
+    session.videoFirstFrameMillis?.let { appendLine("Video request to first frame ms " + it) }
+}.trimEnd()
 
 @Composable
 private fun DeviceInfoValue(label: String, value: String?) {
