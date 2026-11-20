@@ -185,6 +185,14 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
 }
 
 @Composable
+internal fun ConsoleMessage.VideoFallback.progressText(): String =
+    if (reason == NanoKvmVideoFailureReason.FirstFrameTimeout) {
+        stringResource(R.string.console_message_video_fallback_progress, from.displayText(), to.displayText())
+    } else {
+        displayText()
+    }
+
+@Composable
 internal fun AppNotice.displayText(): String = when (this) {
     is AppNotice.Simple -> stringResource(simpleNoticeResource(kind))
     is AppNotice.Password -> stringResource(passwordNoticeResource(kind))

@@ -88,6 +88,7 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 assertEquals(NanoKvmVideoTransport.H264, fallback.from)
                 assertEquals(NanoKvmVideoTransport.MJPEG, fallback.to)
                 assertEquals(NanoKvmVideoFailureReason.HttpRejected(503), fallback.reason)
+                assertEquals(1, fixture.h264Requests.get())
                 val streaming = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Streaming>().single()
                 assertEquals(NanoKvmVideoTransport.MJPEG, streaming.transport)
                 assertTrue(fixture.statuses.indexOf(fallback) < fixture.statuses.indexOf(streaming))
@@ -104,13 +105,15 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 assertTrue(fixture.failed.await(5, TimeUnit.SECONDS))
                 val error = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.Error>().single()
                 assertEquals(NanoKvmVideoFailureReason.HttpRejected(401), error.reason)
+                assertEquals(1, fixture.h264Requests.get())
+                assertEquals(0, fixture.mjpegRequests.get())
                 assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.FallingBack })
             }
         }
     }
 
     @Test
-    fun retriesSilentMjpegFallbackAndRendersFromFreshRequest() {
+    fun retriesSilentDirectH264ThenRendersFromFreshMjpegRequest() {
         val texture = SurfaceTexture(false).apply { setDefaultBufferSize(64, 64) }
         val surface = Surface(texture)
         try {
@@ -129,7 +132,8 @@ class NanoKvmMjpegSessionInstrumentedTest {
                 assertFalse(fixture.statuses.any { it is NanoKvmVideoStatus.Error })
                 val fallback = fixture.statuses.filterIsInstance<NanoKvmVideoStatus.FallingBack>().single()
                 assertEquals(NanoKvmVideoFailureReason.FirstFrameTimeout, fallback.reason)
-                assertEquals(listOf(NanoKvmVideoTransport.H264), fixture.stalls)
+                assertEquals(2, fixture.h264Requests.get())
+                assertEquals(List(2) { NanoKvmVideoTransport.H264 }, fixture.stalls)
                 assertEquals(1, fixture.startupTimeouts.get())
             }
         } finally {
@@ -177,6 +181,7 @@ class NanoKvmMjpegSessionInstrumentedTest {
         val bitmap = AtomicReference<Bitmap?>()
         val statuses = CopyOnWriteArrayList<NanoKvmVideoStatus>()
         val stalls = CopyOnWriteArrayList<NanoKvmVideoTransport>()
+        val h264Requests = AtomicInteger()
         val mjpegRequests = AtomicInteger()
         val startupTimeouts = AtomicInteger()
         val streaming = CountDownLatch(1)
@@ -265,14 +270,17 @@ class NanoKvmMjpegSessionInstrumentedTest {
                     } else {
                         response
                     }
-                    "/api/stream/h264/direct" -> if (h264ResponseCode == null) {
-                        MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-                            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                                webSocket.close(code, reason)
-                            }
-                        })
-                    } else {
-                        MockResponse().setResponseCode(h264ResponseCode)
+                    "/api/stream/h264/direct" -> {
+                        h264Requests.incrementAndGet()
+                        if (h264ResponseCode == null) {
+                            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                                    webSocket.close(code, reason)
+                                }
+                            })
+                        } else {
+                            MockResponse().setResponseCode(h264ResponseCode)
+                        }
                     }
                     else -> MockResponse().setResponseCode(404)
                 }

@@ -7,6 +7,17 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.19] - 2026-11-20
+
+Android version code **29**. Includes the console and appliance improvements
+from the 0.3.18 draft.
+
+- Retry direct H.264 once in Auto mode if the first attempt shows no frame.
+  The new decoder waits for the previous one to release the video surface.
+  If the retry also times out, Auto switches to MJPEG.
+- During fallback, identify the transport that timed out and show that the
+  next stream is still starting. Reconnect the stream from the same banner.
+
 ## [0.3.18] - 2026-11-20
 
 Android version code **28**.

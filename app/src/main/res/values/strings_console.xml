@@ -89,6 +89,7 @@
     <string name="console_message_host_control_session_changed">The host-control request was not sent because the authenticated destination changed.</string>
     <string name="console_message_connecting_video">Connecting %1$s</string>
     <string name="console_message_video_fallback">%1$s switched to %2$s. %3$s</string>
+    <string name="console_message_video_fallback_progress">%1$s timed out waiting for its first frame. Trying %2$s…</string>
     <string name="console_message_video_failed">%1$s video stopped. %2$s</string>
     <string name="console_video_reason_unavailable">This transport is unavailable on this device.</string>
     <string name="console_video_reason_first_frame">Timed out waiting for the first frame.</string>

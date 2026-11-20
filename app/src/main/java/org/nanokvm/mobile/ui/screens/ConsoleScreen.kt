@@ -167,6 +167,7 @@ import org.nanokvm.mobile.runtime.PowerAction
 import org.nanokvm.mobile.runtime.VideoSettings
 import org.nanokvm.mobile.runtime.VideoTransportPreference
 import org.nanokvm.mobile.ui.displayText
+import org.nanokvm.mobile.ui.progressText
 import org.nanokvm.mobile.ui.components.ConnectionPulse
 import org.nanokvm.mobile.ui.components.ConsoleKeyboard
 import org.nanokvm.mobile.ui.components.ImmersiveModeEffect
@@ -1710,12 +1711,17 @@ private fun ConsoleBody(
                                 ),
                             ) {
                                 Text(
-                                    session.status?.displayText()
-                                        ?: connectionLabel(ConnectionState.Degraded),
+                                    when (val status = session.status) {
+                                        is ConsoleMessage.VideoFallback -> status.progressText()
+                                        null -> connectionLabel(ConnectionState.Degraded)
+                                        else -> status.displayText()
+                                    },
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                             }
-                            if (session.status is ConsoleMessage.VideoFailed) {
+                            if (session.status is ConsoleMessage.VideoFailed ||
+                                session.status is ConsoleMessage.VideoFallback
+                            ) {
                                 TextButton(onClick = onRetryConnection) {
                                     Text(stringResource(R.string.console_reconnect_stream))
                                 }

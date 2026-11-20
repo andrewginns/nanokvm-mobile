@@ -135,6 +135,7 @@ class NanoKvmVideoSession(
     private var h264Source: DirectH264WebSocketSource? = null
     private var mjpegAttempt: MjpegAttempt? = null
     private var renderer: MediaCodecH264Renderer? = null
+    private var pendingH264Release = CompletableFuture.completedFuture(Unit)
     private var webRtcWatchdog: ScheduledFuture<*>? = null
     private var h264Watchdog: ScheduledFuture<*>? = null
     private var mjpegWatchdog: ScheduledFuture<*>? = null
@@ -372,7 +373,12 @@ class NanoKvmVideoSession(
         webRtcWatchdog = null
     }
 
-    private fun startH264(run: Long, surface: Surface, config: NanoKvmVideoConfig) {
+    private fun startH264(
+        run: Long,
+        surface: Surface,
+        config: NanoKvmVideoConfig,
+        retryOnFirstFrameTimeout: Boolean = config.preference == NanoKvmVideoPreference.AUTO,
+    ) {
         val createdRenderer = MediaCodecH264Renderer(
             listener = object : H264RendererListener {
                 override fun onStatusChanged(status: H264RendererStatus) {
@@ -449,6 +455,7 @@ class NanoKvmVideoSession(
                 config,
                 config.h264FirstFrameTimeoutMillis,
                 "H.264 stream did not render a first frame",
+                retrySurface = surface.takeIf { retryOnFirstFrameTimeout },
             )
         }
         createdRenderer.start(surface, config.decoder)
@@ -478,9 +485,12 @@ class NanoKvmVideoSession(
         cause: Throwable,
         reason: NanoKvmVideoFailureReason,
         expectedWatchdogEpoch: Long? = null,
+        retrySurface: Surface? = null,
     ) {
         val oldSource: DirectH264WebSocketSource?
-        val oldRenderer: MediaCodecH264Renderer?
+        val decoderReleased: CompletableFuture<Unit>
+        val startupRetrySurface = retrySurface?.takeIf { reason == NanoKvmVideoFailureReason.FirstFrameTimeout }
+        val nextRun: Long
         synchronized(stateLock) {
             if (
                 generation != run ||
@@ -492,14 +502,41 @@ class NanoKvmVideoSession(
             h264FailureClaimed = true
             cancelH264WatchdogLocked()
             oldSource = h264Source
-            oldRenderer = renderer
             h264Source = null
+            // Give the retry a new generation so late callbacks from the first socket or
+            // decoder cannot publish video or end the replacement attempt.
+            nextRun = if (startupRetrySurface != null) ++generation else run
+            decoderReleased = renderer?.stopAndAwaitRelease() ?: pendingH264Release
+            pendingH264Release = decoderReleased
             renderer = null
         }
         oldSource?.stop()
-        val decoderReleased = oldRenderer?.stopAndAwaitRelease()
         if (expectedWatchdogEpoch != null) {
-            dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.H264) }
+            dispatchForGeneration(nextRun) { listener.onVideoStalled(NanoKvmVideoTransport.H264) }
+        }
+
+        if (startupRetrySurface != null) {
+            decoderReleased.whenComplete { _, _ ->
+                if (isCurrent(nextRun)) {
+                    if (startupRetrySurface.isValid) {
+                        val retryConfig = config.copy(
+                            h264FirstFrameTimeoutMillis = minOf(
+                                config.h264FirstFrameTimeoutMillis,
+                                AUTO_H264_RETRY_TIMEOUT_MILLIS,
+                            ),
+                        )
+                        startH264(nextRun, startupRetrySurface, retryConfig, retryOnFirstFrameTimeout = false)
+                    } else {
+                        notifyStatus(
+                            nextRun,
+                            NanoKvmVideoStatus.Error(
+                                NanoKvmVideoTransport.H264, cause, NanoKvmVideoFailureReason.Decoder,
+                            ),
+                        )
+                    }
+                }
+            }
+            return
         }
 
         val h264Index = config.preference.transportChain().indexOf(NanoKvmVideoTransport.H264)
@@ -516,12 +553,8 @@ class NanoKvmVideoSession(
                     reason = reason,
                 ),
             )
-            if (decoderReleased == null) {
-                startMjpeg(run, config)
-            } else {
-                decoderReleased.whenComplete { _, _ ->
-                    if (isCurrent(run)) startMjpeg(run, config)
-                }
+            decoderReleased.whenComplete { _, _ ->
+                if (isCurrent(run)) startMjpeg(run, config)
             }
         } else {
             // A MediaCodec in its error state must not keep receiving frames. Reconnect is an
@@ -535,6 +568,7 @@ class NanoKvmVideoSession(
         config: NanoKvmVideoConfig,
         delayMillis: Long,
         message: String,
+        retrySurface: Surface? = null,
     ) {
         cancelH264WatchdogLocked()
         val watchdogEpoch = h264WatchdogEpoch
@@ -547,6 +581,7 @@ class NanoKvmVideoSession(
                     IllegalStateException(message),
                     reason,
                     expectedWatchdogEpoch = watchdogEpoch,
+                    retrySurface = retrySurface,
                 )
             },
             delayMillis,
@@ -655,6 +690,7 @@ class NanoKvmVideoSession(
         val oldH264: DirectH264WebSocketSource?
         val oldMjpeg: MjpegAttempt?
         val oldRenderer: MediaCodecH264Renderer?
+        val pendingRelease: CompletableFuture<Unit>
         val stoppedRun = synchronized(stateLock) {
             generation++
             cancelWebRtcWatchdogLocked()
@@ -664,6 +700,7 @@ class NanoKvmVideoSession(
             oldH264 = h264Source
             oldMjpeg = mjpegAttempt
             oldRenderer = renderer
+            pendingRelease = pendingH264Release
             webRtcSource = null
             h264Source = null
             mjpegAttempt = null
@@ -678,7 +715,7 @@ class NanoKvmVideoSession(
         oldH264?.stop()
         oldMjpeg?.close()
         val decoderReleased = oldRenderer?.stopAndAwaitRelease()
-            ?: CompletableFuture.completedFuture(Unit)
+            ?.thenCombine(pendingRelease) { _, _ -> Unit } ?: pendingRelease
         if (notify) notifyStatus(stoppedRun, NanoKvmVideoStatus.Stopped)
         return decoderReleased
     }
@@ -806,6 +843,8 @@ class NanoKvmVideoSession(
 private fun transportFailureReason(responseCode: Int?): NanoKvmVideoFailureReason =
     if (responseCode == null) NanoKvmVideoFailureReason.Transport
     else NanoKvmVideoFailureReason.HttpRejected(responseCode)
+
+private const val AUTO_H264_RETRY_TIMEOUT_MILLIS = 3_000L
 
 private fun frameTimeoutReason(hasRendered: Boolean): NanoKvmVideoFailureReason =
     if (hasRendered) NanoKvmVideoFailureReason.Stalled
