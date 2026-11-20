@@ -77,7 +77,7 @@ class MediaCodecH264Renderer(
                 id = generation,
                 thread = decoderThread,
                 handler = Handler(decoderThread.looper),
-                queue = H264FrameQueue(queueCapacity),
+                inputs = H264DecoderInputQueue(queueCapacity),
             ).also { activeRun = it }
         }
         dispatchForRun(run) { listener.onStatusChanged(H264RendererStatus.Starting) }
@@ -106,25 +106,24 @@ class MediaCodecH264Renderer(
                 dropReason = H264FrameDropReason.RENDERER_STOPPED,
             )
         }
-        val result = try {
-            run.bootstrap.offer(frame) ?: run.queue.offer(frame)
-        } catch (error: IllegalArgumentException) {
-            failRun(run, error)
-            return H264QueueOfferResult(
-                accepted = false,
-                droppedFrames = 1,
-                dropReason = H264FrameDropReason.MALFORMED_TRANSPORT_FRAME,
-            )
-        }
+        val result = run.inputs.offer(frame)
         if (result.droppedFrames > 0 && result.dropReason != null) {
             dispatchForRun(run) { listener.onFramesDropped(result.droppedFrames, result.dropReason) }
         }
-        run.handler.post { drainInputs(run) }
+        if (result.accepted) run.handler.post { drainInputs(run) }
         return result
     }
 
+    internal fun onMalformedFrame() {
+        val run = synchronized(stateLock) { activeRun } ?: return
+        val discarded = run.inputs.discardLiveFrames()
+        dispatchForRun(run) {
+            listener.onFramesDropped(discarded + 1, H264FrameDropReason.MALFORMED_TRANSPORT_FRAME)
+        }
+    }
+
     fun snapshot(): H264QueueSnapshot = synchronized(stateLock) { activeRun }
-        ?.queue
+        ?.inputs
         ?.snapshot()
         ?: H264QueueSnapshot(
             size = 0,
@@ -152,8 +151,7 @@ class MediaCodecH264Renderer(
             }
             Triple(detached, generation, completion)
         }
-        oldRun?.queue?.clearAndAwaitKeyFrame()
-        oldRun?.bootstrap?.clear()
+        oldRun?.inputs?.clear()
         if (oldRun != null && releaseCompletion != null) {
             releaseAsynchronously(oldRun, releaseCompletion)
         }
@@ -200,13 +198,7 @@ class MediaCodecH264Renderer(
         if (!isActive(run) || run.failed.get()) return
         val activeCodec = run.codec ?: return
         while (run.availableInputIndexes.isNotEmpty() && isActive(run)) {
-            val input = run.bootstrap.poll() ?: run.queue.poll()?.let { frame ->
-                H264DecoderInput(
-                    data = frame.data,
-                    timestampUs = frame.timestampUs,
-                    flags = if (frame.isKeyFrame) H264DecoderInput.KEY_FRAME else H264DecoderInput.NONE,
-                )
-            } ?: return
+            val input = run.inputs.poll() ?: return
             val index = run.availableInputIndexes.removeFirst()
             val buffer = try {
                 activeCodec.getInputBuffer(index)
@@ -216,7 +208,7 @@ class MediaCodecH264Renderer(
             }
             if (buffer == null || buffer.capacity() < input.data.size) {
                 runCatching { activeCodec.queueInputBuffer(index, 0, 0, input.timestampUs, 0) }
-                val discarded = run.queue.clearAndAwaitKeyFrame()
+                val discarded = run.inputs.discardLiveFrames()
                 dispatchForRun(run) {
                     listener.onFramesDropped(
                         discarded + 1,
@@ -243,9 +235,6 @@ class MediaCodecH264Renderer(
                         else -> 0
                     },
                 )
-                if (input.flags == H264DecoderInput.KEY_FRAME) {
-                    run.queue.onExternalKeyFrameQueued()
-                }
             } catch (error: Throwable) {
                 failRun(run, error)
                 return
@@ -362,7 +351,7 @@ class MediaCodecH264Renderer(
 
         override fun onError(codec: MediaCodec, error: MediaCodec.CodecException) {
             if (!isActive(run) || run.codec !== codec) return
-            run.queue.clearAndAwaitKeyFrame()
+            run.inputs.clear()
             failRun(run, error, recoverable = error.isRecoverable)
         }
     }
@@ -371,8 +360,7 @@ class MediaCodecH264Renderer(
         val id: Long,
         val thread: HandlerThread,
         val handler: Handler,
-        val queue: H264FrameQueue,
-        val bootstrap: H264DecoderBootstrap = H264DecoderBootstrap(),
+        val inputs: H264DecoderInputQueue,
         var codec: MediaCodec? = null,
         val availableInputIndexes: ArrayDeque<Int> = ArrayDeque(),
         val failed: AtomicBoolean = AtomicBoolean(false),

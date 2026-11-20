@@ -11,7 +11,7 @@ class H264FrameQueueTest {
     fun `external bootstrap key lets queue accept following delta frames`() {
         val queue = H264FrameQueue(capacity = 3)
 
-        queue.onExternalKeyFrameQueued()
+        queue.onBootstrapKeyFrameStaged()
 
         val result = queue.offer(frame(key = false, timestamp = 2))
         assertTrue(result.accepted)

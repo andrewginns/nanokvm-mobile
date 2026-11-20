@@ -93,11 +93,11 @@ class H264FrameQueue(
     fun poll(): H264AccessUnit? = frames.pollFirst()
 
     /**
-     * Lets the live queue accept dependent frames after a key frame held outside this bounded
-     * queue has been submitted successfully to the decoder.
+     * Lets the live queue accept frames that follow the staged bootstrap keyframe. The decoder
+     * input queue always delivers that keyframe before polling this queue.
      */
     @Synchronized
-    internal fun onExternalKeyFrameQueued() {
+    internal fun onBootstrapKeyFrameStaged() {
         awaitingKeyFrame = false
     }
 

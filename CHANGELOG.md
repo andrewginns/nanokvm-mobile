@@ -7,6 +7,15 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.17] - 2026-11-20
+
+Android version code **27**.
+
+- Retry MJPEG fallback once if it times out before displaying its first frame.
+  A second timeout still offers **Reconnect stream**.
+- Keep H.264 frames in decoder order at startup and resume at a fresh keyframe
+  after a gap in the queued stream. This fixes a cause of garbled video.
+
 ## [0.3.16] - 2026-11-18
 
 Android version code **26**.

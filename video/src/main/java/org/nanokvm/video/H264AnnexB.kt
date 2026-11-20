@@ -64,17 +64,18 @@ object H264AnnexB {
 /**
  * Preserves NanoKVM's first SPS/PPS/IDR access unit outside the bounded low-latency queue.
  * MediaCodec receives its codec-config input before that keyframe, even if startup takes longer
- * than the three-frame live queue can tolerate.
+ * than the three-frame live queue can tolerate. Both lanes share a lock so a dependent frame
+ * cannot be read before its bootstrap keyframe or reopen the queue after a dropped reference.
  */
-internal class H264DecoderBootstrap {
+internal class H264DecoderInputQueue(capacity: Int) {
+    private val live = H264FrameQueue(capacity)
     private var stage = Stage.WAITING_FOR_KEY
     private var codecSpecificData: H264CodecSpecificData? = null
     private var keyFrame: H264AccessUnit? = null
 
-    /** Returns null once bootstrap input is staged and normal queueing should resume. */
     @Synchronized
-    fun offer(frame: H264AccessUnit): H264QueueOfferResult? {
-        if (stage == Stage.KEY_FRAME_PENDING || stage == Stage.COMPLETE) return null
+    fun offer(frame: H264AccessUnit): H264QueueOfferResult {
+        if (stage != Stage.WAITING_FOR_KEY) return live.offer(frame)
         if (!frame.isKeyFrame) {
             return H264QueueOfferResult(
                 accepted = false,
@@ -83,19 +84,16 @@ internal class H264DecoderBootstrap {
             )
         }
 
-        val parameterSets = H264AnnexB.codecSpecificData(frame.data)
-            ?: throw IllegalArgumentException(
-                "NanoKVM H.264 keyframe did not contain Annex-B SPS and PPS parameter sets",
+        codecSpecificData = H264AnnexB.codecSpecificData(frame.data)
+            ?: return H264QueueOfferResult(
+                accepted = false,
+                droppedFrames = 1,
+                dropReason = H264FrameDropReason.MALFORMED_TRANSPORT_FRAME,
             )
-        val replaced = if (keyFrame == null) 0 else 1
-        codecSpecificData = parameterSets
         keyFrame = frame
         stage = Stage.CODEC_CONFIG_PENDING
-        return H264QueueOfferResult(
-            accepted = true,
-            droppedFrames = replaced,
-            dropReason = if (replaced == 0) null else H264FrameDropReason.REPLACED_BY_KEY_FRAME,
-        )
+        live.onBootstrapKeyFrameStaged()
+        return H264QueueOfferResult(accepted = true)
     }
 
     @Synchronized
@@ -120,14 +118,26 @@ internal class H264DecoderBootstrap {
                 flags = H264DecoderInput.KEY_FRAME,
             )
         }
-        Stage.COMPLETE -> null
+        Stage.COMPLETE -> live.poll()?.let { frame ->
+            H264DecoderInput(
+                data = frame.data,
+                timestampUs = frame.timestampUs,
+                flags = if (frame.isKeyFrame) H264DecoderInput.KEY_FRAME else H264DecoderInput.NONE,
+            )
+        }
     }
+
+    @Synchronized
+    fun discardLiveFrames(): Int = live.clearAndAwaitKeyFrame()
+
+    fun snapshot(): H264QueueSnapshot = live.snapshot()
 
     @Synchronized
     fun clear() {
         stage = Stage.WAITING_FOR_KEY
         codecSpecificData = null
         keyFrame = null
+        live.clearAndAwaitKeyFrame()
     }
 
     private enum class Stage {

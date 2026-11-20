@@ -132,7 +132,7 @@ class NanoKvmVideoSession(
     private var generation = 0L
     private var webRtcSource: NanoKvmWebRtcSource? = null
     private var h264Source: DirectH264WebSocketSource? = null
-    private var mjpegSource: MjpegStreamReader? = null
+    private var mjpegAttempt: MjpegAttempt? = null
     private var renderer: MediaCodecH264Renderer? = null
     private var webRtcWatchdog: ScheduledFuture<*>? = null
     private var h264Watchdog: ScheduledFuture<*>? = null
@@ -144,18 +144,11 @@ class NanoKvmVideoSession(
     private var webRtcFailureClaimed = false
     private var h264HasRendered = false
     private var h264FailureClaimed = false
-    private var mjpegHasRendered = false
-    private var mjpegFailureClaimed = false
     private val watchdogExecutor = ScheduledThreadPoolExecutor(1) { runnable ->
         Thread(runnable, "NanoKVM-video-watchdog").apply { isDaemon = true }
     }.apply {
         setRemoveOnCancelPolicy(true)
     }
-    private val mjpegFrameDispatcher = LatestFrameDispatcher(
-        executor = callbackExecutor,
-        deliver = ::deliverMjpegFrame,
-        discard = ::discardMjpegFrame,
-    )
 
     fun start(surface: Surface, config: NanoKvmVideoConfig = NanoKvmVideoConfig()) {
         require(config.preference != NanoKvmVideoPreference.MJPEG) {
@@ -420,10 +413,7 @@ class NanoKvmVideoSession(
                 }
 
                 override fun onMalformedFrame(cause: IllegalArgumentException) {
-                    // A corrupt packet is isolated; key-frame gating protects decoder recovery.
-                    dispatchForH264Run(run) {
-                        listener.onFramesDropped(1, H264FrameDropReason.MALFORMED_TRANSPORT_FRAME)
-                    }
+                    if (isH264Active(run)) createdRenderer.onMalformedFrame()
                 }
 
                 override fun onClosed(code: Int, reason: String) {
@@ -569,110 +559,75 @@ class NanoKvmVideoSession(
         h264Watchdog = null
     }
 
-    private fun startMjpeg(run: Long, config: NanoKvmVideoConfig) {
-        val created = MjpegStreamReader(
-            client,
-            baseUrl,
-            token,
-            object : MjpegStreamListener {
-                override fun onConnecting() {
-                    notifyStatus(run, NanoKvmVideoStatus.Connecting(NanoKvmVideoTransport.MJPEG))
-                }
-
-                override fun onOpen(boundary: String) {
-                    // HTTP headers prove only that the multipart response opened. Streaming is
-                    // reported after a JPEG is decoded and its bitmap is posted successfully.
-                }
-
-                override fun onJpegFrame(jpeg: ByteArray) {
-                    enqueueMjpegFrame(run, config, jpeg)
-                }
-
-                override fun onClosed() {
-                    onMjpegFailure(
-                        run,
-                        IllegalStateException("MJPEG stream closed"),
-                        NanoKvmVideoFailureReason.Transport,
-                    )
-                }
-
-                override fun onFailure(cause: Throwable, responseCode: Int?) {
-                    val rejection = responseCode?.takeUnless { it in 200..299 }
-                    onMjpegFailure(run, cause, transportFailureReason(rejection))
-                }
-            },
-            maxFrameBytes = config.maxMjpegFrameBytes,
-        )
+    private fun startMjpeg(
+        run: Long,
+        config: NanoKvmVideoConfig,
+        retryOnFirstFrameTimeout: Boolean = config.preference != NanoKvmVideoPreference.MJPEG,
+    ) {
+        val created = MjpegAttempt(run, config, retryOnFirstFrameTimeout)
         synchronized(stateLock) {
-            if (generation != run) {
-                created.close()
-                return
-            }
-            mjpegSource = created
-            mjpegHasRendered = false
-            mjpegFailureClaimed = false
+            if (generation != run) return
+            mjpegAttempt = created
             armMjpegWatchdogLocked(
-                run,
+                created,
                 config.mjpegFirstFrameTimeoutMillis,
                 "MJPEG stream did not render a first frame",
             )
         }
-        created.start()
+        created.reader.start()
+        // Stop may have detached the attempt before its reader finished starting.
+        if (!isMjpegActive(created)) created.close()
     }
 
-    private fun onMjpegFrameRendered(run: Long, stallTimeoutMillis: Long) {
+    private fun onMjpegFrameRendered(attempt: MjpegAttempt) {
         val first = synchronized(stateLock) {
-            if (generation != run || mjpegFailureClaimed) return
-            val value = !mjpegHasRendered
-            mjpegHasRendered = true
+            if (mjpegAttempt !== attempt) return
+            val value = !attempt.hasRendered
+            attempt.hasRendered = true
             armMjpegWatchdogLocked(
-                run,
-                stallTimeoutMillis,
+                attempt,
+                attempt.config.mjpegStallTimeoutMillis,
                 "MJPEG stream stopped rendering frames",
             )
             value
         }
-        if (first) {
-            dispatchForGeneration(run) {
-                val active = synchronized(stateLock) { generation == run && !mjpegFailureClaimed }
-                if (active) listener.onStatusChanged(NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.MJPEG))
-            }
-        }
+        if (first) notifyMjpegStatus(attempt, NanoKvmVideoStatus.Streaming(NanoKvmVideoTransport.MJPEG))
     }
 
     private fun onMjpegFailure(
-        run: Long,
+        attempt: MjpegAttempt,
         cause: Throwable,
         reason: NanoKvmVideoFailureReason,
         expectedWatchdogEpoch: Long? = null,
     ) {
-        val oldSource: MjpegStreamReader?
         synchronized(stateLock) {
             if (
-                generation != run ||
-                mjpegFailureClaimed ||
+                mjpegAttempt !== attempt ||
                 (expectedWatchdogEpoch != null && expectedWatchdogEpoch != mjpegWatchdogEpoch)
             ) return
-            mjpegFailureClaimed = true
             cancelMjpegWatchdogLocked()
-            oldSource = mjpegSource
-            mjpegSource = null
+            mjpegAttempt = null
         }
-        oldSource?.stop()
+        attempt.close()
+        val run = attempt.run
         if (expectedWatchdogEpoch != null) {
             dispatchForGeneration(run) { listener.onVideoStalled(NanoKvmVideoTransport.MJPEG) }
         }
-        notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.MJPEG, cause, reason))
+        if (attempt.retryOnFirstFrameTimeout && reason == NanoKvmVideoFailureReason.FirstFrameTimeout) {
+            startMjpeg(run, attempt.config, retryOnFirstFrameTimeout = false)
+        } else {
+            notifyStatus(run, NanoKvmVideoStatus.Error(NanoKvmVideoTransport.MJPEG, cause, reason))
+        }
     }
 
-    private fun armMjpegWatchdogLocked(run: Long, delayMillis: Long, message: String) {
+    private fun armMjpegWatchdogLocked(attempt: MjpegAttempt, delayMillis: Long, message: String) {
         cancelMjpegWatchdogLocked()
         val watchdogEpoch = mjpegWatchdogEpoch
-        val reason = frameTimeoutReason(mjpegHasRendered)
+        val reason = frameTimeoutReason(attempt.hasRendered)
         mjpegWatchdog = watchdogExecutor.schedule(
             {
                 onMjpegFailure(
-                    run,
+                    attempt,
                     IllegalStateException(message),
                     reason,
                     expectedWatchdogEpoch = watchdogEpoch,
@@ -692,7 +647,7 @@ class NanoKvmVideoSession(
     private fun stopInternal(notify: Boolean): CompletableFuture<Unit> {
         val oldWebRtc: NanoKvmWebRtcSource?
         val oldH264: DirectH264WebSocketSource?
-        val oldMjpeg: MjpegStreamReader?
+        val oldMjpeg: MjpegAttempt?
         val oldRenderer: MediaCodecH264Renderer?
         val stoppedRun = synchronized(stateLock) {
             generation++
@@ -701,24 +656,21 @@ class NanoKvmVideoSession(
             cancelMjpegWatchdogLocked()
             oldWebRtc = webRtcSource
             oldH264 = h264Source
-            oldMjpeg = mjpegSource
+            oldMjpeg = mjpegAttempt
             oldRenderer = renderer
             webRtcSource = null
             h264Source = null
-            mjpegSource = null
+            mjpegAttempt = null
             renderer = null
             webRtcHasRendered = false
             webRtcFailureClaimed = false
             h264HasRendered = false
             h264FailureClaimed = false
-            mjpegHasRendered = false
-            mjpegFailureClaimed = false
             generation
         }
-        mjpegFrameDispatcher.clear()
         oldWebRtc?.close()
         oldH264?.stop()
-        oldMjpeg?.stop()
+        oldMjpeg?.close()
         val decoderReleased = oldRenderer?.stopAndAwaitRelease()
             ?: CompletableFuture.completedFuture(Unit)
         if (notify) notifyStatus(stoppedRun, NanoKvmVideoStatus.Stopped)
@@ -734,6 +686,15 @@ class NanoKvmVideoSession(
     private fun isH264Active(run: Long): Boolean = synchronized(stateLock) {
         generation == run && !h264FailureClaimed && renderer != null
     }
+
+    private fun isMjpegActive(attempt: MjpegAttempt): Boolean = synchronized(stateLock) {
+        mjpegAttempt === attempt
+    }
+
+    private fun notifyMjpegStatus(attempt: MjpegAttempt, status: NanoKvmVideoStatus) =
+        dispatchForGeneration(attempt.run) {
+            if (isMjpegActive(attempt)) listener.onStatusChanged(status)
+        }
 
     private fun notifyStatus(run: Long, status: NanoKvmVideoStatus) =
         dispatchForGeneration(run) { listener.onStatusChanged(status) }
@@ -774,45 +735,64 @@ class NanoKvmVideoSession(
         }
     }
 
-    private fun enqueueMjpegFrame(run: Long, config: NanoKvmVideoConfig, jpeg: ByteArray) {
-        if (!isCurrent(run)) return
-        val bitmap = MjpegBitmapDecoder.decode(jpeg, config.mjpegBitmapOptions) ?: return
-        if (!isCurrent(run)) {
-            bitmap.recycle()
-            return
-        }
-        mjpegFrameDispatcher.offer(
-            MjpegDelivery(run, bitmap, config.mjpegStallTimeoutMillis),
-        )
-    }
-
-    private fun deliverMjpegFrame(frame: MjpegDelivery) {
-        var bitmapTransferred = false
-        try {
-            if (!isCurrent(frame.run)) return
-            bitmapTransferred = listener.onMjpegBitmapFrame(frame.bitmap)
-            // A display callback may synchronously stop or replace this session.
-            if (bitmapTransferred && isCurrent(frame.run)) {
-                onMjpegFrameRendered(frame.run, frame.stallTimeoutMillis)
-            }
-        } finally {
-            if (!bitmapTransferred) recycle(frame.bitmap)
-        }
-    }
-
-    private fun discardMjpegFrame(frame: MjpegDelivery) {
-        recycle(frame.bitmap)
-    }
-
-    private fun recycle(bitmap: Bitmap) {
-        if (!bitmap.isRecycled) bitmap.recycle()
-    }
-
-    private data class MjpegDelivery(
+    private inner class MjpegAttempt(
         val run: Long,
-        val bitmap: Bitmap,
-        val stallTimeoutMillis: Long,
-    )
+        val config: NanoKvmVideoConfig,
+        val retryOnFirstFrameTimeout: Boolean,
+    ) : MjpegStreamListener {
+        // Accessed only under the session state lock.
+        var hasRendered = false
+        val reader = MjpegStreamReader(client, baseUrl, token, this, config.maxMjpegFrameBytes)
+        private val frames = LatestFrameDispatcher(
+            executor = callbackExecutor,
+            deliver = ::deliver,
+            discard = ::recycle,
+        )
+
+        override fun onConnecting() {
+            notifyMjpegStatus(this, NanoKvmVideoStatus.Connecting(NanoKvmVideoTransport.MJPEG))
+        }
+
+        override fun onJpegFrame(jpeg: ByteArray) {
+            if (!isMjpegActive(this)) return
+            val bitmap = MjpegBitmapDecoder.decode(jpeg, config.mjpegBitmapOptions) ?: return
+            if (isMjpegActive(this)) frames.offer(bitmap) else recycle(bitmap)
+        }
+
+        override fun onClosed() {
+            onMjpegFailure(
+                this,
+                IllegalStateException("MJPEG stream closed"),
+                NanoKvmVideoFailureReason.Transport,
+            )
+        }
+
+        override fun onFailure(cause: Throwable, responseCode: Int?) {
+            val rejection = responseCode?.takeUnless { it in 200..299 }
+            onMjpegFailure(this, cause, transportFailureReason(rejection))
+        }
+
+        fun close() {
+            reader.stop()
+            frames.clear()
+        }
+
+        private fun deliver(bitmap: Bitmap) {
+            var bitmapTransferred = false
+            try {
+                if (!isMjpegActive(this)) return
+                bitmapTransferred = listener.onMjpegBitmapFrame(bitmap)
+                // The display callback can synchronously stop or replace this attempt.
+                if (bitmapTransferred) onMjpegFrameRendered(this)
+            } finally {
+                if (!bitmapTransferred) recycle(bitmap)
+            }
+        }
+
+        private fun recycle(bitmap: Bitmap) {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
 }
 
 private fun transportFailureReason(responseCode: Int?): NanoKvmVideoFailureReason =
