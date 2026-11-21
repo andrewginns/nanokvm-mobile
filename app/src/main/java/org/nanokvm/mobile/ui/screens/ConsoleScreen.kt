@@ -863,6 +863,8 @@ internal fun ConsoleScreen(
             reserveCompactVideo -> fittedVideoHeight
             else -> availableHeight
         }
+        val controlsBelowVideo = presentation == ConsoleControlsPresentation.BottomDock ||
+            reserveCompactVideo || dockTabletopTools
         val consoleContentState = ConsoleContentState(
             destinationName = profile.name.ifBlank { profile.authority },
             authority = profile.authority,
@@ -877,10 +879,7 @@ internal fun ConsoleScreen(
             scrollSensitivity = scrollSensitivity,
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
-            viewNavigationVisible = viewNavigationVisible &&
-                !(controlsExpanded && (
-                    presentation == ConsoleControlsPresentation.BottomDock || dockTabletopTools
-                )),
+            viewNavigationVisible = viewNavigationVisible && !(controlsExpanded && controlsBelowVideo),
             quickActionsVisible = !controlsExpanded && !dockTabletopTools,
             showQuickActionLabels = !compactWidth &&
                 availableHeight.value >= COMPACT_PORTRAIT_MIN_HEIGHT_DP &&

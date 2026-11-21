@@ -2445,6 +2445,21 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun compactFittedVideoIsClearWhileControlsAreOpen() {
+        renderConsole(virtualWindow = DpSize(417.dp, 800.dp))
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("view-navigation-panel").assertDoesNotExist()
+        val preview = composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot
+        assertEquals(preview.width * 9f / 16f, preview.height, 1f)
+        assertEquals(1, backend.attachSurfaceCalls)
+        assertEquals(0, backend.detachSurfaceCalls)
+        composeRule.onNodeWithContentDescription("Close controls").performScrollTo().performClick()
+        composeRule.onNodeWithTag("view-navigation-panel").assertIsDisplayed()
+    }
+
+    @Test
     fun openingAndClosingAdaptiveControlsKeepsTheVideoSurfaceAttached() {
         renderConsole()
         composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
