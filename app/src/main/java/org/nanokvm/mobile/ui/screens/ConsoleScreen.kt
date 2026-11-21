@@ -2867,8 +2867,8 @@ private fun SheetAction(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     val contentColor = if (enabled) consoleColors.onSurface else consoleColors.onSurfaceMuted
