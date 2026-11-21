@@ -76,6 +76,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.adaptive.WindowAdaptiveInfo
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.separatingHorizontalHingeBounds
 import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
@@ -299,6 +300,7 @@ internal fun ConsoleScreen(
     onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit,
     passwordChangeInProgress: Boolean = false,
     canProtectPassword: Boolean = false,
+    windowAdaptiveInfo: WindowAdaptiveInfo = currentWindowAdaptiveInfo(),
     onPasswordChange: (
         destination: ApprovedAdministrationDestination,
         username: String,
@@ -326,7 +328,6 @@ internal fun ConsoleScreen(
             sessionUsable = session.connection.isSessionUsable,
         )
     }
-    val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val coreControls = features.core
     val phase3Controls = features.phase3
     val administrationControls = features.administration

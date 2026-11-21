@@ -21,6 +21,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.HingeInfo
+import androidx.compose.material3.adaptive.Posture
+import androidx.compose.material3.adaptive.WindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
@@ -63,6 +68,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
@@ -1863,7 +1869,11 @@ class ConsoleScreenInstrumentedTest {
 
     @Test
     fun controlSheetExposesAccessibleOneShotAuxiliaryMouseButtons() {
-        renderConsole(themeMode = ThemeMode.LIGHT, useDynamicColor = false)
+        renderConsole(
+            themeMode = ThemeMode.LIGHT,
+            useDynamicColor = false,
+            virtualWindow = DpSize(680.dp, 600.dp),
+        )
         val previewBeforeControls = composeRule.onNodeWithTag("remote-preview")
             .fetchSemanticsNode().boundsInRoot
 
@@ -1873,8 +1883,6 @@ class ConsoleScreenInstrumentedTest {
 
         composeRule.onNodeWithContentDescription("Open console controls").performClick()
         composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
-        // The horizontal rail is nested inside the vertically scrolling adaptive controls.
-        // Scroll the rail itself through the vertical ancestor before scrolling its children.
         composeRule.onNodeWithTag("console-mouse-controls")
             .performScrollTo()
         val middleButtonTextLayouts = mutableListOf<TextLayoutResult>()
@@ -2344,6 +2352,99 @@ class ConsoleScreenInstrumentedTest {
     }
 
     @Test
+    fun openingControlsReleasesRemoteKeysAndReturnsHardwareFocusOnClose() {
+        renderConsole()
+        fun dispatch(action: Int, key: Int) {
+            composeRule.runOnIdle { composeRule.activity.dispatchKeyEvent(KeyEvent(action, key)) }
+        }
+
+        dispatch(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A)
+        assertEquals(listOf(RemoteKey.A to true), backend.keyEvents)
+
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        assertEquals(listOf(RemoteKey.A to true, RemoteKey.A to false), backend.keyEvents)
+        dispatch(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_A)
+        dispatch(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_B)
+        dispatch(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_B)
+        assertEquals(2, backend.keyEvents.size)
+
+        composeRule.onNodeWithContentDescription("Close controls").performScrollTo().performClick()
+        dispatch(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_C)
+        dispatch(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_C)
+        assertEquals(listOf(RemoteKey.C to true, RemoteKey.C to false), backend.keyEvents.takeLast(2))
+    }
+
+    @OptIn(ExperimentalMaterial3AdaptiveApi::class)
+    @Test
+    fun tallDockAndTabletopKeepControlsBelowVideoWithOneSurface() {
+        val tabletop = mutableStateOf(false)
+        composeRule.setContent {
+            NanoKvmTheme {
+                DeviceConfigurationOverride(
+                    DeviceConfigurationOverride.WindowSize(DpSize(680.dp, 800.dp)),
+                ) {
+                    val adaptiveInfo = currentWindowAdaptiveInfo()
+                    val hingeTop = with(LocalDensity.current) { 375.dp.toPx() }
+                    val hingeBottom = with(LocalDensity.current) { 397.dp.toPx() }
+                    val hingeRight = with(LocalDensity.current) { 680.dp.toPx() }
+                    val posture = if (tabletop.value) {
+                        Posture(
+                            isTabletop = true,
+                            hingeList = listOf(
+                                HingeInfo(
+                                    bounds = Rect(0f, hingeTop, hingeRight, hingeBottom),
+                                    isFlat = false,
+                                    isVertical = false,
+                                    isSeparating = true,
+                                    isOccluding = true,
+                                ),
+                            ),
+                        )
+                    } else {
+                        Posture()
+                    }
+                    ConsoleScreen(
+                        profile = profile,
+                        session = backend.session.value,
+                        input = backend,
+                        videoSurface = backend,
+                        features = backend.features,
+                        onDisconnect = {},
+                        sessionDraftOwner = sessionDraftOwner,
+                        clipboardGateway = ClipboardGateway { ClipboardReadResult.Unavailable },
+                        onSharedPasteConsumed = {},
+                        onScrollSensitivityChange = {},
+                        onMjpegFrameDetectionEnabledChange = {},
+                        windowAdaptiveInfo = WindowAdaptiveInfo(adaptiveInfo.windowSizeClass, posture),
+                        onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+                    )
+                }
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
+        composeRule.onNodeWithContentDescription("Open console controls").performClick()
+        val preview = composeRule.onNodeWithTag("remote-preview")
+        val controls = composeRule.onNodeWithTag("console-control-sheet")
+        assertTrue(
+            preview.fetchSemanticsNode().boundsInRoot.bottom <=
+                controls.fetchSemanticsNode().boundsInRoot.top,
+        )
+        composeRule.onNodeWithTag("view-navigation-panel").assertDoesNotExist()
+
+        composeRule.runOnIdle { tabletop.value = true }
+        composeRule.onNodeWithTag("console-controls-tabletop").assertIsDisplayed()
+        assertTrue(
+            preview.fetchSemanticsNode().boundsInRoot.bottom <
+                controls.fetchSemanticsNode().boundsInRoot.top,
+        )
+        assertEquals(1, backend.attachSurfaceCalls)
+        assertEquals(0, backend.detachSurfaceCalls)
+        composeRule.onNodeWithContentDescription("Close controls").performScrollTo().performClick()
+        composeRule.onNodeWithContentDescription("Open console controls").assertIsDisplayed()
+        assertEquals(1, backend.attachSurfaceCalls)
+    }
+
+    @Test
     fun openingAndClosingAdaptiveControlsKeepsTheVideoSurfaceAttached() {
         renderConsole()
         composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
@@ -2441,7 +2542,7 @@ class ConsoleScreenInstrumentedTest {
             composeRule.runOnIdle { findTextureView(composeRule.activity.window.decorView) },
         )
 
-        composeRule.runOnIdle { layoutWidth.intValue = 600 }
+        composeRule.runOnIdle { layoutWidth.intValue = 620 }
         composeRule.onNodeWithTag("console-layout-single-pane").assertExists()
         composeRule.onNodeWithTag("console-quick-actions-icons").assertDoesNotExist()
         composeRule.onNodeWithTag("console-quick-actions-labelled").assertIsDisplayed()
@@ -2864,56 +2965,34 @@ class ConsoleScreenInstrumentedTest {
         useDynamicColor: Boolean = true,
         activity: ComponentActivity? = null,
         connectedSession: BackendSession = backend.session.value,
+        virtualWindow: DpSize? = if (compactLandscape) DpSize(360.dp, 240.dp) else null,
     ) {
+        val console: @Composable () -> Unit = {
+            ConsoleScreen(
+                profile = profile,
+                session = connectedSession,
+                input = backend,
+                videoSurface = backend,
+                features = backend.features,
+                onDisconnect = { backend.disconnectCalls++ },
+                sessionDraftOwner = sessionDraftOwner,
+                clipboardGateway = clipboardGateway,
+                pendingSharedPaste = pendingSharedPaste,
+                onSharedPasteConsumed = onSharedPasteConsumed,
+                onScrollSensitivityChange = {},
+                mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
+                onMjpegFrameDetectionEnabledChange = onMjpegFrameDetectionEnabledChange,
+                onPasswordChange = { _, _, password, _ -> password.fill('\u0000') },
+            )
+        }
         val content: @Composable () -> Unit = {
             NanoKvmTheme(themeMode = themeMode, useDynamicColor = useDynamicColor) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.TopStart,
-                ) {
-                    if (compactLandscape) {
-                        Box(Modifier.requiredSize(width = 360.dp, height = 240.dp)) {
-                            ConsoleScreen(
-                                profile = profile,
-                                session = connectedSession,
-                                input = backend,
-                                videoSurface = backend,
-                                features = backend.features,
-                                onDisconnect = { backend.disconnectCalls++ },
-                                sessionDraftOwner = sessionDraftOwner,
-                                clipboardGateway = clipboardGateway,
-                                pendingSharedPaste = pendingSharedPaste,
-                                onSharedPasteConsumed = onSharedPasteConsumed,
-                                onScrollSensitivityChange = {},
-                                mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
-                                onMjpegFrameDetectionEnabledChange =
-                                    onMjpegFrameDetectionEnabledChange,
-                                onPasswordChange = { _, _, password, _ ->
-                                    password.fill('\u0000')
-                                },
-                            )
-                        }
-                    } else {
-                        ConsoleScreen(
-                            profile = profile,
-                            session = connectedSession,
-                            input = backend,
-                            videoSurface = backend,
-                            features = backend.features,
-                            onDisconnect = { backend.disconnectCalls++ },
-                            sessionDraftOwner = sessionDraftOwner,
-                            clipboardGateway = clipboardGateway,
-                            pendingSharedPaste = pendingSharedPaste,
-                            onSharedPasteConsumed = onSharedPasteConsumed,
-                            onScrollSensitivityChange = {},
-                            mjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
-                            onMjpegFrameDetectionEnabledChange =
-                                onMjpegFrameDetectionEnabledChange,
-                            onPasswordChange = { _, _, password, _ ->
-                                password.fill('\u0000')
-                            },
-                        )
+                if (virtualWindow != null) {
+                    DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(virtualWindow)) {
+                        console()
                     }
+                } else {
+                    console()
                 }
             }
         }
@@ -3087,6 +3166,7 @@ private class RecordingConsoleBackend : ConsoleBackend {
     var relativeMoveCalls = 0
     var mouseButtonCalls = 0
     val mouseButtonEvents = mutableListOf<Pair<MouseButton, Boolean>>()
+    val keyEvents = mutableListOf<Pair<RemoteKey, Boolean>>()
     val scrollSteps = mutableListOf<Int>()
     val horizontalScrollSteps = mutableListOf<Int>()
     val powerActions = mutableListOf<PowerAction>()
@@ -3203,7 +3283,9 @@ private class RecordingConsoleBackend : ConsoleBackend {
         return RemoteTextEditResult.Submitted
     }
 
-    override fun key(key: RemoteKey, pressed: Boolean) = Unit
+    override fun key(key: RemoteKey, pressed: Boolean) {
+        keyEvents += key to pressed
+    }
     override fun releaseAllInput() {
         releaseAllCalls++
     }

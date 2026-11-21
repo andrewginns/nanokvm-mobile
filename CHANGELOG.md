@@ -7,6 +7,17 @@ production release unless it explicitly says so.
 
 ## Unreleased
 
+## [0.3.20] - 2026-11-21
+
+Android version code **30**. Includes the changes in the 0.3.18 and 0.3.19 drafts.
+
+- Dock console controls below the remote display when a tall window has room.
+  Fit controls to narrow panes and keep the video above a tabletop hinge.
+- Place Controls beside the video in book posture when both halves have room.
+  Release held remote input when opening Controls and restore console focus on close.
+- Edit connections beside the saved list in wide windows. Make full-size tool
+  dialogs easier to use on tablets and keep confirmation actions reachable.
+
 ## [0.3.19] - 2026-11-20
 
 Android version code **29**. Includes the console and appliance improvements
