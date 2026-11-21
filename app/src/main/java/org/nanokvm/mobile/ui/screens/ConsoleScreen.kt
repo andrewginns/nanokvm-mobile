@@ -113,6 +113,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -801,13 +802,8 @@ internal fun ConsoleScreen(
         ) {
         val availableWidth = maxWidth
         val availableHeight = maxHeight
-        val windowSizeClass = windowAdaptiveInfo.windowSizeClass
-        val expandedWidth = windowSizeClass.isWidthAtLeastBreakpoint(
-            WIDTH_DP_EXPANDED_LOWER_BOUND,
-        ) || availableWidth.value >= WIDTH_DP_EXPANDED_LOWER_BOUND.toFloat()
-        val compactWidth = !windowSizeClass.isWidthAtLeastBreakpoint(
-            WIDTH_DP_MEDIUM_LOWER_BOUND,
-        ) && availableWidth.value < WIDTH_DP_MEDIUM_LOWER_BOUND.toFloat()
+        val expandedWidth = availableWidth >= WIDTH_DP_EXPANDED_LOWER_BOUND.dp
+        val compactWidth = availableWidth < WIDTH_DP_MEDIUM_LOWER_BOUND.dp
         val presentation = consoleControlsPresentation(
             isExpandedWidth = expandedWidth,
             isCompactWidth = compactWidth,
@@ -845,7 +841,18 @@ internal fun ConsoleScreen(
                     requestClipboardPaste()
                 }
             },
-            onOpenControls = { controlsExpanded = true },
+            onOpenControls = {
+                if (!controlsExpanded) {
+                    if (pointerMode == PointerMode.Captured) {
+                        pointerCaptureController.release(PointerCaptureReleaseReason.FocusLost)
+                        pointerMode = PointerMode.Trackpad
+                    }
+                    releaseHardwareKeys()
+                    contextualInput.releaseAllInput()
+                    keyboardVisible = false
+                }
+                controlsExpanded = true
+            },
             onHideKeyboard = {
                 keyboardVisible = false
                 contextualInput.releaseAllInput()
@@ -929,6 +936,7 @@ internal fun ConsoleScreen(
         // pane value change across breakpoints, so the TextureView never leaves its composition
         // slot and the decoder Surface stays attached while the current window is resized.
         val scaffoldDirective = calculatePaneScaffoldDirective(windowAdaptiveInfo).copy(
+            maxHorizontalPartitions = if (expandedWidth) 2 else 1,
             horizontalPartitionSpacerSize = 0.dp,
             defaultPanePreferredWidth = SUPPORTING_PANE_WIDTH_DP.dp,
         )
@@ -2236,8 +2244,9 @@ private fun ConsoleControlSideSurface(
     content: @Composable () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
+    val title = stringResource(R.string.console_quick_controls)
     Surface(
-        modifier = modifier.testTag("console-control-sheet"),
+        modifier = modifier.testTag("console-control-sheet").semantics { paneTitle = title },
         color = consoleColors.controlSurfaceElevated,
         contentColor = consoleColors.onSurface,
         tonalElevation = 0.dp,
@@ -2352,6 +2361,8 @@ private fun ConsoleControlContent(
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val closeFocus = remember { FocusRequester() }
+    LaunchedEffect(closeFocus) { closeFocus.requestFocus() }
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -2362,6 +2373,7 @@ private fun ConsoleControlContent(
             Icons.AutoMirrored.Filled.KeyboardArrowRight,
             stringResource(R.string.console_close_controls),
             onClose,
+            modifier = Modifier.focusRequester(closeFocus),
         )
         SideSessionStatus(profile, session)
         SheetAction(
@@ -2746,11 +2758,12 @@ private fun SheetAction(
     label: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     val contentColor = if (enabled) consoleColors.onSurface else consoleColors.onSurfaceMuted
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
