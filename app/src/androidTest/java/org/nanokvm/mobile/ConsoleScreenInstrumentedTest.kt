@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.DeviceConfigurationOverride
+import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -58,6 +60,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -2371,15 +2374,15 @@ class ConsoleScreenInstrumentedTest {
     @Test
     fun resizingAcrossExpandedBreakpointMovesConsoleWithoutReattachingVideoSurface() {
         val layoutWidth = mutableIntStateOf(500)
+        var windowDensity = 1f
         composeRule.setContent {
             val session by backend.session.collectAsState()
             NanoKvmTheme {
-                Box(
-                    Modifier.requiredSize(
-                        width = layoutWidth.intValue.dp,
-                        height = 700.dp,
-                    ),
+                DeviceConfigurationOverride(
+                    DeviceConfigurationOverride.WindowSize(DpSize(layoutWidth.intValue.dp, 700.dp)),
                 ) {
+                    val density = LocalDensity.current.density
+                    androidx.compose.runtime.SideEffect { windowDensity = density }
                     ConsoleScreen(
                         profile = profile,
                         session = session,
@@ -2405,7 +2408,7 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithText("Controls").assertDoesNotExist()
         composeRule.waitUntil(timeoutMillis = 5_000) { backend.attachSurfaceCalls == 1 }
         val compactPreview = composeRule.onNodeWithTag("remote-preview")
-            .fetchSemanticsNode().boundsInRoot
+            .fetchSemanticsNode().boundsInRoot.width / windowDensity
         val originalTextureView = composeRule.runOnIdle {
             findTextureView(composeRule.activity.window.decorView)
         }
@@ -2425,7 +2428,7 @@ class ConsoleScreenInstrumentedTest {
             .fetchSemanticsNode().boundsInRoot
         assertTrue(
             "The test host must really cross into a wider expanded composition",
-            expandedPreview.width > compactPreview.width + 100f,
+            expandedPreview.width / windowDensity > compactPreview + 100f,
         )
         assertEquals(
             "Entering an expanded supporting-pane layout must retain the decoder Surface",
@@ -2464,11 +2467,8 @@ class ConsoleScreenInstrumentedTest {
         composeRule.setContent {
             val session by backend.session.collectAsState()
             NanoKvmTheme {
-                Box(
-                    Modifier.requiredSize(
-                        width = 900.dp,
-                        height = layoutHeight.intValue.dp,
-                    ),
+                DeviceConfigurationOverride(
+                    DeviceConfigurationOverride.WindowSize(DpSize(900.dp, layoutHeight.intValue.dp)),
                 ) {
                     ConsoleScreen(
                         profile = profile,
