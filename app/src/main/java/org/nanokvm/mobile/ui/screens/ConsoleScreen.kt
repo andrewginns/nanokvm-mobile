@@ -860,7 +860,7 @@ internal fun ConsoleScreen(
             tabletopHinge != null -> tabletopHinge.first.coerceAtMost(availableHeight)
             !controlsExpanded -> availableHeight
             presentation == ConsoleControlsPresentation.BottomDock -> fittedVideoHeight
-            reserveCompactVideo -> availableHeight * 0.5f
+            reserveCompactVideo -> fittedVideoHeight
             else -> availableHeight
         }
         val consoleContentState = ConsoleContentState(
@@ -1140,21 +1140,13 @@ internal fun ConsoleScreen(
         }
 
         if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
-            val sheetModifier = if (reserveCompactVideo) {
-                Modifier.heightIn(max = availableHeight - videoAreaHeight)
+            val maxSheetContentHeight = if (reserveCompactVideo) {
+                availableHeight - videoAreaHeight - SHEET_DRAG_HANDLE_HEIGHT
             } else {
-                Modifier
+                availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION
             }
-            ConsoleControlBottomSheet(
-                onDismiss = { controlsExpanded = false },
-                modifier = sheetModifier,
-            ) {
-                val contentModifier = if (reserveCompactVideo) {
-                    Modifier
-                } else {
-                    Modifier.heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION)
-                }
-                controlsContent(contentModifier.fillMaxWidth())
+            ConsoleControlBottomSheet(onDismiss = { controlsExpanded = false }) {
+                controlsContent(Modifier.fillMaxWidth().heightIn(max = maxSheetContentHeight))
             }
         }
     }
@@ -2380,13 +2372,12 @@ private fun ConsoleControlSideSurface(
 @Composable
 private fun ConsoleControlBottomSheet(
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        modifier = modifier.testTag("console-control-sheet"),
+        modifier = Modifier.testTag("console-control-sheet"),
         containerColor = consoleColors.controlSurfaceElevated,
         contentColor = consoleColors.onSurface,
         dragHandle = {
@@ -3600,6 +3591,8 @@ private const val MEDIUM_SIDE_SHEET_WIDTH_DP = 280f
 private const val SUPPORTING_PANE_WIDTH_DP = 320
 private const val MAX_SIDE_SHEET_WIDTH_FRACTION = 0.78f
 private const val BOTTOM_SHEET_MAX_HEIGHT_FRACTION = 0.78f
+// Material's drag handle is 48 dp tall. Leave a further 8 dp between it and fitted video.
+private val SHEET_DRAG_HANDLE_HEIGHT = 56.dp
 private const val CONTROL_SCRIM_ALPHA = 0.32f
 private val OFFLINE_UPDATE_MIME_TYPES = arrayOf(
     "application/gzip",
