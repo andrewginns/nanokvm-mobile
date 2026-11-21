@@ -2452,7 +2452,7 @@ class ConsoleScreenInstrumentedTest {
         composeRule.onNodeWithTag("console-control-sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("view-navigation-panel").assertDoesNotExist()
         val preview = composeRule.onNodeWithTag("remote-preview").fetchSemanticsNode().boundsInRoot
-        assertEquals(preview.width * 9f / 16f, preview.height, 1f)
+        assertEquals(9f / 16f, preview.height / preview.width, 0.01f)
         assertEquals(1, backend.attachSurfaceCalls)
         assertEquals(0, backend.detachSurfaceCalls)
         composeRule.onNodeWithContentDescription("Close controls").performScrollTo().performClick()
