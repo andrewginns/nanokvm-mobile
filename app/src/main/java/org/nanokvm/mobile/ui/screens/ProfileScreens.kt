@@ -1,5 +1,7 @@
 package org.nanokvm.mobile.ui.screens
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -115,6 +117,7 @@ fun ProfilesScreen(
     onRetryProfileStorage: () -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
     onUseDynamicColorChange: (Boolean) -> Unit,
+    profileActionsEnabled: Boolean = true,
 ) {
     var showAbout by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
@@ -152,7 +155,9 @@ fun ProfilesScreen(
             )
         },
         floatingActionButton = {
-            if (profileCatalogResolved && profileStorageIssue == null && !profileStorageBusy) {
+            if (profileActionsEnabled && profileCatalogResolved &&
+                profileStorageIssue == null && !profileStorageBusy
+            ) {
                 FloatingActionButton(
                     onClick = onAdd,
                     modifier = Modifier.semantics { contentDescription = addDescription },
@@ -197,6 +202,7 @@ fun ProfilesScreen(
                         ProfileCard(
                             profile = profile,
                             hasSavedPassword = profile.id in savedPasswordProfileIds,
+                            actionsEnabled = profileActionsEnabled,
                             onEdit = { onEdit(profile) },
                             onConnect = { onPrepareConnection(profile) },
                         )
@@ -325,7 +331,10 @@ private fun AppearanceDialog(
         icon = { Icon(Icons.Default.Palette, contentDescription = null) },
         title = { Text(stringResource(R.string.appearance_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
                     stringResource(R.string.appearance_theme_section),
                     style = MaterialTheme.typography.labelMedium,
@@ -490,6 +499,7 @@ private fun ProfileStorageRecoveryState(
 private fun ProfileCard(
     profile: HostProfile,
     hasSavedPassword: Boolean,
+    actionsEnabled: Boolean,
     onEdit: () -> Unit,
     onConnect: () -> Unit,
 ) {
@@ -539,6 +549,7 @@ private fun ProfileCard(
             trailingContent = {
                 IconButton(
                     onClick = onEdit,
+                    enabled = actionsEnabled,
                     modifier = Modifier.semantics { contentDescription = editDescription },
                 ) {
                     Icon(Icons.Default.Edit, contentDescription = null)
@@ -565,7 +576,10 @@ private fun ProfileCard(
                 style = MaterialTheme.typography.labelMedium,
                 color = securityColor,
             )
-            FilledTonalButton(onClick = if (profile.useHttps) onConnect else onEdit) {
+            FilledTonalButton(
+                onClick = if (profile.useHttps) onConnect else onEdit,
+                enabled = actionsEnabled,
+            ) {
                 if (!profile.useHttps) {
                     Text(stringResource(R.string.profile_upgrade_action))
                 } else if (hasSavedPassword) {
@@ -603,7 +617,10 @@ private fun PasswordDialog(
         icon = { Icon(Icons.Default.Lock, contentDescription = null) },
         title = { Text(stringResource(R.string.password_dialog_title, profile.name)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
                     stringResource(R.string.password_dialog_account, profile.username, profile.authority),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -2,6 +2,7 @@ package org.nanokvm.mobile.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -140,14 +142,21 @@ internal fun PasswordChangeDialog(
                     modifier = Modifier.fillMaxWidth().testTag("password-change-confirmation"),
                 )
                 Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .toggleable(
+                            value = saveProtectedCredential,
+                            enabled = protectedCredentialAvailable,
+                            role = Role.Checkbox,
+                            onValueChange = { saveProtectedCredential = it },
+                        )
+                        .testTag("password-change-save"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Checkbox(
                         checked = saveProtectedCredential,
-                        onCheckedChange = { saveProtectedCredential = it },
+                        onCheckedChange = null,
                         enabled = protectedCredentialAvailable,
-                        modifier = Modifier.testTag("password-change-save"),
                     )
                     Text(stringResource(R.string.password_change_save_with_android))
                 }

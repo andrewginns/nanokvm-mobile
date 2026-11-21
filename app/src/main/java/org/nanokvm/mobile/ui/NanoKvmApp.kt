@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,12 +33,19 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
+import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldValue
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -129,38 +137,48 @@ fun NanoKvmApp(
         ) { outerPadding ->
             Box(Modifier.fillMaxSize().padding(outerPadding)) {
                 when (val screen = state.screen) {
-                    AppScreen.Profiles -> ProfilesScreen(
-                        profiles = state.profiles,
-                        profileCatalogResolved = state.profileCatalogResolved,
-                        savedPasswordProfileIds = state.savedPasswordProfileIds,
-                        profileStorageIssue = state.profileStorageIssue,
-                        profileStorageBusy = state.profileStorageBusy,
-                        passwordEntryProfile = state.passwordEntryProfile,
-                        canSavePassword = credentialAuthenticator.canProtectPasswords,
-                        themeMode = state.themeMode,
-                        useDynamicColor = state.useDynamicColor,
-                        dynamicColorAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
-                        onThemeModeChange = viewModel::setThemeMode,
-                        onUseDynamicColorChange = viewModel::setUseDynamicColor,
-                        onAdd = viewModel::addProfile,
-                        onEdit = viewModel::editProfile,
-                        onPrepareConnection = viewModel::prepareConnection,
-                        onSubmitPassword = viewModel::submitPassword,
-                        onDismissPassword = viewModel::dismissPasswordEntry,
-                        onRemoveSavedCredential = viewModel::removeSavedCredential,
-                        onResetProfileStorage = viewModel::resetProfileStorage,
-                        onRetryProfileStorage = viewModel::retryProfileStorage,
-                    )
-                    is AppScreen.EditProfile -> ProfileEditorScreen(
-                        initial = screen.profile,
-                        isNew = screen.isNew,
-                        mutation = state.profileMutation,
-                        hasSavedPassword = screen.profile.id in state.savedPasswordProfileIds,
-                        onSave = viewModel::saveProfile,
-                        onDelete = if (screen.isNew) null else viewModel::deleteProfile,
-                        onRemoveSavedPassword = viewModel::removeSavedCredential,
-                        onForgetCertificate = viewModel::forgetProfileCertificate,
-                        onCancel = viewModel::cancelToProfiles,
+                    AppScreen.Profiles, is AppScreen.EditProfile -> ProfilesWorkspace(
+                        editing = screen is AppScreen.EditProfile,
+                        list = {
+                            ProfilesScreen(
+                                profiles = state.profiles,
+                                profileCatalogResolved = state.profileCatalogResolved,
+                                savedPasswordProfileIds = state.savedPasswordProfileIds,
+                                profileStorageIssue = state.profileStorageIssue,
+                                profileStorageBusy = state.profileStorageBusy,
+                                profileActionsEnabled = screen !is AppScreen.EditProfile,
+                                passwordEntryProfile = state.passwordEntryProfile,
+                                canSavePassword = credentialAuthenticator.canProtectPasswords,
+                                themeMode = state.themeMode,
+                                useDynamicColor = state.useDynamicColor,
+                                dynamicColorAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+                                onThemeModeChange = viewModel::setThemeMode,
+                                onUseDynamicColorChange = viewModel::setUseDynamicColor,
+                                onAdd = viewModel::addProfile,
+                                onEdit = viewModel::editProfile,
+                                onPrepareConnection = viewModel::prepareConnection,
+                                onSubmitPassword = viewModel::submitPassword,
+                                onDismissPassword = viewModel::dismissPasswordEntry,
+                                onRemoveSavedCredential = viewModel::removeSavedCredential,
+                                onResetProfileStorage = viewModel::resetProfileStorage,
+                                onRetryProfileStorage = viewModel::retryProfileStorage,
+                            )
+                        },
+                        detail = {
+                            if (screen is AppScreen.EditProfile) {
+                                ProfileEditorScreen(
+                                    initial = screen.profile,
+                                    isNew = screen.isNew,
+                                    mutation = state.profileMutation,
+                                    hasSavedPassword = screen.profile.id in state.savedPasswordProfileIds,
+                                    onSave = viewModel::saveProfile,
+                                    onDelete = if (screen.isNew) null else viewModel::deleteProfile,
+                                    onRemoveSavedPassword = viewModel::removeSavedCredential,
+                                    onForgetCertificate = viewModel::forgetProfileCertificate,
+                                    onCancel = viewModel::cancelToProfiles,
+                                )
+                            }
+                        },
                     )
                     is AppScreen.Connecting -> ConnectingScreen(
                         profile = screen.profile,
@@ -229,6 +247,53 @@ fun NanoKvmApp(
         ) {
             viewModel.cancelToProfiles()
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+internal fun ProfilesWorkspace(
+    editing: Boolean,
+    list: @Composable () -> Unit,
+    detail: @Composable () -> Unit,
+) {
+    val adaptiveInfo = currentWindowAdaptiveInfo()
+    val stateHolder = rememberSaveableStateHolder()
+    BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+        val showBoth = maxWidth >= 840.dp && maxHeight >= 480.dp
+        val directive = calculatePaneScaffoldDirective(adaptiveInfo).copy(
+            maxHorizontalPartitions = if (showBoth) 2 else 1,
+            defaultPanePreferredWidth = 360.dp,
+            horizontalPartitionSpacerSize = 1.dp,
+        )
+        ListDetailPaneScaffold(
+            directive = directive,
+            value = ThreePaneScaffoldValue(
+                primary = if (editing || showBoth) PaneAdaptedValue.Expanded else PaneAdaptedValue.Hidden,
+                secondary = if (!editing || showBoth) PaneAdaptedValue.Expanded else PaneAdaptedValue.Hidden,
+                tertiary = PaneAdaptedValue.Hidden,
+            ),
+            listPane = {
+                Box(Modifier.fillMaxSize().testTag("profiles-list-pane")) {
+                    stateHolder.SaveableStateProvider("profiles") { list() }
+                }
+            },
+            detailPane = {
+                Box(Modifier.fillMaxSize().testTag("profiles-detail-pane")) {
+                    if (editing) {
+                        detail()
+                    } else {
+                        Text(
+                            stringResource(R.string.profiles_detail_empty),
+                            modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 

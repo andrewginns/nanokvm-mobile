@@ -60,6 +60,7 @@
     <string name="appearance_theme_dark">Dark</string>
     <string name="appearance_dynamic_color_title">Use device colours</string>
     <string name="appearance_dynamic_color_description">Use colours based on your Android wallpaper. The remote console remains neutral.</string>
+    <string name="profiles_detail_empty">Edit a saved connection or add a new one.</string>
     <string name="profiles_add_content_description">Add a NanoKVM profile</string>
     <string name="profiles_loading">Loading saved connections…</string>
     <string name="profiles_empty_title">No saved connections</string>

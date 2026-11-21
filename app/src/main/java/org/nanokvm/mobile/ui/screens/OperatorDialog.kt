@@ -1,9 +1,12 @@
 package org.nanokvm.mobile.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -145,7 +148,7 @@ internal fun OperatorDialog(
             onDismiss()
         }
     }
-    AlertDialog(
+    WorkspaceAlertDialog(
         modifier = Modifier.fillMaxWidth(),
         onDismissRequest = requestDismiss,
         title = {
@@ -260,7 +263,7 @@ internal fun OperatorDialog(
                                     Text(stringResource(R.string.console_operator_resize_80x24))
                                 }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 TextButton(
                                     onClick = { controls.sendOperatorTerminalInput(destination, "\t") },
                                     enabled = controlsEnabled,
@@ -366,7 +369,7 @@ internal fun OperatorDialog(
                 item(key = "scripts-header") {
                     OperatorSection(stringResource(R.string.console_operator_scripts)) {
                         if (state.loadingScripts) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 CircularProgressIndicator()
                                 Text(stringResource(R.string.console_operator_loading_scripts))
                             }
@@ -646,7 +649,7 @@ private fun ConfirmOperatorActionDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.console_operator_confirm_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     stringResource(
                         R.string.console_operator_confirm_destination,

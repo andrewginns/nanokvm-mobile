@@ -323,7 +323,7 @@ private fun BundledAboutDocumentDialog(
         }
     }
 
-    AlertDialog(
+    WorkspaceAlertDialog(
         modifier = Modifier.testTag("about-document-dialog"),
         onDismissRequest = onDismiss,
         title = { Text(stringResource(document.titleResource)) },
@@ -339,7 +339,7 @@ private fun BundledAboutDocumentDialog(
                 )
                 is AboutDocumentContent.Available -> LazyColumn(
                     modifier = Modifier
-                        .heightIn(min = 240.dp, max = 560.dp)
+                        .heightIn(max = 560.dp)
                         .testTag("about-document-content"),
                 ) {
                     itemsIndexed(current.chunks) { index, chunk ->
