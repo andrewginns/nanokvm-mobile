@@ -76,6 +76,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.adaptive.WindowAdaptiveInfo
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.separatingHorizontalHingeBounds
 import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
@@ -299,6 +300,7 @@ internal fun ConsoleScreen(
     onMjpegFrameDetectionEnabledChange: (Boolean) -> Unit,
     passwordChangeInProgress: Boolean = false,
     canProtectPassword: Boolean = false,
+    windowAdaptiveInfo: WindowAdaptiveInfo = currentWindowAdaptiveInfo(),
     onPasswordChange: (
         destination: ApprovedAdministrationDestination,
         username: String,
@@ -326,7 +328,6 @@ internal fun ConsoleScreen(
             sessionUsable = session.connection.isSessionUsable,
         )
     }
-    val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val coreControls = features.core
     val phase3Controls = features.phase3
     val administrationControls = features.administration
@@ -859,9 +860,11 @@ internal fun ConsoleScreen(
             tabletopHinge != null -> tabletopHinge.first.coerceAtMost(availableHeight)
             !controlsExpanded -> availableHeight
             presentation == ConsoleControlsPresentation.BottomDock -> fittedVideoHeight
-            reserveCompactVideo -> availableHeight * 0.5f
+            reserveCompactVideo -> fittedVideoHeight
             else -> availableHeight
         }
+        val controlsBelowVideo = presentation == ConsoleControlsPresentation.BottomDock ||
+            reserveCompactVideo || dockTabletopTools
         val consoleContentState = ConsoleContentState(
             destinationName = profile.name.ifBlank { profile.authority },
             authority = profile.authority,
@@ -876,10 +879,7 @@ internal fun ConsoleScreen(
             scrollSensitivity = scrollSensitivity,
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
-            viewNavigationVisible = viewNavigationVisible &&
-                !(controlsExpanded && (
-                    presentation == ConsoleControlsPresentation.BottomDock || dockTabletopTools
-                )),
+            viewNavigationVisible = viewNavigationVisible && !(controlsExpanded && controlsBelowVideo),
             quickActionsVisible = !controlsExpanded && !dockTabletopTools,
             showQuickActionLabels = !compactWidth &&
                 availableHeight.value >= COMPACT_PORTRAIT_MIN_HEIGHT_DP &&
@@ -1139,21 +1139,13 @@ internal fun ConsoleScreen(
         }
 
         if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
-            val sheetModifier = if (reserveCompactVideo) {
-                Modifier.heightIn(max = availableHeight - videoAreaHeight)
+            val maxSheetContentHeight = if (reserveCompactVideo) {
+                availableHeight - videoAreaHeight - SHEET_DRAG_HANDLE_HEIGHT
             } else {
-                Modifier
+                availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION
             }
-            ConsoleControlBottomSheet(
-                onDismiss = { controlsExpanded = false },
-                modifier = sheetModifier,
-            ) {
-                val contentModifier = if (reserveCompactVideo) {
-                    Modifier
-                } else {
-                    Modifier.heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION)
-                }
-                controlsContent(contentModifier.fillMaxWidth())
+            ConsoleControlBottomSheet(onDismiss = { controlsExpanded = false }) {
+                controlsContent(Modifier.fillMaxWidth().heightIn(max = maxSheetContentHeight))
             }
         }
     }
@@ -2379,13 +2371,12 @@ private fun ConsoleControlSideSurface(
 @Composable
 private fun ConsoleControlBottomSheet(
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        modifier = modifier.testTag("console-control-sheet"),
+        modifier = Modifier.testTag("console-control-sheet"),
         containerColor = consoleColors.controlSurfaceElevated,
         contentColor = consoleColors.onSurface,
         dragHandle = {
@@ -2876,8 +2867,8 @@ private fun SheetAction(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     val contentColor = if (enabled) consoleColors.onSurface else consoleColors.onSurfaceMuted
@@ -3599,6 +3590,8 @@ private const val MEDIUM_SIDE_SHEET_WIDTH_DP = 280f
 private const val SUPPORTING_PANE_WIDTH_DP = 320
 private const val MAX_SIDE_SHEET_WIDTH_FRACTION = 0.78f
 private const val BOTTOM_SHEET_MAX_HEIGHT_FRACTION = 0.78f
+// Material's drag handle is 48 dp tall. Leave a further 8 dp between it and fitted video.
+private val SHEET_DRAG_HANDLE_HEIGHT = 56.dp
 private const val CONTROL_SCRIM_ALPHA = 0.32f
 private val OFFLINE_UPDATE_MIME_TYPES = arrayOf(
     "application/gzip",
