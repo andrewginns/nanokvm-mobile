@@ -61,6 +61,27 @@ class ConsoleLayoutTest {
     }
 
     @Test
+    fun mediumWidthDocksOnlyWithRoomForVideoAndControls() {
+        assertEquals(
+            ConsoleControlsPresentation.BottomDock,
+            consoleControlsPresentation(
+                isExpandedWidth = false,
+                isCompactWidth = false,
+                heightDp = 744f,
+                videoAndControlsFit = true,
+            ),
+        )
+        assertEquals(
+            ConsoleControlsPresentation.SideOverlay,
+            consoleControlsPresentation(
+                isExpandedWidth = false,
+                isCompactWidth = false,
+                heightDp = 744f,
+            ),
+        )
+    }
+
+    @Test
     fun compactHeightOverridesExpandedWidth() {
         assertEquals(
             ConsoleControlsPresentation.SideOverlay,

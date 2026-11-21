@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -804,11 +805,25 @@ internal fun ConsoleScreen(
         val availableHeight = maxHeight
         val expandedWidth = availableWidth >= WIDTH_DP_EXPANDED_LOWER_BOUND.dp
         val compactWidth = availableWidth < WIDTH_DP_MEDIUM_LOWER_BOUND.dp
+        val fittedVideoHeight = if (session.remoteWidth > 0 && session.remoteHeight > 0) {
+            availableWidth * (session.remoteHeight.toFloat() / session.remoteWidth)
+        } else {
+            availableHeight
+        }
+        val videoAndControlsFit = availableHeight - fittedVideoHeight >= MIN_BOTTOM_DOCK_HEIGHT
         val presentation = consoleControlsPresentation(
             isExpandedWidth = expandedWidth,
             isCompactWidth = compactWidth,
             heightDp = availableHeight.value,
+            videoAndControlsFit = videoAndControlsFit,
         )
+        val videoAreaHeight = when {
+            !controlsExpanded -> availableHeight
+            presentation == ConsoleControlsPresentation.BottomDock -> fittedVideoHeight
+            presentation == ConsoleControlsPresentation.BottomSheet &&
+                fittedVideoHeight <= availableHeight * 0.5f -> availableHeight * 0.5f
+            else -> availableHeight
+        }
         val consoleContentState = ConsoleContentState(
             destinationName = profile.name.ifBlank { profile.authority },
             authority = profile.authority,
@@ -824,8 +839,10 @@ internal fun ConsoleScreen(
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
             viewNavigationVisible = viewNavigationVisible,
-            showQuickActionLabels =
-                availableWidth.value >= WIDTH_DP_MEDIUM_LOWER_BOUND.toFloat(),
+            quickActionsVisible = !controlsExpanded,
+            showQuickActionLabels = !compactWidth &&
+                availableHeight.value >= COMPACT_PORTRAIT_MIN_HEIGHT_DP &&
+                LocalDensity.current.fontScale < LARGE_TEXT_LAYOUT_FONT_SCALE,
             viewportCommand = viewportCommand,
             immersiveMode = immersiveMode,
             onExitImmersive = { immersiveMode = false },
@@ -951,93 +968,106 @@ internal fun ConsoleScreen(
             },
             tertiary = PaneAdaptedValue.Hidden,
         )
-        SupportingPaneScaffold(
-            directive = scaffoldDirective,
-            value = scaffoldValue,
-            mainPane = {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag(
-                            if (presentation == ConsoleControlsPresentation.SupportingPane) {
-                                "console-layout-supporting-pane"
-                            } else {
-                                "console-layout-single-pane"
-                            },
-                        ),
-                ) {
-                    ConsoleMainContent(consoleContentState)
-                    if (pointerCaptureState != PointerCaptureState.Idle) {
-                        PointerCaptureStatus(
-                            state = pointerCaptureState,
-                            onRetry = pointerCaptureController::request,
-                            onRelease = {
-                                pointerCaptureController.release(
-                                    PointerCaptureReleaseReason.User,
-                                )
-                                pointerMode = PointerMode.Trackpad
-                            },
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(8.dp)
-                        )
-                    }
-                    if (picoClawState?.value?.manualInputBlockedOrUncertain == true) {
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(8.dp)
-                                .testTag("picoclaw-global-hid-lock"),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            shape = MaterialTheme.shapes.large,
-                            tonalElevation = 6.dp,
-                        ) {
-                            Text(
-                                stringResource(R.string.picoclaw_global_lock),
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                style = MaterialTheme.typography.labelLarge,
+        Box(Modifier.fillMaxSize()) {
+            SupportingPaneScaffold(
+                directive = scaffoldDirective,
+                value = scaffoldValue,
+                mainPane = {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .testTag(
+                                if (presentation == ConsoleControlsPresentation.SupportingPane) {
+                                    "console-layout-supporting-pane"
+                                } else {
+                                    "console-layout-single-pane"
+                                },
+                            ),
+                    ) {
+                        ConsoleMainContent(consoleContentState)
+                        if (pointerCaptureState != PointerCaptureState.Idle) {
+                            PointerCaptureStatus(
+                                state = pointerCaptureState,
+                                onRetry = pointerCaptureController::request,
+                                onRelease = {
+                                    pointerCaptureController.release(
+                                        PointerCaptureReleaseReason.User,
+                                    )
+                                    pointerMode = PointerMode.Trackpad
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(8.dp)
                             )
                         }
-                    }
-                    if (
-                        controlsExpanded &&
-                        presentation == ConsoleControlsPresentation.SideOverlay
-                    ) {
-                        val closeControlsLabel = stringResource(R.string.console_close_controls)
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = CONTROL_SCRIM_ALPHA))
-                                .clickable(
-                                    onClickLabel = closeControlsLabel,
-                                    onClick = { controlsExpanded = false },
+                        if (picoClawState?.value?.manualInputBlockedOrUncertain == true) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(8.dp)
+                                    .testTag("picoclaw-global-hid-lock"),
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                shape = MaterialTheme.shapes.large,
+                                tonalElevation = 6.dp,
+                            ) {
+                                Text(
+                                    stringResource(R.string.picoclaw_global_lock),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelLarge,
                                 )
-                                .semantics { contentDescription = closeControlsLabel }
-                                .testTag("console-control-scrim"),
-                        )
-                        ConsoleControlSideSurface(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .width(consoleSideSheetWidth(availableWidth.value).dp)
-                                .fillMaxHeight(),
+                            }
+                        }
+                        if (
+                            controlsExpanded &&
+                            presentation == ConsoleControlsPresentation.SideOverlay
                         ) {
+                            val closeControlsLabel = stringResource(R.string.console_close_controls)
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = CONTROL_SCRIM_ALPHA))
+                                    .clickable(
+                                        onClickLabel = closeControlsLabel,
+                                        onClick = { controlsExpanded = false },
+                                    )
+                                    .semantics { contentDescription = closeControlsLabel }
+                                    .testTag("console-control-scrim"),
+                            )
+                            ConsoleControlSideSurface(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .width(consoleSideSheetWidth(availableWidth.value).dp)
+                                    .fillMaxHeight(),
+                            ) {
+                                controlsContent(Modifier.fillMaxSize())
+                            }
+                        }
+                    }
+                },
+                supportingPane = {
+                    if (
+                        presentation == ConsoleControlsPresentation.SupportingPane && controlsExpanded
+                    ) {
+                        ConsoleControlSideSurface(modifier = Modifier.fillMaxSize()) {
                             controlsContent(Modifier.fillMaxSize())
                         }
                     }
-                }
-            },
-            supportingPane = {
-                if (
-                    presentation == ConsoleControlsPresentation.SupportingPane && controlsExpanded
+                },
+                modifier = Modifier.fillMaxWidth().height(videoAreaHeight),
+            )
+            if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomDock) {
+                ConsoleControlSideSurface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(availableHeight - videoAreaHeight)
+                        .testTag("console-controls-bottom-dock"),
                 ) {
-                    ConsoleControlSideSurface(modifier = Modifier.fillMaxSize()) {
-                        controlsContent(Modifier.fillMaxSize())
-                    }
+                    controlsContent(Modifier.fillMaxSize())
                 }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+            }
+        }
 
             if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
                 ConsoleControlBottomSheet(
@@ -1467,6 +1497,7 @@ private data class ConsoleContentState(
     val keyboardVisible: Boolean,
     val keyboardLayout: KeyboardLayout,
     val viewNavigationVisible: Boolean,
+    val quickActionsVisible: Boolean,
     val showQuickActionLabels: Boolean,
     val viewportCommand: ViewportCommand?,
     val immersiveMode: Boolean,
@@ -1502,6 +1533,7 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             keyboardVisible = state.keyboardVisible,
             keyboardLayout = state.keyboardLayout,
             viewNavigationVisible = state.viewNavigationVisible,
+            quickActionsVisible = state.quickActionsVisible,
             showQuickActionLabels = state.showQuickActionLabels,
             viewportCommand = state.viewportCommand,
             immersiveMode = state.immersiveMode,
@@ -1517,7 +1549,7 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             onStopReconnect = state.onStopReconnect,
             onDisconnect = state.onDisconnect,
         )
-        if (!state.viewNavigationVisible) {
+        if (state.quickActionsVisible && !state.viewNavigationVisible) {
             ConsoleQuickActions(
                 session = state.session,
                 keyboardVisible = state.keyboardVisible,
@@ -1548,6 +1580,7 @@ private fun ConsoleBody(
     keyboardVisible: Boolean,
     keyboardLayout: KeyboardLayout,
     viewNavigationVisible: Boolean,
+    quickActionsVisible: Boolean,
     showQuickActionLabels: Boolean,
     viewportCommand: ViewportCommand?,
     immersiveMode: Boolean,
@@ -1581,7 +1614,7 @@ private fun ConsoleBody(
                 keyboardVisible = keyboardVisible,
                 viewportCommand = viewportCommand,
                 navigationActions = {
-                    ConsoleQuickActions(
+                    if (quickActionsVisible) ConsoleQuickActions(
                         session = session,
                         keyboardVisible = keyboardVisible,
                         showLabels = showQuickActionLabels,
@@ -1845,7 +1878,6 @@ private fun ConsoleQuickActions(
     val statusDescription = listOf(connectionStatus, sessionSummary)
         .filter(String::isNotBlank)
         .joinToString(stringResource(R.string.console_status_separator))
-    val useLargeTextLayout = LocalDensity.current.fontScale >= LARGE_TEXT_LAYOUT_FONT_SCALE
     val actionItems: @Composable () -> Unit = {
         ConsoleQuickAction(
             icon = Icons.Default.Keyboard,
@@ -1900,26 +1932,14 @@ private fun ConsoleQuickActions(
         tonalElevation = 0.dp,
         shadowElevation = 4.dp,
     ) {
-        if (useLargeTextLayout) {
-            Column(
-                modifier = Modifier
-                    .padding(4.dp)
-                    .testTag("console-quick-actions-labelled"),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                actionItems()
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .padding(4.dp)
-                    .testTag("console-quick-actions-labelled"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                actionItems()
-            }
+        Row(
+            modifier = Modifier
+                .padding(4.dp)
+                .testTag("console-quick-actions-labelled"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            actionItems()
         }
     }
 }
@@ -2375,28 +2395,6 @@ private fun ConsoleControlContent(
             onClose,
             modifier = Modifier.focusRequester(closeFocus),
         )
-        SideSessionStatus(profile, session)
-        SheetAction(
-            Icons.Default.Refresh,
-            stringResource(
-                if (session.status == ConsoleMessage.AuthenticationExpired) R.string.console_sign_in_again
-                else R.string.console_reconnect_stream,
-            ),
-            onReconnect,
-            enabled = session.connection != ConnectionState.Reconnecting,
-        )
-        SheetAction(
-            Icons.Default.FitScreen,
-            stringResource(
-                if (immersiveMode) R.string.console_exit_immersive else R.string.console_enter_immersive,
-            ),
-            onImmersiveMode,
-        )
-        SheetAction(
-            Icons.Default.LinkOff,
-            stringResource(R.string.console_disconnect),
-            onDisconnect,
-        )
         SheetToggle(
             Icons.Default.Keyboard,
             stringResource(
@@ -2445,6 +2443,28 @@ private fun ConsoleControlContent(
             onViewNavigation,
         )
         MouseClickControls(onMouseClick)
+        SideSessionStatus(profile, session)
+        SheetAction(
+            Icons.Default.Refresh,
+            stringResource(
+                if (session.status == ConsoleMessage.AuthenticationExpired) R.string.console_sign_in_again
+                else R.string.console_reconnect_stream,
+            ),
+            onReconnect,
+            enabled = session.connection != ConnectionState.Reconnecting,
+        )
+        SheetAction(
+            Icons.Default.FitScreen,
+            stringResource(
+                if (immersiveMode) R.string.console_exit_immersive else R.string.console_enter_immersive,
+            ),
+            onImmersiveMode,
+        )
+        SheetAction(
+            Icons.Default.LinkOff,
+            stringResource(R.string.console_disconnect),
+            onDisconnect,
+        )
         SheetAction(
             Icons.Default.FitScreen,
             stringResource(R.string.console_fit_view),
@@ -2509,10 +2529,9 @@ private fun PointerModeChoices(
             style = MaterialTheme.typography.labelMedium,
             color = LocalConsoleColorScheme.current.onSurfaceMuted,
         )
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .testTag("console-pointer-mode-choices"),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -2592,10 +2611,9 @@ private fun MouseClickControls(onClick: (MouseButton) -> Unit) {
             style = MaterialTheme.typography.labelMedium,
             color = LocalConsoleColorScheme.current.onSurfaceMuted,
         )
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .testTag("console-mouse-button-actions"),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -3411,16 +3429,18 @@ private fun MoreActionsDialog(
     )
 }
 
-internal enum class ConsoleControlsPresentation { BottomSheet, SideOverlay, SupportingPane }
+internal enum class ConsoleControlsPresentation { BottomSheet, SideOverlay, BottomDock, SupportingPane }
 
 internal fun consoleControlsPresentation(
     isExpandedWidth: Boolean,
     isCompactWidth: Boolean,
     heightDp: Float,
+    videoAndControlsFit: Boolean = false,
 ): ConsoleControlsPresentation = when {
     heightDp < COMPACT_PORTRAIT_MIN_HEIGHT_DP -> ConsoleControlsPresentation.SideOverlay
-    isExpandedWidth -> ConsoleControlsPresentation.SupportingPane
     isCompactWidth -> ConsoleControlsPresentation.BottomSheet
+    isExpandedWidth -> ConsoleControlsPresentation.SupportingPane
+    videoAndControlsFit -> ConsoleControlsPresentation.BottomDock
     else -> ConsoleControlsPresentation.SideOverlay
 }
 
@@ -3445,6 +3465,7 @@ private fun connectionLabel(state: ConnectionState): String = stringResource(
 )
 
 private const val MEDIUM_WIDTH_DP = 600f
+private val MIN_BOTTOM_DOCK_HEIGHT = 240.dp
 private const val COMPACT_PORTRAIT_MIN_HEIGHT_DP = 480f
 private const val COMPACT_SIDE_SHEET_WIDTH_DP = 216f
 private const val MEDIUM_SIDE_SHEET_WIDTH_DP = 280f
