@@ -3,8 +3,11 @@ package org.nanokvm.mobile.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -100,7 +103,7 @@ internal fun AutomationDialog(
         if (state.autostartDirty) discardDraft = ::dismiss else dismiss()
     }
 
-    AlertDialog(
+    WorkspaceAlertDialog(
         modifier = Modifier.fillMaxWidth(),
         onDismissRequest = ::requestDismiss,
         title = {
@@ -134,7 +137,7 @@ internal fun AutomationDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item(key = "tabs") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         FilterChip(
                             selected = state.tab == AutomationTab.HID,
                             onClick = { controller.selectTab(AutomationTab.HID) },
@@ -149,7 +152,7 @@ internal fun AutomationDialog(
                 }
                 if (state.loading) {
                     item(key = "loading") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             CircularProgressIndicator()
                             Text(stringResource(R.string.automation_loading))
                         }
@@ -312,7 +315,7 @@ private fun LazyListScope.hidAutomationContent(
         }
     }
     item(key = "hid-recorder-actions") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             OutlinedButton(onClick = onClear, enabled = enabled && recordedKeys.isNotEmpty()) {
                 Text(stringResource(R.string.automation_clear))
             }
@@ -347,7 +350,7 @@ private fun LazyListScope.hidAutomationContent(
         }
     }
     item(key = "hid-leader-actions") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             OutlinedButton(
                 onClick = { onSetLeader(recordedKeys.firstOrNull()?.wireCode) },
                 enabled = enabled && leaderKeyAvailable &&
@@ -385,7 +388,7 @@ private fun HidShortcutCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedButton(
                     onClick = { onReviewAction(shortcut, NanoKvmHidShortcutAction.RUN) },
                     enabled = enabled && shortcut.runnable,
@@ -547,7 +550,7 @@ private fun AutomationConfirmationDialog(
         modifier = Modifier.testTag("automation-confirmation"),
         onDismissRequest = { if (!operationInProgress) onCancel() },
         title = { Text(stringResource(R.string.automation_confirm_title)) },
-        text = { Text(message) },
+        text = { Text(message, Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = {
             Button(
                 onClick = onConfirm,

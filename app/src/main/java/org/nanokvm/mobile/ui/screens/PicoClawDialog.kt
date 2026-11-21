@@ -120,7 +120,7 @@ internal fun PicoClawDialog(
         }
     }
 
-    AlertDialog(
+    WorkspaceAlertDialog(
         modifier = Modifier.testTag("picoclaw-dialog"),
         onDismissRequest = dismiss,
         title = { Text(stringResource(R.string.picoclaw_title)) },
@@ -385,7 +385,7 @@ private fun PicoClawRuntimeSection(
             )
         }
     }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         OutlinedButton(onClick = onRefresh, enabled = enabled) { Text(stringResource(R.string.picoclaw_refresh)) }
         OutlinedButton(onClick = onInstall, enabled = enabled && !state.installed) { Text(stringResource(R.string.picoclaw_install)) }
         OutlinedButton(onClick = onStart, enabled = enabled && state.installed && !state.ready) { Text(stringResource(R.string.picoclaw_start)) }
@@ -393,7 +393,7 @@ private fun PicoClawRuntimeSection(
         OutlinedButton(onClick = onUninstall, enabled = enabled && state.installed) { Text(stringResource(R.string.picoclaw_uninstall)) }
     }
     Text(stringResource(R.string.picoclaw_profile), style = MaterialTheme.typography.titleSmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         PicoClawProfile.entries.forEach { profile ->
             FilterChip(
                 selected = state.profile == profile,
@@ -440,7 +440,7 @@ private fun PicoClawHistorySection(
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(history.title, style = MaterialTheme.typography.titleSmall)
                 Text(history.preview, maxLines = 2)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = { onOpen(history.id) }) { Text(stringResource(R.string.picoclaw_open_history)) }
                     TextButton(onClick = { onDelete(history.id) }) { Text(stringResource(R.string.picoclaw_delete_history)) }
                 }
@@ -478,7 +478,7 @@ private fun PicoClawChatSection(
         enabled = open,
         maxLines = 4,
     )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Button(onClick = onSend, enabled = open && message.isNotBlank()) { Text(stringResource(R.string.picoclaw_send)) }
         OutlinedButton(onClick = onCancel, enabled = open) { Text(stringResource(R.string.picoclaw_cancel_run)) }
     }

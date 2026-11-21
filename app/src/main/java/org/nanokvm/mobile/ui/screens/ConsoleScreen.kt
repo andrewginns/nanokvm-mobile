@@ -876,7 +876,10 @@ internal fun ConsoleScreen(
             scrollSensitivity = scrollSensitivity,
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
-            viewNavigationVisible = viewNavigationVisible && !dockTabletopTools,
+            viewNavigationVisible = viewNavigationVisible &&
+                !(controlsExpanded && (
+                    presentation == ConsoleControlsPresentation.BottomDock || dockTabletopTools
+                )),
             quickActionsVisible = !controlsExpanded && !dockTabletopTools,
             showQuickActionLabels = !compactWidth &&
                 availableHeight.value >= COMPACT_PORTRAIT_MIN_HEIGHT_DP &&
@@ -1135,22 +1138,24 @@ internal fun ConsoleScreen(
             }
         }
 
-            if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
-                val sheetContentMaxHeight = if (reserveCompactVideo) {
-                    availableHeight - videoAreaHeight - SHEET_HANDLE_SPACE
-                } else {
-                    availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION
-                }
-                ConsoleControlBottomSheet(
-                    onDismiss = { controlsExpanded = false },
-                ) {
-                    controlsContent(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = sheetContentMaxHeight),
-                    )
-                }
+        if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
+            val sheetModifier = if (reserveCompactVideo) {
+                Modifier.heightIn(max = availableHeight - videoAreaHeight)
+            } else {
+                Modifier
             }
+            ConsoleControlBottomSheet(
+                onDismiss = { controlsExpanded = false },
+                modifier = sheetModifier,
+            ) {
+                val contentModifier = if (reserveCompactVideo) {
+                    Modifier
+                } else {
+                    Modifier.heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION)
+                }
+                controlsContent(contentModifier.fillMaxWidth())
+            }
+        }
     }
 
     if (overlay == ConsoleOverlay.VideoSettings) {
@@ -2374,12 +2379,13 @@ private fun ConsoleControlSideSurface(
 @Composable
 private fun ConsoleControlBottomSheet(
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        modifier = Modifier.testTag("console-control-sheet"),
+        modifier = modifier.testTag("console-control-sheet"),
         containerColor = consoleColors.controlSurfaceElevated,
         contentColor = consoleColors.onSurface,
         dragHandle = {
@@ -2951,7 +2957,10 @@ private fun ScrollSettingsDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.console_scroll_settings_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
                     stringResource(R.string.console_scroll_settings_description),
                     style = MaterialTheme.typography.bodyMedium,
@@ -3299,7 +3308,10 @@ private fun ConfirmPowerDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     stringResource(
                         R.string.console_confirm_host_target,
@@ -3316,6 +3328,14 @@ private fun ConfirmPowerDialog(
             Button(
                 onClick = onConfirm,
                 modifier = Modifier.testTag("power-confirmation-action"),
+                colors = if (action == PowerAction.Reset || action is PowerAction.LongPress) {
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    )
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
             ) {
                 Text(confirmLabel)
             }
@@ -3341,7 +3361,10 @@ private fun DisconnectConfirmationDialog(
             Text(stringResource(R.string.console_disconnect_title, destinationName))
         },
         text = {
-            Text(stringResource(R.string.console_disconnect_detail, authority))
+            Text(
+                stringResource(R.string.console_disconnect_detail, authority),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            )
         },
         confirmButton = {
             Button(
@@ -3566,7 +3589,6 @@ private fun connectionLabel(state: ConnectionState): String = stringResource(
 )
 
 private const val MEDIUM_WIDTH_DP = 600f
-private val SHEET_HANDLE_SPACE = 32.dp
 private val MIN_BOTTOM_DOCK_HEIGHT = 240.dp
 private val MIN_BOOK_PANE_WIDTH = 280.dp
 private val MIN_TABLETOP_VIDEO_HEIGHT = 96.dp

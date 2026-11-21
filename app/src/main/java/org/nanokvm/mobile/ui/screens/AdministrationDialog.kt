@@ -165,7 +165,7 @@ internal fun AdministrationDialog(
 
     val controlsEnabled = state.available && !state.loading && !state.operationInProgress &&
         !passwordChangeInProgress
-    AlertDialog(
+    WorkspaceAlertDialog(
         modifier = Modifier.fillMaxWidth(),
         onDismissRequest = onDismiss,
         title = {
@@ -990,7 +990,7 @@ private fun ConfirmAdministrationActionDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.console_admin_confirm_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     stringResource(
                         R.string.console_admin_confirm_destination,
