@@ -77,6 +77,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.separatingHorizontalHingeBounds
+import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.SupportingPaneScaffold
@@ -92,12 +94,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
@@ -175,6 +181,7 @@ import org.nanokvm.mobile.ui.components.ConsoleKeyboard
 import org.nanokvm.mobile.ui.components.ImmersiveModeEffect
 import org.nanokvm.mobile.ui.components.LocalEscapeKeyInterceptor
 import org.nanokvm.mobile.ui.components.PointerMode
+import org.nanokvm.mobile.ui.components.RemoteScrollPad
 import org.nanokvm.mobile.ui.components.RemoteViewport
 import org.nanokvm.mobile.ui.components.ViewportAction
 import org.nanokvm.mobile.ui.components.ViewportCommand
@@ -744,6 +751,10 @@ internal fun ConsoleScreen(
         }
     }
 
+    var contentOrigin by remember { mutableStateOf<Offset?>(null) }
+    val keyboardContent = remember {
+        movableContentOf<ConsoleContentState> { state -> ConsoleKeyboardContent(state) }
+    }
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -811,17 +822,44 @@ internal fun ConsoleScreen(
             availableHeight
         }
         val videoAndControlsFit = availableHeight - fittedVideoHeight >= MIN_BOTTOM_DOCK_HEIGHT
+        val density = LocalDensity.current
+        val posture = windowAdaptiveInfo.windowPosture
+        val bookPanesFit = contentOrigin?.let { origin ->
+            with(density) {
+                posture.separatingVerticalHingeBounds.any { hinge ->
+                    (hinge.left - origin.x).toDp() >= MIN_BOOK_PANE_WIDTH &&
+                        availableWidth - (hinge.right - origin.x).toDp() >= MIN_BOOK_PANE_WIDTH
+                }
+            }
+        } == true
+        val tabletopHinge = contentOrigin?.takeIf { posture.isTabletop }?.let { origin ->
+            with(density) {
+                posture.separatingHorizontalHingeBounds.firstOrNull {
+                    it.right > origin.x && it.left < origin.x + availableWidth.toPx() &&
+                        (it.top - origin.y).toDp() >= MIN_TABLETOP_VIDEO_HEIGHT
+                }?.let { hinge ->
+                    (hinge.top - origin.y).toDp() to (hinge.bottom - origin.y).toDp()
+                }
+            }
+        }
+        val tabletopDockHeight = tabletopHinge?.let { (availableHeight - it.second).coerceAtLeast(0.dp) }
+        val dockTabletopTools =
+            tabletopDockHeight != null && tabletopDockHeight >= MIN_TABLETOP_TOOL_HEIGHT
         val presentation = consoleControlsPresentation(
             isExpandedWidth = expandedWidth,
             isCompactWidth = compactWidth,
-            heightDp = availableHeight.value,
+            heightDp = (tabletopHinge?.first ?: availableHeight).value,
             videoAndControlsFit = videoAndControlsFit,
+            bookPanesFit = bookPanesFit,
+            tabletop = dockTabletopTools,
         )
+        val reserveCompactVideo = presentation == ConsoleControlsPresentation.BottomSheet &&
+            fittedVideoHeight <= availableHeight * 0.5f
         val videoAreaHeight = when {
+            tabletopHinge != null -> tabletopHinge.first.coerceAtMost(availableHeight)
             !controlsExpanded -> availableHeight
             presentation == ConsoleControlsPresentation.BottomDock -> fittedVideoHeight
-            presentation == ConsoleControlsPresentation.BottomSheet &&
-                fittedVideoHeight <= availableHeight * 0.5f -> availableHeight * 0.5f
+            reserveCompactVideo -> availableHeight * 0.5f
             else -> availableHeight
         }
         val consoleContentState = ConsoleContentState(
@@ -838,8 +876,8 @@ internal fun ConsoleScreen(
             scrollSensitivity = scrollSensitivity,
             keyboardVisible = keyboardVisible,
             keyboardLayout = keyboardLayout,
-            viewNavigationVisible = viewNavigationVisible,
-            quickActionsVisible = !controlsExpanded,
+            viewNavigationVisible = viewNavigationVisible && !dockTabletopTools,
+            quickActionsVisible = !controlsExpanded && !dockTabletopTools,
             showQuickActionLabels = !compactWidth &&
                 availableHeight.value >= COMPACT_PORTRAIT_MIN_HEIGHT_DP &&
                 LocalDensity.current.fontScale < LARGE_TEXT_LAYOUT_FONT_SCALE,
@@ -953,7 +991,7 @@ internal fun ConsoleScreen(
         // pane value change across breakpoints, so the TextureView never leaves its composition
         // slot and the decoder Surface stays attached while the current window is resized.
         val scaffoldDirective = calculatePaneScaffoldDirective(windowAdaptiveInfo).copy(
-            maxHorizontalPartitions = if (expandedWidth) 2 else 1,
+            maxHorizontalPartitions = if (bookPanesFit || expandedWidth) 2 else 1,
             horizontalPartitionSpacerSize = 0.dp,
             defaultPanePreferredWidth = SUPPORTING_PANE_WIDTH_DP.dp,
         )
@@ -968,7 +1006,11 @@ internal fun ConsoleScreen(
             },
             tertiary = PaneAdaptedValue.Hidden,
         )
-        Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier.fillMaxSize().onGloballyPositioned {
+                contentOrigin = it.positionInWindow()
+            },
+        ) {
             SupportingPaneScaffold(
                 directive = scaffoldDirective,
                 value = scaffoldValue,
@@ -984,7 +1026,9 @@ internal fun ConsoleScreen(
                                 },
                             ),
                     ) {
-                        ConsoleMainContent(consoleContentState)
+                        ConsoleMainContent(consoleContentState) {
+                            if (!dockTabletopTools) keyboardContent(consoleContentState)
+                        }
                         if (pointerCaptureState != PointerCaptureState.Idle) {
                             PointerCaptureStatus(
                                 state = pointerCaptureState,
@@ -1061,22 +1105,49 @@ internal fun ConsoleScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(availableHeight - videoAreaHeight)
-                        .testTag("console-controls-bottom-dock"),
+                        .height(availableHeight - videoAreaHeight),
                 ) {
                     controlsContent(Modifier.fillMaxSize())
+                }
+            }
+            if (tabletopDockHeight != null && tabletopDockHeight >= MIN_TABLETOP_TOOL_HEIGHT) {
+                Column(
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(tabletopDockHeight)
+                        .testTag("console-controls-tabletop"),
+                ) {
+                    Box(Modifier.fillMaxWidth().weight(1f)) {
+                        if (controlsExpanded) {
+                            ConsoleControlSideSurface(modifier = Modifier.fillMaxSize()) {
+                                controlsContent(Modifier.fillMaxSize())
+                            }
+                        } else {
+                            TabletopQuickControls(
+                                state = consoleContentState,
+                                showViewPad = viewNavigationVisible,
+                                modifier = Modifier.align(Alignment.Center),
+                            )
+                        }
+                    }
+                    keyboardContent(consoleContentState)
                 }
             }
         }
 
             if (controlsExpanded && presentation == ConsoleControlsPresentation.BottomSheet) {
+                val sheetContentMaxHeight = if (reserveCompactVideo) {
+                    availableHeight - videoAreaHeight - SHEET_HANDLE_SPACE
+                } else {
+                    availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION
+                }
                 ConsoleControlBottomSheet(
                     onDismiss = { controlsExpanded = false },
                 ) {
                     controlsContent(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(max = availableHeight * BOTTOM_SHEET_MAX_HEIGHT_FRACTION),
+                            .heightIn(max = sheetContentMaxHeight),
                     )
                 }
             }
@@ -1515,7 +1586,10 @@ private data class ConsoleContentState(
 )
 
 @Composable
-private fun ConsoleMainContent(state: ConsoleContentState) {
+private fun ConsoleMainContent(
+    state: ConsoleContentState,
+    keyboard: @Composable () -> Unit,
+) {
     Box(Modifier.fillMaxSize()) {
         ConsoleBody(
             modifier = Modifier.fillMaxSize(),
@@ -1523,31 +1597,23 @@ private fun ConsoleMainContent(state: ConsoleContentState) {
             authority = state.authority,
             session = state.session,
             input = state.input,
-            keyboardContextBoundary = state.keyboardContextBoundary,
-            correctionContextKey = state.correctionContextKey,
             videoSurface = state.videoSurface,
             pointerMode = state.pointerMode,
             pointerCaptureController = state.pointerCaptureController,
             fitRequest = state.fitRequest,
             scrollSensitivity = state.scrollSensitivity,
             keyboardVisible = state.keyboardVisible,
-            keyboardLayout = state.keyboardLayout,
             viewNavigationVisible = state.viewNavigationVisible,
             quickActionsVisible = state.quickActionsVisible,
             showQuickActionLabels = state.showQuickActionLabels,
             viewportCommand = state.viewportCommand,
-            immersiveMode = state.immersiveMode,
-            onExitImmersive = state.onExitImmersive,
             onKeyboard = state.onKeyboard,
-            onKeyboardLayoutChange = state.onKeyboardLayoutChange,
             onClipboard = state.onClipboard,
             onOpenControls = state.onOpenControls,
-            onHideKeyboard = state.onHideKeyboard,
-            onViewportAction = state.onViewportAction,
-            onCtrlAltDelete = state.onCtrlAltDelete,
             onRetryConnection = state.onRetryConnection,
             onStopReconnect = state.onStopReconnect,
             onDisconnect = state.onDisconnect,
+            keyboard = keyboard,
         )
         if (state.quickActionsVisible && !state.viewNavigationVisible) {
             ConsoleQuickActions(
@@ -1570,31 +1636,23 @@ private fun ConsoleBody(
     authority: String,
     session: BackendSession,
     input: RemoteInputSink,
-    keyboardContextBoundary: KeyboardContextBoundary,
-    correctionContextKey: KeyboardCorrectionContextKey,
     videoSurface: VideoSurfaceSink,
     pointerMode: PointerMode,
     pointerCaptureController: PointerCaptureController,
     fitRequest: Int,
     scrollSensitivity: Float,
     keyboardVisible: Boolean,
-    keyboardLayout: KeyboardLayout,
     viewNavigationVisible: Boolean,
     quickActionsVisible: Boolean,
     showQuickActionLabels: Boolean,
     viewportCommand: ViewportCommand?,
-    immersiveMode: Boolean,
-    onExitImmersive: () -> Unit,
     onKeyboard: () -> Unit,
-    onKeyboardLayoutChange: (KeyboardLayout) -> Unit,
     onClipboard: () -> Unit,
     onOpenControls: () -> Unit,
-    onHideKeyboard: () -> Unit,
-    onViewportAction: (ViewportAction) -> Unit,
-    onCtrlAltDelete: () -> Unit,
     onRetryConnection: () -> Unit,
     onStopReconnect: () -> Unit,
     onDisconnect: () -> Unit,
+    keyboard: @Composable () -> Unit,
 ) {
     val consoleColors = LocalConsoleColorScheme.current
     Column(modifier) {
@@ -1808,21 +1866,58 @@ private fun ConsoleBody(
                 }
             }
         }
-        ConsoleKeyboard(
-            input = input,
-            contextBoundary = keyboardContextBoundary,
-            correctionContextKey = correctionContextKey,
-            visible = keyboardVisible,
-            releaseGeneration = session.inputReleaseGeneration,
-            interceptLocalEscape = immersiveMode,
-            onLocalEscape = onExitImmersive,
-            layout = keyboardLayout,
-            onLayoutChange = onKeyboardLayoutChange,
-            onClose = onHideKeyboard,
-            onCtrlAltDelete = onCtrlAltDelete,
-            onViewportAction = onViewportAction,
-            modifier = Modifier.testTag("keyboard-accessory"),
+        keyboard()
+    }
+}
+
+@Composable
+private fun ConsoleKeyboardContent(state: ConsoleContentState) {
+    ConsoleKeyboard(
+        input = state.input,
+        contextBoundary = state.keyboardContextBoundary,
+        correctionContextKey = state.correctionContextKey,
+        visible = state.keyboardVisible,
+        releaseGeneration = state.session.inputReleaseGeneration,
+        interceptLocalEscape = state.immersiveMode,
+        onLocalEscape = state.onExitImmersive,
+        layout = state.keyboardLayout,
+        onLayoutChange = state.onKeyboardLayoutChange,
+        onClose = state.onHideKeyboard,
+        onCtrlAltDelete = state.onCtrlAltDelete,
+        onViewportAction = state.onViewportAction,
+        modifier = Modifier.testTag("keyboard-accessory"),
+    )
+}
+
+@Composable
+private fun TabletopQuickControls(
+    state: ConsoleContentState,
+    showViewPad: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        modifier = modifier.padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        ConsoleQuickActions(
+            session = state.session,
+            keyboardVisible = state.keyboardVisible,
+            showLabels = state.showQuickActionLabels,
+            onKeyboard = state.onKeyboard,
+            onClipboard = state.onClipboard,
+            onOpenControls = state.onOpenControls,
         )
+        if (showViewPad) {
+            RemoteScrollPad(
+                input = state.input,
+                sensitivity = state.scrollSensitivity,
+                modifier = Modifier.size(48.dp),
+            )
+            IconButton(onClick = { state.onViewportAction(ViewportAction.Fit) }) {
+                Icon(Icons.Default.FitScreen, stringResource(R.string.console_fit_remote_view))
+            }
+        }
     }
 }
 
@@ -3429,14 +3524,20 @@ private fun MoreActionsDialog(
     )
 }
 
-internal enum class ConsoleControlsPresentation { BottomSheet, SideOverlay, BottomDock, SupportingPane }
+internal enum class ConsoleControlsPresentation {
+    BottomSheet, SideOverlay, BottomDock, SupportingPane, Tabletop,
+}
 
 internal fun consoleControlsPresentation(
     isExpandedWidth: Boolean,
     isCompactWidth: Boolean,
     heightDp: Float,
     videoAndControlsFit: Boolean = false,
+    bookPanesFit: Boolean = false,
+    tabletop: Boolean = false,
 ): ConsoleControlsPresentation = when {
+    tabletop -> ConsoleControlsPresentation.Tabletop
+    bookPanesFit -> ConsoleControlsPresentation.SupportingPane
     heightDp < COMPACT_PORTRAIT_MIN_HEIGHT_DP -> ConsoleControlsPresentation.SideOverlay
     isCompactWidth -> ConsoleControlsPresentation.BottomSheet
     isExpandedWidth -> ConsoleControlsPresentation.SupportingPane
@@ -3465,7 +3566,11 @@ private fun connectionLabel(state: ConnectionState): String = stringResource(
 )
 
 private const val MEDIUM_WIDTH_DP = 600f
+private val SHEET_HANDLE_SPACE = 32.dp
 private val MIN_BOTTOM_DOCK_HEIGHT = 240.dp
+private val MIN_BOOK_PANE_WIDTH = 280.dp
+private val MIN_TABLETOP_VIDEO_HEIGHT = 96.dp
+private val MIN_TABLETOP_TOOL_HEIGHT = 72.dp
 private const val COMPACT_PORTRAIT_MIN_HEIGHT_DP = 480f
 private const val COMPACT_SIDE_SHEET_WIDTH_DP = 216f
 private const val MEDIUM_SIDE_SHEET_WIDTH_DP = 280f

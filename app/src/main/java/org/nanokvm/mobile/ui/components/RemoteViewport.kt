@@ -920,7 +920,7 @@ private fun ViewNavigationPad(
 }
 
 @Composable
-private fun RemoteScrollPad(
+internal fun RemoteScrollPad(
     input: RemoteInputSink,
     sensitivity: Float,
     modifier: Modifier = Modifier,
