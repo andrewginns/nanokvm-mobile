@@ -1,4 +1,12 @@
-# NanoKVM Mobile
+# Comet KVM Mobile
+
+An independent Android console for the GL.iNet Comet GL-RM1, derived from NanoKVM Mobile. The first release will focus on direct video, touch and keyboard control, and recovery from interrupted connections.
+
+[Comet console implementation plan](docs/COMET_CONSOLE_PLAN.md)
+
+## NanoKVM Mobile upstream documentation
+
+The documentation and release links below describe the original NanoKVM application. Comet support is in planning.
 
 [![Latest release](https://img.shields.io/github/v/release/andrewginns/nanokvm-mobile?label=release)](https://github.com/andrewginns/nanokvm-mobile/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
