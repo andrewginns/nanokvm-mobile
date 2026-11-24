@@ -1,4 +1,8 @@
-# NanoKVM protocol module
+# Console protocol module
+
+The GL-RM1 client is `CometClient`. It owns the reviewed HTTPS origin, form login and session cookie. `CometHid` encodes keyboard and mouse events for the control socket. [Comet wire contract](../docs/COMET_CONSOLE_PLAN.md#stock-protocol-observations-used-by-the-android-client)
+
+## Upstream NanoKVM client
 
 This Android/JVM library implements the console-facing NanoKVM application protocol for server
 versions 2.3.2 and newer. It contains no UI and does not persist credentials.

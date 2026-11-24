@@ -1,7 +1,7 @@
 # GitHub APK release checklist
 
 Use this checklist when publishing new APK bytes. Keep each release record with
-its GitHub release. [Latest release](https://github.com/andrewginns/nanokvm-mobile/releases/latest)
+its GitHub release. [Latest release](https://github.com/andrewginns/comet-kvm-mobile/releases/latest)
 
 ## Release identity
 
@@ -10,7 +10,7 @@ its GitHub release. [Latest release](https://github.com/andrewginns/nanokvm-mobi
   compatibility, privacy/security effects, and known limitations.
 - [ ] The worktree is clean and the source is frozen under the recorded release
   tag and commit.
-- [ ] The exact preceding production APK and the public signing lineage in
+- [ ] The exact preceding production APK (for updates) and the public signing lineage in
   `release/production-signing-lineage.json` are available.
 
 ## Build and review
@@ -18,7 +18,7 @@ its GitHub release. [Latest release](https://github.com/andrewginns/nanokvm-mobi
 - [ ] The full strict local gate in [Testing](TESTING.md) passes with JDK 21.
 - [ ] Dependency changes have reviewed verification metadata, inventory,
   licences, source locations, and vulnerability dispositions.
-- [ ] `NanoKVM-Mobile-X.Y.Z-runtime-sources.json` maps every resolved external
+- [ ] `Comet-Mobile-X.Y.Z-runtime-sources.json` maps every resolved external
   runtime component/family to an exact source revision and hashed retained
   archive, or explicitly marks metadata-only entries, as defined in
   [Distribution](DISTRIBUTION.md).
@@ -34,11 +34,10 @@ its GitHub release. [Latest release](https://github.com/andrewginns/nanokvm-mobi
   without clearing profiles, pins, or protected credentials.
 - [ ] A representative physical Android phone runs connection, certificate
   review, login, first frame, keyboard/pointer input, foreground recovery, and
-  reconnect against a real NanoKVM.
-- [ ] H.264 and MJPEG are exercised; WebRTC is exercised when the release or
-  target uses it. The NanoKVM hardware and application version are recorded.
+  reconnect against an authorized GL-RM1.
+- [ ] Direct H.264, HDMI loss, session expiry and held-input recovery are exercised on stock 1.10.3 release1. Record 1080p and 4K30 results.
 - [ ] Changed features pass their applicable cases in
-  [the appliance test plan](APPLIANCE_TEST_PLAN.md). Destructive cases use a
+  [the Comet console plan](COMET_CONSOLE_PLAN.md). Destructive cases use a
   disposable or recovery-capable target.
 - [ ] Changed UI is checked for large text, light/dark theme, keyboard focus,
   screen rotation or resizing, and accessibility semantics.
@@ -65,5 +64,5 @@ scope in the release notes.
   unintended-input, data-loss, or corresponding-source defects.
 
 Record the release owner, date, tag/commit, APK SHA-256, signing certificate
-SHA-256, Android device, NanoKVM hardware/application version, and the outcome
+SHA-256, Android device, Comet hardware/firmware version, and the outcome
 of each applicable check with the release evidence.

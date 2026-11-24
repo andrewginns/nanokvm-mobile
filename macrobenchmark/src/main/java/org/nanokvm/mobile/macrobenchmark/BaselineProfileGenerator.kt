@@ -57,9 +57,9 @@ class BaselineProfileGenerator {
     )
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
-        const val ADD_PROFILE_DESCRIPTION = "Add a NanoKVM profile"
-        const val PROFILE_EDITOR_TITLE = "Add NanoKVM"
+        const val TARGET_PACKAGE = "org.cometkvm.mobile"
+        const val ADD_PROFILE_DESCRIPTION = "Add a Comet profile"
+        const val PROFILE_EDITOR_TITLE = "Add Comet"
         const val MAX_PROFILE_ITERATIONS = 15
         const val REQUIRED_STABLE_ITERATIONS = 3
         const val UI_TIMEOUT_MS = 5_000L

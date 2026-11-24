@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible NanoKVM Mobile problem without including secrets.
+description: Report a reproducible Comet Mobile problem without including secrets.
 title: "[Bug]: "
 body:
   - type: markdown
@@ -23,11 +23,11 @@ body:
     validations:
       required: true
   - type: input
-    id: nanokvm
+    id: comet
     attributes:
-      label: NanoKVM target
-      description: Hardware type and application/image version. Do not include its address, key, password, or certificate fingerprint.
-      placeholder: "Cube, application 2.4.3"
+      label: Comet model and firmware
+      description: Include the Comet model and firmware version. Do not include its address, key, password, or certificate fingerprint.
+      placeholder: "GL-RM1, 1.10.3 release1"
     validations:
       required: true
   - type: dropdown
@@ -36,13 +36,10 @@ body:
       label: Area
       options:
         - Connection, login, or certificate review
-        - Video or transport fallback
+        - Direct H.264 video or HDMI signal
         - Keyboard, mouse, pan, zoom, or scrolling
         - Clipboard or Android share target
-        - Virtual media or Wake-on-LAN
-        - Administration or update
-        - Terminal, scripts, or automation
-        - PicoClaw
+        - Session expiry or reconnect
         - Appearance, layout, or accessibility
         - Build, installation, or update signing
         - Other
@@ -51,8 +48,8 @@ body:
   - type: input
     id: transport
     attributes:
-      label: Video transport
-      description: If relevant, state Auto, WebRTC, H.264, or MJPEG and any observed fallback.
+      label: Connection and video
+      description: If relevant, include LAN or VPN, the source resolution, and the status shown in the console.
   - type: textarea
     id: steps
     attributes:

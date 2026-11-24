@@ -6,11 +6,12 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class HostProfile(
     val id: String = UUID.randomUUID().toString(),
-    val name: String = "NanoKVM",
+    val name: String = "Comet",
     val host: String = "192.0.2.250",
     val port: Int = 443,
     val useHttps: Boolean = true,
     val username: String = "admin",
+    val requiresTotp: Boolean = false,
     val trustedCertificateSha256: String? = null,
 ) {
     val authority: String
@@ -23,6 +24,6 @@ data class HostProfile(
         get() = "${if (useHttps) "https" else "http"}://$authority"
 
     companion object {
-        val Default = HostProfile(id = "default-nanokvm")
+        val Default = HostProfile(id = "default-comet")
     }
 }

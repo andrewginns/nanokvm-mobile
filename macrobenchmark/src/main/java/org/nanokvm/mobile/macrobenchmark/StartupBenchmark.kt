@@ -55,6 +55,6 @@ class StartupBenchmark {
     )
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
+        const val TARGET_PACKAGE = "org.cometkvm.mobile"
     }
 }

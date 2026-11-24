@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check `docs/WEBUI_PARITY.md` first. A native presentation may replace a browser-specific WebUI feature when it preserves the useful outcome and safety boundary.
+        See `docs/COMET_CONSOLE_PLAN.md` for the current console scope.
   - type: textarea
     id: problem
     attributes:
@@ -22,8 +22,8 @@ body:
   - type: input
     id: compatibility
     attributes:
-      label: NanoKVM and Android scope
-      description: Known NanoKVM application/hardware dependency and Android versions or device types.
+      label: Comet and Android scope
+      description: Comet model, firmware version and relevant Android devices or versions.
   - type: dropdown
     id: risk
     attributes:

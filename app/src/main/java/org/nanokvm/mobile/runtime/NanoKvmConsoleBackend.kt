@@ -8,7 +8,6 @@ import android.view.Surface
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.security.cert.CertificateException
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -50,7 +49,6 @@ import org.nanokvm.protocol.AbsoluteMouseReport
 import org.nanokvm.protocol.ApiResponseException
 import org.nanokvm.protocol.AuthenticationExpiredException
 import org.nanokvm.protocol.CertificateFingerprint
-import org.nanokvm.protocol.CertificateInspection
 import org.nanokvm.protocol.CertificateTrustSource as ProtocolCertificateTrustSource
 import org.nanokvm.protocol.CommittedTextLineBreakMode
 import org.nanokvm.protocol.EndpointTrustPreflight
@@ -118,7 +116,7 @@ internal class NanoKvmConsoleBackend internal constructor(
     private val reconnectPolicy: ReconnectPolicy,
     private val webRtcRuntimeProvider: WebRtcRuntimeProvider? = null,
     private val pacedPasteSender: PacedPasteSender = InputSocketPacedPasteSender,
-) : ConsoleBackend,
+) : ConsoleBackend, NanoKvmApplianceControls,
     Phase3Controls,
     AdministrationControls,
     OperatorControls,
@@ -6295,19 +6293,6 @@ internal class NanoKvmConsoleBackend internal constructor(
         RemoteKey.Control, RemoteKey.Shift, RemoteKey.Alt, RemoteKey.Super,
         RemoteKey.RightControl, RemoteKey.RightShift, RemoteKey.RightAlt, RemoteKey.RightSuper -> null
     }
-
-    private fun CertificateInspection.toCertificateDetails(
-        reason: CertificatePresentationReason,
-    ): CertificateDetails = CertificateDetails(
-        sha256 = fingerprint.colonSeparated(),
-        subject = subject,
-        issuer = issuer,
-        subjectAlternativeNames = subjectAlternativeNames.dnsNames + subjectAlternativeNames.ipAddresses,
-        validFrom = DateTimeFormatter.ISO_INSTANT.format(validFrom),
-        validUntil = DateTimeFormatter.ISO_INSTANT.format(validUntil),
-        reason = reason,
-        metadataTruncated = metadataTruncated,
-    )
 
     private fun NanoKvmVideoTransport.toVideoStreamDescriptor(
         fallback: Boolean = false,

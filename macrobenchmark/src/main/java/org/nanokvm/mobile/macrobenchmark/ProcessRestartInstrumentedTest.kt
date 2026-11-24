@@ -119,9 +119,9 @@ class ProcessRestartInstrumentedTest {
     }
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
-        const val ADD_PROFILE_DESCRIPTION = "Add a NanoKVM profile"
-        const val ADD_PROFILE_TITLE = "Add NanoKVM"
+        const val TARGET_PACKAGE = "org.cometkvm.mobile"
+        const val ADD_PROFILE_DESCRIPTION = "Add a Comet profile"
+        const val ADD_PROFILE_TITLE = "Add Comet"
         const val DRAFT_NAME = "Restart-safe desk KVM"
         const val DRAFT_HOST = "restart-safe.example.test"
         const val UI_TIMEOUT_MS = 8_000L

@@ -1,4 +1,8 @@
-# Architecture
+# Comet Mobile architecture
+
+The app factory selects `CometConsoleBackend`. It coordinates `CometClient`, the two WebSocket connections, ordered HID input and the Direct H.264 renderer. The Android profile, credential and viewport layers are shared with the upstream codebase. [App factory](../app/src/main/java/org/nanokvm/mobile/AppContainer.kt) · [Console contract](COMET_CONSOLE_PLAN.md)
+
+## Upstream NanoKVM architecture
 
 NanoKVM Mobile uses three production Android library/application modules and one
 test-only performance module. The boundaries follow ownership and delivery

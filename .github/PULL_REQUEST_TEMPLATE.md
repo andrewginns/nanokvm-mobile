@@ -5,13 +5,12 @@ Describe the outcome and why the change is needed.
 ## Scope and risk
 
 - Affected Android versions/devices:
-- Affected NanoKVM hardware/application versions:
+- Affected Comet models and firmware versions:
 - Highest risk: read-only, reversible, persistent, or disruptive/destructive:
 - Recovery behavior after cancellation, disconnect, or an ambiguous response:
 
 For protocol or capability work, identify the stable upstream contract and
-update the [parity ledger](../blob/main/docs/WEBUI_PARITY.md) and applicable
-[appliance case](../blob/main/docs/APPLIANCE_TEST_PLAN.md).
+update the applicable [Comet console contract](https://github.com/andrewginns/comet-kvm-mobile/blob/main/docs/COMET_CONSOLE_PLAN.md).
 
 ## Verification
 

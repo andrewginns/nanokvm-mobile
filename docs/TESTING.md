@@ -27,7 +27,7 @@ another ID, remains blocking.
 - `app/build/outputs/apk/release/app-release-unsigned.apk`;
 - `app/build/outputs/bundle/release/app-release.aab`;
 - `app/build/outputs/apk/benchmark/app-benchmark.apk`;
-- `app/build/reports/cyclonedx/nanokvm-mobile.cdx.json`; and
+- `app/build/reports/cyclonedx/comet-kvm-mobile.cdx.json`; and
 - `app/build/outputs/mapping/release/`.
 
 These are local engineering artifacts. They are not production-signed APKs and
@@ -79,8 +79,7 @@ On a supported physical phone with a non-debug build, also verify:
 
 `NativeKeyboardInstrumentedTest` exercises the production editor with a recording
 input sink and compares completed edits with Android's standard `EditText`.
-Run it on a disposable emulator; it does not connect to a NanoKVM or prove a
-particular vendor keyboard's behavior.
+Run it on a disposable emulator using an installed keyboard.
 
 `gboardContinuesTypingAfterRepeatedReopen` also drives the installed English
 Gboard through three typing sessions separated by hide and reopen cycles,
@@ -95,13 +94,13 @@ For on-screen keyboard QA, install the debug app and Android test APK on that
 emulator, then run this opt-in live fixture with its explicit serial:
 
 ```powershell
-adb -s emulator-5554 shell am instrument -w -e class 'org.nanokvm.mobile.NativeKeyboardInstrumentedTest#standardEditorKeepsSuggestionsAndVoiceInputAvailable' -e nativeImeLiveMs 180000 org.nanokvm.mobile.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-5554 shell am instrument -w -e class 'org.nanokvm.mobile.NativeKeyboardInstrumentedTest#standardEditorKeepsSuggestionsAndVoiceInputAvailable' -e nativeImeLiveMs 180000 org.cometkvm.mobile.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 The fixture stays responsive for up to five minutes and publishes a test-only
 all-window accessibility tree to `cache/native-ime-windows.xml` in the app's
 private storage. Read it using
-`adb -s emulator-5554 shell run-as org.nanokvm.mobile cat cache/native-ime-windows.xml`.
+`adb -s emulator-5554 shell run-as org.cometkvm.mobile cat cache/native-ime-windows.xml`.
 Its root attributes contain the recording
 sink's host text, native editor text/selection and remaining live time. Use key
 and suggestion bounds from the IME window to tap the real keyboard; injected
@@ -147,23 +146,6 @@ measurement method recorded.
 worktree. It is a repeatability smoke test, not proof of isolated-environment
 reproducibility.
 
-## Real NanoKVM checks
-
-For ordinary changes, run the relevant safe cases in
-[APPLIANCE_TEST_PLAN.md](APPLIANCE_TEST_PLAN.md). A public APK should cover on a
-real NanoKVM:
-
-- certificate review or saved-pin validation, login, and first video frame;
-- H.264 and MJPEG, plus WebRTC when selected or affected;
-- keyboard, pointer, HID release, foreground recovery, reconnect, and fallback;
-- saved-credential behavior when authentication/storage changed; and
-- every changed persistent or destructive feature on a disposable or
-  recovery-capable target.
-
-Do not infer support for an untested hardware model, firmware version, Android
-version, accessibility service, or destructive operation. Record the actual
-scope and any exclusions.
-
 ## Manual UI and privacy checks
 
 For changed screens, check compact and expanded widths, portrait/landscape or
@@ -197,7 +179,7 @@ For a device, appliance, benchmark, or release run, record:
 - source commit and dirty-tree status;
 - artifact version/code, APK SHA-256, and signing-certificate digest;
 - device model/ABI and Android/API version;
-- NanoKVM hardware and application version, transport, and trust mode;
+- appliance model, firmware version, transport, and trust mode;
 - exact command or manual cases, result, and redacted evidence; and
 - any excluded or failed scope and its disposition.
 

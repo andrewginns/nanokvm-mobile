@@ -16,23 +16,23 @@ class MainActivitySmokeTest {
 
     @Test
     fun profileListAndEditorAreReachable() {
-        composeRule.onNodeWithText("NanoKVM Mobile").assertIsDisplayed()
+        composeRule.onNodeWithText("Comet Mobile").assertIsDisplayed()
         composeRule.onNodeWithText("Connections").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Add a NanoKVM profile").performClick()
-        composeRule.onNodeWithText("Add NanoKVM").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Add a Comet profile").performClick()
+        composeRule.onNodeWithText("Add Comet").assertIsDisplayed()
         composeRule.onNodeWithText("Host or IP address").assertIsDisplayed()
     }
 
     @Test
     fun profileDraftAndDestinationSurviveRealActivityRecreation() {
-        composeRule.onNodeWithContentDescription("Add a NanoKVM profile").performClick()
+        composeRule.onNodeWithContentDescription("Add a Comet profile").performClick()
         composeRule.onAllNodes(hasSetTextAction())[0]
             .performTextReplacement("Draft across recreation")
 
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Add NanoKVM").assertIsDisplayed()
+        composeRule.onNodeWithText("Add Comet").assertIsDisplayed()
         composeRule.onNodeWithText("Draft across recreation").assertIsDisplayed()
     }
 }

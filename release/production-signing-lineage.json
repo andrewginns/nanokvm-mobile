@@ -1,13 +1,9 @@
 {
   "schemaVersion": 1,
-  "package": "org.nanokvm.mobile",
-  "keyAlias": "nanokvm-release",
-  "signingCertificateSha256": "b8c56ca6a229c85cd829da21cf697219e2d1a1d5f94d658719ebfa9e909075fd",
-  "firstProductionVersionName": "0.3.6",
-  "firstProductionVersionCode": 13,
-  "previousProduction": {
-    "versionName": "0.3.14",
-    "versionCode": 24,
-    "apkSha256": "c92f6d32cc6622e05ad6659fa5f21b812d426efc3fa8f06a4f3ebb023a86ae00"
-  }
+  "package": "org.cometkvm.mobile",
+  "keyAlias": "comet-release",
+  "signingCertificateSha256": null,
+  "firstProductionVersionName": "0.1.0",
+  "firstProductionVersionCode": 1,
+  "previousProduction": null
 }

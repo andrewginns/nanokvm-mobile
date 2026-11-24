@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NanoKVMMobile"
+rootProject.name = "CometKVMMobile"
 
 include(":app")
 include(":protocol")

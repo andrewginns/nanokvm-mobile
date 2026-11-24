@@ -15,6 +15,7 @@ import org.nanokvm.protocol.NanoKvmServerCapabilities
  * than perform I/O on the main thread. Release events must never be coalesced away.
  */
 interface RemoteInputSink {
+    fun selectRelativePointer(relative: Boolean) = Unit
     fun moveAbsolute(x: Int, y: Int, buttons: Set<MouseButton> = emptySet())
     fun moveRelative(deltaX: Int, deltaY: Int, buttons: Set<MouseButton> = emptySet())
     fun mouseButton(button: MouseButton, pressed: Boolean)
@@ -75,16 +76,22 @@ interface ConsoleCoreControls {
     fun reconnect()
     /** Stops only the currently active automatic/manual reconnect run. */
     fun cancelReconnect()
+    /** Types destination-bound, explicitly approved phone text through HID. */
+    fun pasteText(request: ApprovedPasteRequest)
+    /** Cancels an in-progress paced clipboard operation after its current atomic key pair. */
+    fun cancelPaste()
+}
+
+/** Optional controls for backends with appliance configuration and power support. */
+interface NanoKvmApplianceControls {
     fun updateVideo(settings: VideoSettings)
     /** Explicit, replay-free write for the app-local MJPEG frame-detection preference. */
     fun setMjpegFrameDetectionEnabled(enabled: Boolean)
     fun resetHid()
     /** Dispatches a one-shot host control only to the exact destination the user approved. */
     fun power(destination: ApprovedCoreDestination, action: PowerAction)
-    /** Types destination-bound, explicitly approved phone text through HID. */
-    fun pasteText(request: ApprovedPasteRequest)
-    /** Cancels an in-progress paced clipboard operation after its current atomic key pair. */
-    fun cancelPaste()
+    /** Updates app-local intent only; settings collection must not perform appliance I/O. */
+    fun setMjpegFrameDetectionPreference(enabled: Boolean)
 }
 
 /** Commands owned by the virtual-media and Wake-on-LAN surface. */
@@ -294,6 +301,7 @@ internal interface NanoKvmPasswordChangeFeatureOwner {
  */
 class ConsoleFeatureBundle internal constructor(
     val core: ConsoleCoreControls,
+    val appliance: NanoKvmApplianceControls? = core as? NanoKvmApplianceControls,
     val phase3: Phase3Controls? = null,
     val administration: AdministrationControls? = null,
     val operator: OperatorControls? = null,
@@ -1050,9 +1058,6 @@ interface ConsoleBackend :
     suspend fun disconnect()
     fun setForeground(isForeground: Boolean)
 
-    /** Updates app-local intent only; settings collection must not perform appliance I/O. */
-    fun setMjpegFrameDetectionPreference(enabled: Boolean)
-
     /** Releases transports and worker threads owned by the backend. */
     override fun close() {
         releaseAllInput()
@@ -1069,8 +1074,12 @@ data class ConnectRequest(
     /** Mutable so the owner can erase the plaintext buffer after authentication is terminal. */
     val password: CharArray,
     val acceptedCertificateSha256: String? = profile.trustedCertificateSha256,
+    val totp: CharArray = charArrayOf(),
 ) {
+    override fun toString() = "ConnectRequest(credentials=<redacted>)"
+
     fun clearPassword() {
+        totp.fill('\u0000')
         password.fill('\u0000')
     }
 }

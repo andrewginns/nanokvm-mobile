@@ -40,18 +40,18 @@ class ScreenCaptureInstrumentedTest {
 
     @Test
     fun foregroundScreenshotsContainAppContentAcrossNavigationResumeAndRotation() {
-        assertTextIsCaptured("NanoKVM Mobile")
-        device.findObject(By.desc("Add a NanoKVM profile")).click()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Comet Mobile")
+        device.findObject(By.desc("Add a Comet profile")).click()
+        assertTextIsCaptured("Add Comet")
 
         device.pressHome()
         launchTarget()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add Comet")
 
         device.setOrientationLeft()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add Comet")
         device.setOrientationNatural()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add Comet")
     }
 
     private fun launchTarget() {
@@ -87,7 +87,7 @@ class ScreenCaptureInstrumentedTest {
     }
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
+        const val TARGET_PACKAGE = "org.cometkvm.mobile"
         const val UI_TIMEOUT_MS = 8_000L
     }
 }

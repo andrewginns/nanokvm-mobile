@@ -37,6 +37,7 @@ import org.nanokvm.mobile.runtime.BackendSession
 import org.nanokvm.mobile.runtime.ApprovedCoreDestination
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleCoreControls
+import org.nanokvm.mobile.runtime.NanoKvmApplianceControls
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
@@ -355,7 +356,7 @@ class AutomationDialogInstrumentedTest {
 private class AutomationConsoleBridge(
     private val binding: NanoKvmSessionBinding,
     port: NanoKvmAutomationPort,
-) : ConsoleCoreControls, RemoteInputSink, VideoSurfaceSink, NanoKvmAutomationFeatureOwner {
+) : ConsoleCoreControls, NanoKvmApplianceControls, RemoteInputSink, VideoSurfaceSink, NanoKvmAutomationFeatureOwner {
     val features = ConsoleFeatureBundle(core = this, automation = this)
     var surfaceVisible = false
         private set
@@ -377,6 +378,7 @@ private class AutomationConsoleBridge(
     override fun reconnect() = Unit
     override fun cancelReconnect() = Unit
     override fun updateVideo(settings: VideoSettings) = Unit
+    override fun setMjpegFrameDetectionPreference(enabled: Boolean) = Unit
     override fun setMjpegFrameDetectionEnabled(enabled: Boolean) = Unit
     override fun resetHid() = Unit
     override fun power(destination: ApprovedCoreDestination, action: PowerAction) = Unit

@@ -1,4 +1,8 @@
-# NanoKVM video library
+# Console video library
+
+Comet Direct H.264 uses `CometMedia` to parse the stock media envelope. The Comet backend feeds the shared access-unit queue and Android MediaCodec renderer. [Comet wire contract](../docs/COMET_CONSOLE_PLAN.md#stock-protocol-observations-used-by-the-android-client)
+
+## Upstream NanoKVM transports
 
 `video` owns three server video paths and keeps their lifecycles behind
 `NanoKvmVideoSession`:
