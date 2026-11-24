@@ -1,12 +1,16 @@
 # Comet KVM Mobile
 
-An independent Android console for the GL.iNet Comet GL-RM1, derived from NanoKVM Mobile. The first release will focus on direct video, touch and keyboard control, and recovery from interrupted connections.
+An unofficial Android console for the original GL.iNet Comet GL-RM1 targeting stock 1.10.3 release1. The application ID is `org.cometkvm.mobile`. Profiles, certificate pins and protected passwords belong to this installation.
 
-[Comet console implementation plan](docs/COMET_CONSOLE_PLAN.md)
+Add a named HTTPS profile using the appliance’s LAN address or an address reachable through your VPN. Enable the verification-code prompt if the appliance uses TOTP. Compare the displayed leaf fingerprint with the device through a trusted channel before approving the certificate. Android can protect the saved password. Enter the current six-digit code at each sign-in.
+
+The console uses Direct H.264. Tap or drag on the picture in Direct mode. Trackpad mode sends relative movement for BIOS use. The movable view pad pans and zooms the local picture. The scroll pad and external pointers support both wheel axes. Keyboard controls include US and UK layouts, shortcuts, and editable clipboard and share previews. Confirming a preview types its text on the displayed target, with Shift+Enter for line breaks.
+
+Stock firmware inspection and emulator tests cover the implementation. Physical BIOS, HDMI and VPN acceptance and the first independently signed distribution remain open. See the [console plan](docs/COMET_CONSOLE_PLAN.md) and [distribution process](docs/DISTRIBUTION.md).
 
 ## NanoKVM Mobile upstream documentation
 
-The documentation and release links below describe the original NanoKVM application. Comet support is in planning.
+The documentation and release links below describe the original NanoKVM application. They are retained for upstream attribution and development history.
 
 [![Latest release](https://img.shields.io/github/v/release/andrewginns/nanokvm-mobile?label=release)](https://github.com/andrewginns/nanokvm-mobile/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)

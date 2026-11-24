@@ -72,6 +72,11 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) appViewModel?.releaseAllInput()
+    }
+
     override fun onStop() {
         if (!isChangingConfigurations) {
             appViewModel?.clearSensitiveWorkForBackground()

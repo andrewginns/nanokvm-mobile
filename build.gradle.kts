@@ -10,6 +10,6 @@ plugins {
 }
 
 allprojects {
-    group = "org.nanokvm"
-    version = "0.3.15"
+    group = "org.cometkvm"
+    version = "0.1.0"
 }

@@ -107,6 +107,10 @@ fun NanoKvmApp(
             }
         }
 
+        state.totpProfile?.let { profile ->
+            org.nanokvm.mobile.ui.screens.TotpDialog(profile, viewModel::submitTotp, viewModel::cancelToProfiles)
+        }
+
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             snackbarHost = {

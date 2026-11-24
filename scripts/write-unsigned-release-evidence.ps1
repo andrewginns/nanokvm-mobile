@@ -267,7 +267,7 @@ foreach ($tool in @($aapt2, $zipAlign, $apkSignerJar)) {
 
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
+        "dist\Comet-Mobile-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {
@@ -278,7 +278,7 @@ if ([IO.Path]::IsPathRooted($OutputPath)) {
 if (-not $BuildLogPath) {
     $buildTimestamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
     $BuildLogPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
+        "dist\Comet-Mobile-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
     )
 }
 if ([IO.Path]::IsPathRooted($BuildLogPath)) {
@@ -458,7 +458,7 @@ if ($postBuildGitResult.ExitCode -ne 0 -or $postBuildGitStatus) {
 
 $UnsignedApk = Join-Path $repository "app\build\outputs\apk\release\app-release-unsigned.apk"
 $ReleaseBundle = Join-Path $repository "app\build\outputs\bundle\release\app-release.aab"
-$Sbom = Join-Path $repository "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json"
+$Sbom = Join-Path $repository "app\build\reports\cyclonedx\comet-kvm-mobile.cdx.json"
 $unsignedApkRecord = Get-ArtifactRecord -Path $UnsignedApk -Repository $repository
 $releaseBundleRecord = Get-ArtifactRecord -Path $ReleaseBundle -Repository $repository
 $sbomRecord = Get-ArtifactRecord -Path $Sbom -Repository $repository
@@ -482,7 +482,7 @@ $r8Outputs = [ordered]@{
 $resolvedUnsignedApk = (Resolve-Path -LiteralPath (Join-Path $repository $unsignedApkRecord.path)).Path
 $apkMetadata = Get-ApkMetadata -Apk $resolvedUnsignedApk -Aapt2 $aapt2
 if (
-    $apkMetadata.package -ne "org.nanokvm.mobile" -or
+    $apkMetadata.package -ne "org.cometkvm.mobile" -or
     $apkMetadata.versionName -ne $sourceVersionName -or
     $apkMetadata.versionCode -ne $sourceVersionCode -or
     $apkMetadata.minimumSdk -ne 26 -or
@@ -586,7 +586,7 @@ foreach ($requiredArtifact in @(
     }
 }
 
-$sourceArchiveRelative = "source\NanoKVM-Mobile-$sourceVersionName-source.zip"
+$sourceArchiveRelative = "source\Comet-Mobile-$sourceVersionName-source.zip"
 $sourceArchiveStaging = Join-Path $inProgressArtifactDirectory $sourceArchiveRelative
 $sourceArchiveDirectory = Split-Path -Parent $sourceArchiveStaging
 New-Item -ItemType Directory -Path $sourceArchiveDirectory | Out-Null
@@ -597,7 +597,7 @@ $sourceArchiveResult = Invoke-NativeCapture `
         $repository,
         "archive",
         "--format=zip",
-        "--prefix=NanoKVM-Mobile-$sourceVersionName/",
+        "--prefix=Comet-Mobile-$sourceVersionName/",
         "--output=$sourceArchiveStaging",
         $tagReference
     )
@@ -612,7 +612,7 @@ $retainedSources = [ordered]@{
     unsignedApk = [pscustomobject]@{ source = $UnsignedApk; destination = "artifacts\app-release-unsigned.apk" }
     releaseBundle = [pscustomobject]@{ source = $ReleaseBundle; destination = "artifacts\app-release.aab" }
     benchmarkApk = [pscustomobject]@{ source = $benchmarkApk; destination = "artifacts\app-benchmark.apk" }
-    sbom = [pscustomobject]@{ source = $Sbom; destination = "reports\nanokvm-mobile.cdx.json" }
+    sbom = [pscustomobject]@{ source = $Sbom; destination = "reports\comet-kvm-mobile.cdx.json" }
     mergedReleaseManifest = [pscustomobject]@{ source = $mergedReleaseManifest; destination = "manifest\AndroidManifest.xml" }
     networkSecurityConfig = [pscustomobject]@{ source = $networkSecurityConfig; destination = "manifest\network_security_config.xml" }
     mapping = [pscustomobject]@{ source = $r8Outputs.mapping; destination = "r8\mapping.txt" }

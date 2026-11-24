@@ -3,8 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$KeystorePath,
 
-    [string]$KeyAlias = "nanokvm-release",
-    [string]$DistinguishedName = "CN=NanoKVM Mobile, O=NanoKVM Mobile",
+    [string]$KeyAlias = "comet-release",
+    [string]$DistinguishedName = "CN=Comet Mobile, O=Comet Mobile",
     [string]$Keytool = "keytool.exe"
 )
 

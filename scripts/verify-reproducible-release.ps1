@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Path $comparisonDirectory | Out-Null
 $artifacts = @(
     "app\build\outputs\apk\release\app-release-unsigned.apk",
     "app\build\outputs\bundle\release\app-release.aab",
-    "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json",
+    "app\build\reports\cyclonedx\comet-kvm-mobile.cdx.json",
     "app\build\outputs\mapping\release\configuration.txt",
     "app\build\outputs\mapping\release\mapping.txt"
 )

@@ -146,17 +146,10 @@ function Get-VerifiedSigner {
     ) {
         throw "The APK must verify with both APK Signature Schemes v2 and v3: $Apk"
     }
-    $signerMatches = [regex]::Matches(
-        $signatureOutput,
-        "Signer #[0-9]+ certificate SHA-256 digest:\s*([0-9a-fA-F]+)"
-    )
-    if ($signerMatches.Count -ne 1) {
-        throw "Expected exactly one APK signer for $Apk; found $($signerMatches.Count)."
-    }
-    $subjectMatch = [regex]::Match($signatureOutput, 'Signer #1 certificate DN:\s*(.+)')
+    $signer = & (Join-Path $PSScriptRoot "read-apk-signer.ps1") -VerificationOutput $signatureOutput
     return [pscustomobject]@{
-        sha256 = $signerMatches[0].Groups[1].Value.ToLowerInvariant()
-        subject = $(if ($subjectMatch.Success) { $subjectMatch.Groups[1].Value.Trim() } else { "" })
+        sha256 = $signer.sha256
+        subject = $signer.subject
         verificationOutput = $signatureOutput
     }
 }
@@ -424,7 +417,7 @@ $lineage = Get-Content -Raw -LiteralPath $resolvedLineage | ConvertFrom-Json
 $previousLineageProperty = $lineage.PSObject.Properties["previousProduction"]
 if (
     $lineage.schemaVersion -ne 1 -or
-    $lineage.package -ne "org.nanokvm.mobile" -or
+    $lineage.package -ne "org.cometkvm.mobile" -or
     $lineage.keyAlias -cne $KeyAlias -or
     [long]$lineage.firstProductionVersionCode -le 0 -or
     [string]::IsNullOrWhiteSpace([string]$lineage.firstProductionVersionName) -or
@@ -510,7 +503,7 @@ if (
     $evidence.schemaVersion -ne 2 -or
     $evidence.sourceTag -cne $SourceTag -or
     $evidence.sourceCommit -ne $headCommit -or
-    $evidence.package -ne "org.nanokvm.mobile" -or
+    $evidence.package -ne "org.cometkvm.mobile" -or
     $evidence.versionName -ne $sourceVersionName -or
     [long]$evidence.versionCode -ne $sourceVersionCode -or
     [int]$evidence.minimumSdk -ne 26 -or
@@ -623,6 +616,8 @@ if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
 }
 
 $forbiddenDevelopmentSigners = @(
+    ([string]$env:COMET_DEVELOPMENT_SIGNER_SHA256).Replace(":", "").ToLowerInvariant(),
+    "b8c56ca6a229c85cd829da21cf697219e2d1a1d5f94d658719ebfa9e909075fd",
     "7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746",
     "149d694db3d3b0d86849d1f99a570fb78c11627739494aa8c4e04eec6e276002"
 )
@@ -690,7 +685,7 @@ Assert-ProtectedAcl -Path $resolvedKeystore
 
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode.apk"
+        "dist\Comet-Mobile-$sourceVersionName-v$sourceVersionCode.apk"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {
@@ -722,7 +717,7 @@ foreach ($path in $finalPaths) {
 }
 
 $stagingDirectory = Join-Path $resolvedOutputDirectory (
-    ".nanokvm-release-staging-" + [guid]::NewGuid().ToString("N")
+    ".comet-release-staging-" + [guid]::NewGuid().ToString("N")
 )
 $stagingPrefix = $resolvedOutputDirectory.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $resolvedStaging = [IO.Path]::GetFullPath($stagingDirectory)

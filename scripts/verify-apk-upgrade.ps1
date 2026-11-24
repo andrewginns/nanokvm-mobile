@@ -6,10 +6,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CandidateApk,
 
-    [string]$ExpectedPackage = "org.nanokvm.mobile",
+    [string]$ExpectedPackage = "org.cometkvm.mobile",
 
     [string]$ExpectedSignerSha256 =
-        "7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746"
+        $env:COMET_DEVELOPMENT_SIGNER_SHA256
 )
 
 Set-StrictMode -Version Latest
@@ -54,24 +54,17 @@ function Get-ApkMetadata {
         throw "Could not read package/version metadata from $resolvedApk."
     }
 
-    $signatureOutput = (& $ApkSigner verify --print-certs $resolvedApk 2>&1) -join "`n"
+    $signatureOutput = (& $ApkSigner verify --verbose --print-certs $resolvedApk 2>&1) -join "`n"
     if ($LASTEXITCODE -ne 0) {
         throw "APK signature verification failed for $resolvedApk."
     }
-    $signerMatches = [regex]::Matches(
-        $signatureOutput,
-        "Signer #[0-9]+ certificate SHA-256 digest:\s*([0-9a-fA-F]+)"
-    )
-    if ($signerMatches.Count -ne 1) {
-        throw "Expected exactly one APK signer for $resolvedApk; found $($signerMatches.Count)."
-    }
-
+    $signer = & (Join-Path $PSScriptRoot "read-apk-signer.ps1") -VerificationOutput $signatureOutput
     return [pscustomobject]@{
         Path = $resolvedApk
         Package = $packageMatch.Groups[1].Value
         VersionCode = [long]$packageMatch.Groups[2].Value
         VersionName = $packageMatch.Groups[3].Value
-        SignerSha256 = $signerMatches[0].Groups[1].Value.ToLowerInvariant()
+        SignerSha256 = $signer.sha256
     }
 }
 
@@ -93,6 +86,11 @@ if (-not (Test-Path -LiteralPath $aapt) -or -not (Test-Path -LiteralPath $apkSig
 
 $previous = Get-ApkMetadata -Apk $PreviousApk -Aapt $aapt -ApkSigner $apkSigner
 $candidate = Get-ApkMetadata -Apk $CandidateApk -Aapt $aapt -ApkSigner $apkSigner
+if ($ExpectedSignerSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $ExpectedSignerSha256 -in @(
+    '7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746',
+    '149d694db3d3b0d86849d1f99a570fb78c11627739494aa8c4e04eec6e276002',
+    'b8c56ca6a229c85cd829da21cf697219e2d1a1d5f94d658719ebfa9e909075fd'
+)) { throw "Configure the independent Comet development signer fingerprint before verifying updates." }
 $expectedSigner = $ExpectedSignerSha256.Replace(":", "").ToLowerInvariant()
 
 if ($previous.Package -ne $ExpectedPackage -or $candidate.Package -ne $ExpectedPackage) {

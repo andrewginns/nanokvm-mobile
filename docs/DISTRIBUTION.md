@@ -1,11 +1,11 @@
 # Publishing a signed GitHub APK
 
-NanoKVM Mobile distributes public APKs through GitHub Releases. A local debug,
+Comet Mobile targets GitHub Releases. The first production signer has yet to be provisioned. A local debug,
 benchmark, or unsigned release build is not a publishable artifact.
 
 ## Signing model
 
-Public updates use the long-lived production certificate recorded in
+Before the first production build, record the independent Comet public certificate digest in
 `release/production-signing-lineage.json`. Keep the private keystore and its
 password outside the repository, logs, release bundle, and normal developer
 backups. Maintain two encrypted recovery copies in separately controlled
@@ -24,6 +24,10 @@ accounts.
 a completely new public signing lineage. It must never be used for an ordinary
 update or as a recovery shortcut when the existing production key is missing.
 
+## Private development updates
+
+Provision a distinct external keystore, set `COMET_DEVELOPMENT_KEYSTORE` and `COMET_DEVELOPMENT_SIGNER_SHA256`, and configure the matching alias and passwords through the `COMET_DEVELOPMENT_*` environment variables consumed by Gradle. For an in-place update, pass the actual previous Comet APK to `scripts/build-development-update.ps1 -PreviousApk …`. The helper checks package, signer, increasing version code and immutable output. The repository contains no established Comet distribution certificate.
+
 ## Prepare a release
 
 1. Increase `versionName` and `versionCode`; never reuse a published code for
@@ -35,7 +39,7 @@ update or as a recovery shortcut when the existing production key is missing.
 4. Commit the public signing-lineage record, freeze a clean source commit, and
    create an annotated or signed release tag.
 
-For every release after v0.3.6, the lineage record's `previousProduction` entry
+After the first Comet release, the lineage record's `previousProduction` entry
 must identify the exact preceding public version name/code and APK SHA-256. The
 signing helper compares that record with the supplied preceding APK before it
 uses the private key.
@@ -62,16 +66,16 @@ outputs. Then sign only those reviewed bytes:
 ```powershell
 .\scripts\sign-production-apk.ps1 `
     -SourceTag 'vX.Y.Z' `
-    -UnsignedEvidencePath '.\dist\NanoKVM-Mobile-X.Y.Z-vNN-unsigned-evidence.json' `
+    -UnsignedEvidencePath '.\dist\Comet-Mobile-X.Y.Z-vNN-unsigned-evidence.json' `
     -ExpectedEvidenceSha256 '<reviewed-evidence-sha256>' `
     -JavaPath 'C:\path\to\jdk-21\bin\java.exe' `
     -BuildToolsPath 'C:\path\to\Android\Sdk\build-tools\36.0.0' `
-    -KeystorePath 'C:\protected\NanoKVM-Mobile-production.keystore' `
-    -KeyAlias nanokvm-release `
+    -KeystorePath 'C:\protected\Comet-Mobile-production.keystore' `
+    -KeyAlias comet-release `
     -PreviousProductionApk 'C:\evidence\previous-release.apk'
 ```
 
-`-FirstProductionRelease` applied only to v0.3.6 and must not be used for a
+`-FirstProductionRelease` applies only to the first independently signed Comet version recorded in the lineage file and must not be used for a
 normal update. The signer rejects dirty or untagged source, repository-local
 keys, changed evidence, a wrong package/version/signer, debuggable inputs,
 missing v2/v3 signatures, failed alignment, and existing output paths.
@@ -81,7 +85,7 @@ and invalidates the signed-candidate checks.
 
 The evidence helper does not create or validate corresponding source for
 external runtime components. Before publication, create and review
-`NanoKVM-Mobile-X.Y.Z-runtime-sources.json`. For each resolved component or
+`Comet-Mobile-X.Y.Z-runtime-sources.json`. For each resolved component or
 clearly defined dependency family, record:
 
 - the Maven coordinate and binary SHA-256, or mark a BOM/platform entry as
@@ -107,7 +111,7 @@ Publish these together on the GitHub release:
   Gradle wrapper/configuration, generated profiles, and dependency metadata;
 - the reviewed runtime-source manifest and retained source archives, canonical
   CycloneDX SBOM, project licence, and complete third-party licence/notices;
-- release notes covering Android/NanoKVM compatibility, upgrade behavior,
+- release notes covering Android/Comet compatibility, upgrade behavior,
   known limitations, security/privacy changes, and actual test scope.
 
 Keep private keys, passwords, benchmark APKs, R8 mapping details, and private

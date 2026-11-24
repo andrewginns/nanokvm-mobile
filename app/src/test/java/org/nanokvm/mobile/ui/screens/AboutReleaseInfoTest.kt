@@ -9,7 +9,7 @@ class AboutReleaseInfoTest {
     @Test
     fun developmentSourceUrlUsesTheCurrentMainBranch() {
         assertEquals(
-            "https://github.com/andrewginns/nanokvm-mobile/tree/main",
+            "https://github.com/andrewginns/comet-kvm-mobile/tree/main",
             BuildConfig.SOURCE_URL,
         )
     }

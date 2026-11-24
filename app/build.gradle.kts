@@ -33,23 +33,23 @@ plugins {
 }
 
 val developmentKeystorePath = providers
-    .gradleProperty("nanokvm.developmentKeystore")
-    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEYSTORE"))
+    .gradleProperty("comet.developmentKeystore")
+    .orElse(providers.environmentVariable("COMET_DEVELOPMENT_KEYSTORE"))
 val compactDevelopmentApk = providers
-    .gradleProperty("nanokvm.compactDevelopmentApk")
+    .gradleProperty("comet.compactDevelopmentApk")
     .map(String::toBooleanStrict)
     .orElse(false)
 val developmentStorePassword = providers
-    .gradleProperty("nanokvm.developmentStorePassword")
-    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_STORE_PASSWORD"))
+    .gradleProperty("comet.developmentStorePassword")
+    .orElse(providers.environmentVariable("COMET_DEVELOPMENT_STORE_PASSWORD"))
     .orElse("android")
 val developmentKeyAlias = providers
-    .gradleProperty("nanokvm.developmentKeyAlias")
-    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEY_ALIAS"))
+    .gradleProperty("comet.developmentKeyAlias")
+    .orElse(providers.environmentVariable("COMET_DEVELOPMENT_KEY_ALIAS"))
     .orElse("androiddebugkey")
 val developmentKeyPassword = providers
-    .gradleProperty("nanokvm.developmentKeyPassword")
-    .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEY_PASSWORD"))
+    .gradleProperty("comet.developmentKeyPassword")
+    .orElse(providers.environmentVariable("COMET_DEVELOPMENT_KEY_PASSWORD"))
     .orElse("android")
 
 val bundledAboutAssetsDirectory = layout.buildDirectory.dir("generated/about-assets")
@@ -301,7 +301,7 @@ abstract class NormalizeCycloneDxSbom : DefaultTask() {
         val rootComponent = (metadata["component"] as? Map<*, *>)
             ?.toMutableStringMap("CycloneDX root component")
             ?: throw GradleException("The CycloneDX document has no root component.")
-        assertComponentIdentity(rootComponent, "org.nanokvm", "nanokvm-mobile")
+        assertComponentIdentity(rootComponent, "org.cometkvm", "comet-kvm-mobile")
         metadata["component"] = enrichProjectComponent(rootComponent)
         root["metadata"] = metadata
 
@@ -316,8 +316,8 @@ abstract class NormalizeCycloneDxSbom : DefaultTask() {
             val group = component["group"]?.toString()
             val name = component["name"]?.toString()
             when {
-                group == "org.nanokvm" && name in missingProjectComponents -> {
-                    assertComponentIdentity(component, "org.nanokvm", name!!)
+                group == "org.cometkvm" && name in missingProjectComponents -> {
+                    assertComponentIdentity(component, "org.cometkvm", name!!)
                     missingProjectComponents.remove(name)
                     enrichProjectComponent(component)
                 }
@@ -580,10 +580,10 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "org.nanokvm.mobile"
+        applicationId = "org.cometkvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 25
+        versionCode = 1
         versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -592,9 +592,12 @@ android {
 
     signingConfigs.named("debug") {
         developmentKeystorePath.orNull?.let { configuredPath ->
-            val configuredKeystore = rootProject.file(configuredPath)
+            val configuredKeystore = rootProject.file(configuredPath).canonicalFile
+            require(!configuredKeystore.toPath().startsWith(rootDir.canonicalFile.toPath())) {
+                "Keep the Comet development keystore outside the checkout."
+            }
             require(configuredKeystore.isFile) {
-                "The configured NanoKVM development keystore does not exist: $configuredKeystore"
+                "The configured Comet development keystore does not exist: $configuredKeystore"
             }
             storeFile = configuredKeystore
             storePassword = developmentStorePassword.get()
@@ -608,7 +611,7 @@ android {
             buildConfigField(
                 "String",
                 "SOURCE_URL",
-                "\"https://github.com/andrewginns/nanokvm-mobile/tree/main\"",
+                "\"https://github.com/andrewginns/comet-kvm-mobile/tree/main\"",
             )
         }
         release {
@@ -618,7 +621,7 @@ android {
             buildConfigField(
                 "String",
                 "SOURCE_URL",
-                "\"https://github.com/andrewginns/nanokvm-mobile/tree/v${project.version}\"",
+                "\"https://github.com/andrewginns/comet-kvm-mobile/tree/v${project.version}\"",
             )
         }
         create("benchmark") {
@@ -630,7 +633,7 @@ android {
             buildConfigField(
                 "String",
                 "SOURCE_URL",
-                "\"https://github.com/andrewginns/nanokvm-mobile/tree/main\"",
+                "\"https://github.com/andrewginns/comet-kvm-mobile/tree/main\"",
             )
         }
     }
@@ -701,6 +704,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation(libs.okhttp.tls)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -726,14 +731,14 @@ tasks.register<VerifyReleaseProfiles>("verifyReleaseProfiles") {
 val rawCycloneDxSbom = layout.buildDirectory.file("reports/cyclonedx/raw.cdx.json")
 val releaseVersionForSbom = project.version.toString()
 val releaseVcsUrlForSbom =
-    "https://github.com/andrewginns/nanokvm-mobile/tree/v$releaseVersionForSbom"
+    "https://github.com/andrewginns/comet-kvm-mobile/tree/v$releaseVersionForSbom"
 val webRtcVersionForSbom = libs.versions.webrtc.get()
 val webRtcVcsUrlForSbom =
     "https://github.com/webrtc-sdk/android/tree/v$webRtcVersionForSbom"
 val bundledWebRtcNoticeRepositoryPath =
     "app/src/main/assets/open_source_licenses/WEBRTC.md"
 val bundledWebRtcNoticeUrlForSbom =
-    "https://github.com/andrewginns/nanokvm-mobile/blob/v$releaseVersionForSbom/" +
+    "https://github.com/andrewginns/comet-kvm-mobile/blob/v$releaseVersionForSbom/" +
         bundledWebRtcNoticeRepositoryPath
 val upstreamWebRtcNoticeUrlForSbom =
     "https://github.com/webrtc-sdk/android/blob/v$webRtcVersionForSbom/Licenses/WEBRTC.md"
@@ -746,8 +751,8 @@ tasks.cyclonedxDirectBom {
     includeMetadataResolution = true
     includeBuildEnvironment = false
     includeBuildSystem = false
-    componentGroup = "org.nanokvm"
-    componentName = "nanokvm-mobile"
+    componentGroup = "org.cometkvm"
+    componentName = "comet-kvm-mobile"
     componentVersion = project.version.toString()
     jsonOutput.set(rawCycloneDxSbom)
     xmlOutput.unsetConvention()
@@ -769,7 +774,7 @@ val reproducibleSbom = tasks.register<NormalizeCycloneDxSbom>("reproducibleSbom"
     bundledWebRtcNoticeUrl.set(bundledWebRtcNoticeUrlForSbom)
     upstreamWebRtcNoticeUrl.set(upstreamWebRtcNoticeUrlForSbom)
     expectedWebRtcNoticeSha256.set(expectedWebRtcNoticesSha256)
-    outputFile.set(layout.buildDirectory.file("reports/cyclonedx/nanokvm-mobile.cdx.json"))
+    outputFile.set(layout.buildDirectory.file("reports/cyclonedx/comet-kvm-mobile.cdx.json"))
 }
 
 tasks.register("verifyReproducibleSbomMetadata") {
@@ -814,7 +819,7 @@ tasks.register("verifyReproducibleSbomMetadata") {
             }
 
         fun assertProjectComponent(value: Map<*, *>, expectedName: String) {
-            check(value["group"]?.toString() == "org.nanokvm")
+            check(value["group"]?.toString() == "org.cometkvm")
             check(value["name"]?.toString() == expectedName)
             check(value["version"]?.toString() == releaseVersionForSbom)
             check(licenceIds(value) == setOf("GPL-3.0-or-later"))
@@ -824,9 +829,9 @@ tasks.register("verifyReproducibleSbomMetadata") {
             check(vcsUrls == listOf(releaseVcsUrlForSbom))
         }
 
-        assertProjectComponent(rootComponent, "nanokvm-mobile")
-        assertProjectComponent(component("org.nanokvm", "protocol"), "protocol")
-        assertProjectComponent(component("org.nanokvm", "video"), "video")
+        assertProjectComponent(rootComponent, "comet-kvm-mobile")
+        assertProjectComponent(component("org.cometkvm", "protocol"), "protocol")
+        assertProjectComponent(component("org.cometkvm", "video"), "video")
 
         val webRtc = component("io.github.webrtc-sdk", "android-prefixed-stripped")
         check(webRtc["version"]?.toString() == webRtcVersionForSbom)

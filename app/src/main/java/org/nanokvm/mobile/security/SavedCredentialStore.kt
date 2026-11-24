@@ -276,7 +276,7 @@ class SavedCredentialStore(
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val CREDENTIALS_DIRECTORY = "saved_credentials"
-        private const val KEY_ALIAS_PREFIX = "org.nanokvm.mobile.saved-password."
+        private const val KEY_ALIAS_PREFIX = "org.cometkvm.mobile.saved-password."
         private const val AES_KEY_BITS = 256
         private const val GCM_TAG_BITS = 128
         private const val MAX_ENVELOPE_BYTES = 65_536
@@ -305,7 +305,7 @@ class SavedCredentialStore(
         internal fun credentialBinding(profile: HostProfile): ByteArray {
             val identity = credentialIdentity(profile)
             return buildString {
-                append("nanokvm-mobile-credential-v2\n")
+                append("comet-mobile-credential-v1\n")
                 append(identity.profileId)
                 append('\n')
                 append(identity.scheme)

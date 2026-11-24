@@ -129,7 +129,7 @@ class NanoKvmClient private constructor(
  * before an application callback can enforce its limit. An unsolicited server negotiation is a
  * handshake failure; without negotiation, RSV1 fails at the frame header.
  */
-private object UncompressedWebSocketInterceptor : Interceptor {
+internal object UncompressedWebSocketInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
         val request = chain.request()
         if (!request.header("Upgrade").equals("websocket", ignoreCase = true)) {

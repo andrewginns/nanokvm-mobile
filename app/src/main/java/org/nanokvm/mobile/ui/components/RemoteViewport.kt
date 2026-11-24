@@ -485,31 +485,26 @@ fun RemoteViewport(
                         }
                     }
                     .pointerInput(
+                        inputGeneration,
                         pointerMode,
                         remoteWidth,
                         remoteHeight,
                         normalizedScrollSensitivity,
                     ) {
-                        var scrollRemainder = 0f
-                        val scrollStepPixels =
-                            SCROLL_STEP_DP.dp.toPx() / normalizedScrollSensitivity
+                        val scroll = RemoteScrollAccumulator(SCROLL_STEP_DP.dp.toPx(), normalizedScrollSensitivity)
                         detectTwoFingerTransformGestures(
                             onStart = {
-                                scrollRemainder = 0f
+                                scroll.reset()
                                 input.releaseAllInput()
                             },
                             onTransform = { _, pan, _ ->
-                                if (abs(pan.y) < abs(pan.x)) return@detectTwoFingerTransformGestures
-                                scrollRemainder += pan.y
-                                val steps = (scrollRemainder / scrollStepPixels).toInt()
-                                if (steps != 0) {
-                                    input.scrollWheel(-steps)
-                                    scrollRemainder -= steps * scrollStepPixels
-                                }
+                                val steps = scroll.add(pan.x, pan.y)
+                                if (steps.horizontal != 0) input.scrollHorizontal(steps.horizontal)
+                                if (steps.vertical != 0) input.scrollWheel(steps.vertical)
                             },
                         )
                     }
-                    .pointerInput(pointerMode, remoteWidth, remoteHeight) {
+                    .pointerInput(inputGeneration, pointerMode, remoteWidth, remoteHeight) {
                         detectTapGestures(
                             onTap = { offset ->
                                 if (pointerMode == PointerMode.Direct) clickAt(offset, MouseButton.Left)
@@ -530,7 +525,7 @@ fun RemoteViewport(
                             },
                         )
                     }
-                    .pointerInput(pointerMode, remoteWidth, remoteHeight) {
+                    .pointerInput(inputGeneration, pointerMode, remoteWidth, remoteHeight) {
                         detectDragGestures(
                             onDragStart = { offset ->
                                 if (pointerMode == PointerMode.Direct && absoluteAt(offset)) {
@@ -585,6 +580,7 @@ fun RemoteViewport(
                     .zIndex(2f),
             ) {
                 ViewNavigationPad(
+                    inputGeneration = inputGeneration,
                     contentScale = transform.contentScale,
                     scaleMode = transform.scaleMode,
                     remoteWidth = remoteWidth,
@@ -734,6 +730,7 @@ private fun Float.positiveFiniteOrZero(): Float = takeIf { isFinite() && this > 
 
 @Composable
 private fun ViewNavigationPad(
+    inputGeneration: Long,
     contentScale: Float,
     scaleMode: ViewportScaleMode,
     remoteWidth: Int,
@@ -899,6 +896,7 @@ private fun ViewNavigationPad(
                         )
                     }
                     RemoteScrollPad(
+                        inputGeneration = inputGeneration,
                         input = input,
                         sensitivity = scrollSensitivity,
                         modifier = Modifier
@@ -913,6 +911,7 @@ private fun ViewNavigationPad(
 
 @Composable
 private fun RemoteScrollPad(
+    inputGeneration: Long,
     input: RemoteInputSink,
     sensitivity: Float,
     modifier: Modifier = Modifier,
@@ -956,7 +955,7 @@ private fun RemoteScrollPad(
                     },
                 )
             }
-            .pointerInput(currentInput, normalizedSensitivity, stepPixels) {
+            .pointerInput(inputGeneration, currentInput, normalizedSensitivity, stepPixels) {
                 val accumulator = RemoteScrollAccumulator(stepPixels, normalizedSensitivity)
                 fun finishGesture() {
                     accumulator.reset()

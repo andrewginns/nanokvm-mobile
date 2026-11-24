@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NanoKVM Mobile</string>
+    <string name="app_name">Comet Mobile</string>
 
     <string name="common_back">Back</string>
     <string name="common_cancel">Cancel</string>
@@ -24,13 +24,13 @@
 
     <string name="notice_password_change_unavailable">Password change is not available for this session.</string>
     <string name="notice_password_destination_changed">The authenticated destination changed. Review the password change again.</string>
-    <string name="notice_password_changed">NanoKVM credentials changed. Reconnect with the new credentials.</string>
+    <string name="notice_password_changed">Comet credentials changed. Reconnect with the new credentials.</string>
     <string name="notice_password_manual_verification_required">The password-change outcome is unknown. The session ended and the saved password was invalidated; reconnect manually and verify which credentials are active.</string>
-    <string name="notice_password_rejected">NanoKVM rejected the password change. The existing session and saved password were preserved.</string>
-    <string name="notice_password_session_expired">The NanoKVM session expired. Sign in again; the saved password was not changed.</string>
-    <string name="notice_password_invalid_request">The username or password is not valid for NanoKVM. Nothing was sent.</string>
-    <string name="notice_password_android_authentication_failed">Android authentication failed. Nothing was sent to NanoKVM.</string>
-    <string name="notice_password_local_preparation_failed">Android could not prepare the protected replacement. Nothing was sent to NanoKVM.</string>
+    <string name="notice_password_rejected">Comet rejected the password change. The existing session and saved password were preserved.</string>
+    <string name="notice_password_session_expired">The Comet session expired. Sign in again; the saved password was not changed.</string>
+    <string name="notice_password_invalid_request">The username or password is not valid for Comet. Nothing was sent.</string>
+    <string name="notice_password_android_authentication_failed">Android authentication failed. Nothing was sent to Comet.</string>
+    <string name="notice_password_local_preparation_failed">Android could not prepare the protected replacement. Nothing was sent to Comet.</string>
     <string name="notice_password_busy">Another password change is already in progress.</string>
     <string name="notice_password_disconnect_unverified">Credentials changed, but Android could not verify a clean disconnect. Reconnect manually before doing anything else.</string>
     <string name="notice_password_profile_update_failed">Credentials changed and the session ended, but the saved profile could not be updated. Edit the username before reconnecting.</string>
@@ -47,7 +47,7 @@
     <string name="notice_credential_connected_save_failed">Connected, but Android could not save the protected password.</string>
     <string name="notice_credential_device_protection_unavailable">Set up a screen lock or strong biometric before saving or unlocking a password.</string>
     <string name="notice_credential_authentication_start_failed">Android could not start device authentication.</string>
-    <string name="notice_credential_authentication_failed">Device authentication failed. Enter the NanoKVM password instead.</string>
+    <string name="notice_credential_authentication_failed">Device authentication failed. Enter the Comet password instead.</string>
 
     <string name="profiles_connections_section">Connections</string>
     <string name="profiles_about_content_description">About and open-source licence</string>
@@ -59,18 +59,18 @@
     <string name="appearance_theme_dark">Dark</string>
     <string name="appearance_dynamic_color_title">Use device colours</string>
     <string name="appearance_dynamic_color_description">Use colours based on your Android wallpaper. The remote console remains neutral.</string>
-    <string name="profiles_add_content_description">Add a NanoKVM profile</string>
+    <string name="profiles_add_content_description">Add a Comet profile</string>
     <string name="profiles_loading">Loading saved connections…</string>
     <string name="profiles_empty_title">No saved connections</string>
-    <string name="profiles_empty_message">Add a NanoKVM connection to start controlling a trusted device.</string>
+    <string name="profiles_empty_message">Add a Comet connection to start controlling a trusted device.</string>
     <string name="profiles_add_action">Add connection</string>
     <string name="profiles_security_note">Passwords are session-only unless you explicitly protect one with Android device authentication. Certificate fingerprints can be pinned per profile after review.</string>
 
-    <string name="about_title">NanoKVM Mobile %1$s</string>
-    <string name="about_description">Unofficial Android client for trusted Sipeed NanoKVM devices.</string>
+    <string name="about_title">Comet Mobile %1$s</string>
+    <string name="about_description">Unofficial Android client for trusted GL.iNet Comet GL-RM1 devices.</string>
     <string name="about_copyright">Copyright © 2026 NanoKVM Mobile contributors.</string>
     <string name="about_license">This is free software under GNU GPL version 3 or later, with absolutely no warranty. Binary distributors must provide the complete Corresponding Source and licence alongside their release.</string>
-    <string name="about_independence">This project is independent and is not endorsed by Sipeed.</string>
+    <string name="about_independence">This project is independent and is not endorsed by GL.iNet.</string>
 
     <string name="profile_storage_corrupted_title">Saved connections are damaged</string>
     <string name="profile_storage_corrupted_message">%1$s\n\n%2$s</string>
@@ -103,9 +103,9 @@
     <string name="password_remove_saved_action">Remove saved password</string>
     <string name="password_save_connect_action">Save &amp; connect</string>
     <string name="password_remove_dialog_title">Remove saved password?</string>
-    <string name="password_remove_dialog_message">You will need to enter the NanoKVM password on the next connection.</string>
+    <string name="password_remove_dialog_message">You will need to enter the Comet password on the next connection.</string>
 
-    <string name="profile_editor_add_title">Add NanoKVM</string>
+    <string name="profile_editor_add_title">Add Comet</string>
     <string name="profile_editor_edit_title">Edit connection</string>
     <string name="profile_editor_connection_section">Connection</string>
     <string name="profile_editor_authentication_section">Authentication</string>
@@ -145,7 +145,7 @@
     <string name="certificate_review_explanation">Confirm that this fingerprint belongs to %1$s. Trusting it pins this exact certificate; a future change will require another review.</string>
     <string name="certificate_metadata_truncated_warning">Some certificate identity details were shortened or neutralized for safe display. Verify the full SHA-256 fingerprint before trusting this certificate.</string>
     <string name="certificate_fingerprint_label">SHA-256 fingerprint</string>
-    <string name="certificate_fingerprint_clip_label">NanoKVM certificate fingerprint</string>
+    <string name="certificate_fingerprint_clip_label">Comet certificate fingerprint</string>
     <string name="certificate_copy_fingerprint_content_description">Copy certificate fingerprint</string>
     <string name="certificate_fingerprint_copied">Fingerprint copied</string>
     <string name="certificate_subject_label">Subject</string>
@@ -156,12 +156,12 @@
     <string name="certificate_valid_until_label">Valid until</string>
     <string name="certificate_trust_remember_action">Trust and remember</string>
     <string name="certificate_connect_once_action">Connect once</string>
-    <string name="certificate_security_note">Only trust certificates from a NanoKVM you control. This decision does not change Android\'s system trust store.</string>
+    <string name="certificate_security_note">Only trust certificates from a Comet you control. This decision does not change Android\'s system trust store.</string>
     <string name="certificate_changed_title">Certificate changed</string>
-    <string name="certificate_changed_warning">The certificate presented by %1$s no longer matches the saved certificate. Verify the change on the NanoKVM or through another trusted channel before continuing.</string>
+    <string name="certificate_changed_warning">The certificate presented by %1$s no longer matches the saved certificate. Verify the change on the Comet or through another trusted channel before continuing.</string>
     <string name="certificate_previous_fingerprint_label">Previously saved SHA-256 fingerprint</string>
     <string name="certificate_new_fingerprint_label">New SHA-256 fingerprint</string>
-    <string name="certificate_previous_fingerprint_clip_label">Previous NanoKVM certificate fingerprint</string>
+    <string name="certificate_previous_fingerprint_clip_label">Previous Comet certificate fingerprint</string>
     <string name="certificate_copy_previous_fingerprint_content_description">Copy previous certificate fingerprint</string>
     <string name="certificate_replace_saved_action">Replace saved certificate</string>
     <string name="certificate_connect_once_changed_action">Connect once with new certificate</string>
@@ -169,4 +169,13 @@
     <string name="console_keyboard_recovery_title">Review text that may not have been sent</string>
     <string name="console_keyboard_recovery_copy">Copy text</string>
     <string name="console_keyboard_recovery_discard">Discard</string>
+    <string name="comet_name_mismatch">The certificate does not name this address. Verify its SHA-256 fingerprint through a trusted channel before pinning it to this profile.</string>
+    <string name="comet_rate_limited">Too many sign-in attempts. Wait before trying again.</string>
+    <string name="comet_login_rejected">Comet rejected the password or verification code.</string>
+    <string name="comet_no_hdmi">No HDMI signal. Check the source and cable.</string>
+    <string name="comet_totp">Six-digit verification code</string>
+    <string name="comet_use_totp">Ask for a verification code at sign-in</string>
+    <string name="comet_release_input">Release keys and mouse buttons</string>
+    <string name="comet_start_drag">Hold left button for drag</string>
+    <string name="comet_end_drag">Release left button</string>
 </resources>

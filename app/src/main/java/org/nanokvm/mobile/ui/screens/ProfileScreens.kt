@@ -561,7 +561,10 @@ private fun ProfileCard(
                 style = MaterialTheme.typography.labelMedium,
                 color = securityColor,
             )
-            FilledTonalButton(onClick = if (profile.useHttps) onConnect else onEdit) {
+            FilledTonalButton(
+                onClick = if (profile.useHttps) onConnect else onEdit,
+                modifier = Modifier.testTag("connect-profile-${profile.id}"),
+            ) {
                 if (!profile.useHttps) {
                     Text(stringResource(R.string.profile_upgrade_action))
                 } else if (hasSavedPassword) {
@@ -683,6 +686,7 @@ fun ProfileEditorScreen(
     var port by rememberSaveable(initial.id) {
         mutableStateOf(if (!initial.useHttps && initial.port == 80) "443" else initial.port.toString())
     }
+    var requiresTotp by rememberSaveable(initial.id) { mutableStateOf(initial.requiresTotp) }
     var username by rememberSaveable(initial.id) { mutableStateOf(initial.username) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRemovePassword by remember { mutableStateOf(false) }
@@ -693,6 +697,7 @@ fun ProfileEditorScreen(
         port = portValue ?: initial.port,
         useHttps = true,
         username = username.trim(),
+        requiresTotp = requiresTotp,
     )
     val valid = portValue != null && ProfileInputPolicy.isValid(prospectiveProfile)
     val mutationInProgress = mutation != ProfileMutationUiState.Idle
@@ -781,6 +786,14 @@ fun ProfileEditorScreen(
                             label = { Text(stringResource(R.string.profile_username_label)) },
                             singleLine = true,
                         )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .toggleable(requiresTotp, role = Role.Switch) { requiresTotp = it },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(stringResource(R.string.comet_use_totp), Modifier.weight(1f))
+                            Switch(checked = requiresTotp, onCheckedChange = null)
+                        }
                         if (hasSavedPassword) {
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -1010,5 +1023,30 @@ private fun SectionLabel(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+internal fun TotpDialog(profile: HostProfile, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
+    var code by remember(profile) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(profile.name) },
+        text = {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it.filter { digit -> digit in '0'..'9' }.take(6) },
+                label = { Text(stringResource(R.string.comet_totp)) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = code.length == 6, onClick = { onSubmit(code) }) {
+                Text(stringResource(R.string.profile_connect_action))
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.common_cancel)) } },
     )
 }
