@@ -5,7 +5,15 @@ codes are monotonically increasing: changed APK bytes that are shared or
 published must never reuse an older code. No entry below represents an approved
 production release unless it explicitly says so.
 
-## Unreleased
+## Comet Mobile 0.1.0 · Unreleased
+
+Android version code **1**. The GL-RM1 console adds named HTTPS connections, certificate review, optional protected passwords and TOTP, Direct H.264, keyboard and pointer controls, and confirmed text sharing.
+
+## NanoKVM Mobile history
+
+The entries below describe the upstream application and its separate Android version sequence.
+
+### Unreleased
 
 Android version code **25**.
 
@@ -14,7 +22,7 @@ Android version code **25**.
 - Use automatic capture resolution on NanoKVM 2.5.4 and later so FPS, quality,
   and GOP settings can be applied. Older appliances retain manual resolution.
 
-## [0.3.14] - 2026-11-08
+### [0.3.14] - 2026-11-08
 
 Android version code: **24**.
 
@@ -25,7 +33,7 @@ Android version code: **24**.
   show a live view when entering Recents directly from the foreground app.
 - Continue the production update lineage from public v0.3.13 (build 23).
 
-## [0.3.13] - 2026-10-13
+### [0.3.13] - 2026-10-13
 
 Android version code: **23**. This release adds editable clipboard review and
 keeps keyboard shortcuts ahead of View and zoom controls.
@@ -62,7 +70,7 @@ keeps keyboard shortcuts ahead of View and zoom controls.
 - Broader physical-device, appliance, accessibility and endurance coverage is
   not implied. See the release notes for the exact signed-artifact test scope.
 
-## [0.3.12] - 2026-09-07
+### [0.3.12] - 2026-09-07
 
 Android version code: **19**. This release includes the keyboard reopening fix
 from v0.3.11 and repairs ordinary copied text being rejected as rich text.
@@ -80,7 +88,7 @@ from v0.3.11 and repairs ordinary copied text being rejected as rich text.
 - No permissions, dependencies, persistent storage, telemetry, or appliance
   API contracts changed.
 
-## [0.3.11] - 2026-09-07 (pre-release candidate)
+### [0.3.11] - 2026-09-07 (pre-release candidate)
 
 Android version code: **18**. This candidate fixes native keyboard input stopping
 after dismissal and reopening, and preserves the production signing lineage.
@@ -98,7 +106,7 @@ after dismissal and reopening, and preserves the production signing lineage.
 - No permissions, runtime dependencies, persistent storage, telemetry, data
   collection, or appliance API contracts changed.
 
-## [0.3.10] - 2026-09-07
+### [0.3.10] - 2026-09-07
 
 Android version code: **17**. This release repairs native keyboard corrections
 while retaining suggestions and autocorrect, and uses the existing production
@@ -125,7 +133,7 @@ signing lineage for an in-place update from v0.3.9.
   restoration matched the test host. Samsung One UI 8.5 and a physical NanoKVM
   host remain unverified; see [the keyboard plan](docs/SAMSUNG_KEYBOARD_FIX_PLAN.md).
 
-## [0.3.9] - 2026-09-05
+### [0.3.9] - 2026-09-05
 
 Android version code: **16**. This maintenance release removes unused internal
 paths while preserving the existing app features, including PicoClaw and
@@ -147,7 +155,7 @@ boot-script management, and the production signing lineage.
 - No app permissions, persistent storage, telemetry, data collection, or
   packaged runtime dependencies changed.
 
-## [0.3.8] - 2026-08-31
+### [0.3.8] - 2026-08-31
 
 Android version code: **15**. This release improves large clipboard, share, and
 multiline keyboard input while preserving the existing production signing
@@ -173,7 +181,7 @@ lineage and direct-GitHub update path.
 - No permissions, network endpoints, telemetry, data collection, persistent
   storage, runtime dependencies, or appliance API contracts changed.
 
-## [0.3.7] - 2026-08-10 (stable GitHub release)
+### [0.3.7] - 2026-08-10 (stable GitHub release)
 
 Android version code: **14**. This maintenance release keeps the NanoKVM
 protocol and application behavior from v0.3.6 while improving source-build,
@@ -196,7 +204,7 @@ release, and offline licence documentation.
 - No permissions, network endpoints, telemetry, data collection, or NanoKVM
   protocol behavior changed in this release.
 
-## [0.3.6] - 2026-07-23 (stable GitHub release)
+### [0.3.6] - 2026-07-23 (stable GitHub release)
 
 Android version code: **13**. This is the first release signed with the protected
 production identity. It was published as a GitHub pre-release on 23 July 2026
@@ -223,7 +231,7 @@ v0.3.6 notes and assets retain the exact release evidence and tested scope.
   refreshed Baseline and Startup Profiles are package-verified in the release
   APK and AAB.
 
-## [0.3.5] - Development snapshot
+### [0.3.5] - Development snapshot
 
 Android version code: **12**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -234,7 +242,7 @@ signed-production-candidate gate.
   no-personalized-learning/incognito mode, restoring keyboard-provided voice
   typing while leaving keyboard privacy controls with the user-selected IME.
 
-## [0.3.4] - Development snapshot
+### [0.3.4] - Development snapshot
 
 Android version code: **11**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -250,7 +258,7 @@ signed-production-candidate gate.
   keeping recovery actions, pointer chips, viewport controls, sheet handles,
   and disabled actions readable under light and dynamic application themes.
 
-## [0.3.3] - Development snapshot
+### [0.3.3] - Development snapshot
 
 Android version code: **10**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -269,7 +277,7 @@ signed-production-candidate gate.
   transforms, and keyboard teardown are covered by regression tests for their
   cancellation and recovery edges.
 
-## [0.3.2] - Development snapshot
+### [0.3.2] - Development snapshot
 
 Android version code: **9**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -321,7 +329,7 @@ signed-production-candidate gate.
   invoked for this checkpoint; physical-device measurement and disposition of
   the first uncompressed allocation remain open.
 
-## [0.3.1] - Development snapshot
+### [0.3.1] - Development snapshot
 
 Android version code: **8**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -335,7 +343,7 @@ signed-production-candidate gate.
 - The development version code now increases past the earlier 0.3.0/code-7
   snapshot so an otherwise compatible APK can update it in place.
 
-## [0.3.0] - Development snapshot
+### [0.3.0] - Development snapshot
 
 Android version code: **7**. This development snapshot did not pass the
 signed-production-candidate gate.
@@ -424,7 +432,7 @@ signed-production-candidate gate.
 - Do not uninstall to work around a signing mismatch without accepting removal
   of app-private profiles, certificate decisions, and saved credentials.
 
-## [0.2.1] - Development snapshot
+### [0.2.1] - Development snapshot
 
 Android version code: **6**.
 
@@ -435,7 +443,7 @@ Android version code: **6**.
 - This snapshot was debug-signed development output, not an approved public
   production release.
 
-## [0.1.0] - Development snapshot
+### [0.1.0] - Development snapshot
 
 Android version code: **1**.
 

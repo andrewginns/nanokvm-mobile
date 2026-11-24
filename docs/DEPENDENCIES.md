@@ -124,7 +124,7 @@ until Biometric's stable dependency graph no longer selects the pre-Activity-
 Result Fragment line.
 
 The canonical release-runtime SBOM is generated at
-`app/build/reports/cyclonedx/nanokvm-mobile.cdx.json`. Its ephemeral timestamp
+`app/build/reports/cyclonedx/comet-kvm-mobile.cdx.json`. Its ephemeral timestamp
 and serial number are removed and JSON maps and collections are ordered so the
 same verified dependency graph produces the same bytes.
 

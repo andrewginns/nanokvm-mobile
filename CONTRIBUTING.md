@@ -1,9 +1,6 @@
 # Contributing
 
-Issues and pull requests are welcome. NanoKVM Mobile controls real keyboard,
-mouse, power, network, update, and root-level appliance functions, so changes
-that affect trust, credentials, remote input, or destructive operations need
-extra care.
+Issues and pull requests are welcome. Comet Mobile sends real keyboard and pointer input to the computer connected to the GL-RM1.
 
 ## Set up the project
 
@@ -20,13 +17,10 @@ and screenshots must use reserved addresses and synthetic data.
 
 ## Design and safety boundaries
 
-Start with the [architecture](docs/ARCHITECTURE.md),
-[security design](docs/SECURITY.md), and
-[NanoKVM parity ledger](docs/WEBUI_PARITY.md). In particular:
+Start with the [Comet console plan](docs/COMET_CONSOLE_PLAN.md) and [security model](SECURITY.md).
 
 - trust inspection must complete before a password is collected or unlocked;
-- authenticated application traffic remains HTTPS-only, apart from the
-  documented WebRTC ICE path;
+- login, control and Direct video stay on the selected HTTPS origin;
 - every held HID key or mouse button must be released after cancellation,
   lifecycle loss, reconnect, disconnect, and shutdown;
 - remote input and appliance mutations are never automatically replayed after
@@ -34,8 +28,7 @@ Start with the [architecture](docs/ARCHITECTURE.md),
 - persistent, disruptive, or destructive actions require an explicit review
   of their target and consequence.
 
-Protocol changes must cite a stable upstream NanoKVM tag or commit and update
-the relevant contract note, parity row, tests, and appliance case. Capability
+For protocol changes, cite the relevant stock RM1 client or published GL.iNet server revision and update the console contract and its tests. Capability
 discovery uses safe reads; never invoke a destructive write to discover support.
 
 UI changes must keep visible text in Android resources and preserve semantic
@@ -54,7 +47,7 @@ run the full local gate:
 The full gate disables the configuration cache because its metadata checks read
 and compare complete generated documents. The repository intentionally uses
 local verification rather than hosted CI. Record the source commit, exact
-commands, and device or NanoKVM coverage you actually ran. See
+commands, and device or Comet coverage you actually ran. See
 [Testing](docs/TESTING.md) for instrumentation, profile, benchmark, and
 appliance commands.
 

@@ -68,7 +68,7 @@
 
     <string name="about_title">Comet Mobile %1$s</string>
     <string name="about_description">Unofficial Android client for trusted GL.iNet Comet GL-RM1 devices.</string>
-    <string name="about_copyright">Copyright © 2026 NanoKVM Mobile contributors.</string>
+    <string name="about_copyright">Based on NanoKVM Mobile. Copyright © 2026 NanoKVM Mobile contributors.</string>
     <string name="about_license">This is free software under GNU GPL version 3 or later, with absolutely no warranty. Binary distributors must provide the complete Corresponding Source and licence alongside their release.</string>
     <string name="about_independence">This project is independent and is not endorsed by GL.iNet.</string>
 

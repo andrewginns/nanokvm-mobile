@@ -1,5 +1,9 @@
 # Technical security model
 
+The active Comet backend uses a reviewed HTTPS origin for login, control and Direct video. The [Comet security policy](../SECURITY.md) and [privacy notice](../PRIVACY.md) describe that backend and the Android data it stores.
+
+## Upstream NanoKVM security model
+
 This document defines NanoKVM Mobile's implemented security boundaries, threat
 assumptions, accepted risks, and verification expectations. Vulnerability
 reporting and supported-version policy are in the repository's root
