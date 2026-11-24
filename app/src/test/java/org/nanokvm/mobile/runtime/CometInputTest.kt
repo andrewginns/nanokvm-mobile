@@ -23,7 +23,7 @@ class CometInputTest {
         input.type("ABCD", KeyboardLayout.Us, true)
         runCurrent()
         input.key(RemoteKey.F1, true)
-        input.release(retire = true)
+        input.retire()
         advanceUntilIdle()
         assertEquals(listOf("010153686966744c656674", "01014b657941", "01004b657941", "010053686966744c656674"), sent)
     }
@@ -37,7 +37,7 @@ class CometInputTest {
         input.tap(RemoteKey.Enter, context)
         advanceUntilIdle()
         assertTrue(sent.isEmpty())
-        input.release(retire = true)
+        input.retire()
     }
 
     @Test fun layoutAndNewlineMatchPreviewAndOutputSelectionPrecedesMotion() = runTest {
@@ -48,6 +48,6 @@ class CometInputTest {
         advanceUntilIdle()
         assertEquals(listOf("relative=true", "040001ff", "01014261636b736c617368", "01004261636b736c617368",
             "010153686966744c656674", "0101456e746572", "0100456e746572", "010053686966744c656674"), events)
-        input.release(retire = true)
+        input.retire()
     }
 }

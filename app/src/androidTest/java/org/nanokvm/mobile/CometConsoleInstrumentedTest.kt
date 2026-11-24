@@ -10,6 +10,8 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -48,6 +50,10 @@ class CometConsoleInstrumentedTest {
         val frames = CopyOnWriteArrayList<String>()
         val unexpected = CopyOnWriteArrayList<String>()
         val startedStreams = AtomicInteger()
+        val holdNextMouseOutput = AtomicBoolean()
+        val mouseOutputStarted = CountDownLatch(1)
+        val finishMouseOutput = CountDownLatch(1)
+        val replacementControl = CountDownLatch(1)
         val fixture = InstrumentationRegistry.getInstrumentation().context.assets
             .open("comet-green-64x64.h264").use { it.readBytes() }
         val picture = (byteArrayOf(1, 1) + fixture).toByteString()
@@ -59,6 +65,7 @@ class CometConsoleInstrumentedTest {
                 if (media) webSocket.send("""{"event_type":"media","event":{"video":{"h264":{}}}}""")
                 else {
                     control.set(webSocket)
+                    if (mouseOutputStarted.count == 0L) replacementControl.countDown()
                     webSocket.send("""{"event_type":"streamer","event":{"streamer":{"hdmi":{"signal":false}}}}""")
                     webSocket.send("""{"event_type":"streamer","event":{"streamer":{"hdmi":{"signal":true},"source":{"resolution":{"width":64,"height":64}}}}}""")
                 }
@@ -95,7 +102,14 @@ class CometConsoleInstrumentedTest {
                     return when (request.path) {
                         "/api/ws" -> MockResponse().withWebSocketUpgrade(peer(false))
                         "/api/media/ws" -> MockResponse().withWebSocketUpgrade(peer(true))
-                        "/api/streamer/set_params?gl_webrtc=false", "/api/hid/set_params?mouse_output=usb",
+                        "/api/hid/set_params?mouse_output=usb" -> {
+                            if (holdNextMouseOutput.compareAndSet(true, false)) {
+                                mouseOutputStarted.countDown()
+                                if (!finishMouseOutput.await(12, TimeUnit.SECONDS)) return MockResponse().setResponseCode(504)
+                            }
+                            MockResponse()
+                        }
+                        "/api/streamer/set_params?gl_webrtc=false",
                         "/api/auth/check" -> MockResponse()
                         else -> { unexpected.add(request.path.orEmpty()); MockResponse().setResponseCode(404) }
                     }
@@ -159,11 +173,16 @@ class CometConsoleInstrumentedTest {
                 val originalControl = control.get()
                 originalControl.close(1001, "fixture interruption")
                 waitText("Retry")
+                holdNextMouseOutput.set(true)
                 ui.onNodeWithTag("retry-connection-action").performClick()
                 ui.waitUntil(15_000) { control.get() !== originalControl && startedStreams.get() == 2 }
+                assertTrue("Retry must select its mouse output", mouseOutputStarted.await(5, TimeUnit.SECONDS))
                 val oldControl = control.get()
                 ui.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 ui.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                assertFalse("A new control socket opened before the old mouse-output POST finished",
+                    replacementControl.await(700, TimeUnit.MILLISECONDS))
+                finishMouseOutput.countDown()
                 ui.waitUntil(15_000) { control.get() !== oldControl && startedStreams.get() == 3 }
                 ui.runOnIdle {
                     val activity = ui.activity
@@ -190,6 +209,7 @@ class CometConsoleInstrumentedTest {
                 waitText("login expired", substring = true)
                 assertTrue(unexpected.toString(), unexpected.isEmpty())
             } finally {
+                finishMouseOutput.countDown()
                 try {
                     ui.activityRule.scenario.close()
                 } finally {

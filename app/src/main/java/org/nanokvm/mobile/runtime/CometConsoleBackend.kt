@@ -60,6 +60,7 @@ internal class CometConsoleBackend : ConsoleBackend {
     private var media: WebSocket? = null
     @Volatile private var input: CometInput? = null
     private var controlClosed = CompletableDeferred(Unit)
+    private var retiringWriter: Job? = null
     private var heartbeat: Job? = null
     private var negotiationTicks = 0
     private var controlPongsMissed = 0
@@ -154,9 +155,12 @@ internal class CometConsoleBackend : ConsoleBackend {
             status = ConsoleMessage.ConnectingVideo(VideoTransportDescriptor.DirectH264),
         )
         val previousClose = controlClosed
-        scope.launch {
+        val previousWriter = retiringWriter
+        heartbeat = scope.launch {
             try {
+                // A mouse-output POST can still be in flight after the control socket closes.
                 previousClose.await()
+                previousWriter?.join()
                 if (!synchronized(lock) { owner == generation }) return@launch
                 target.enableDirectStream()
                 synchronized(lock) {
@@ -168,9 +172,8 @@ internal class CometConsoleBackend : ConsoleBackend {
                 }
             } catch (e: IOException) {
                 synchronized(lock) { lost(owner, e) }
+                return@launch
             }
-        }
-        heartbeat = scope.launch {
             while (true) {
                 delay(1000)
                 synchronized(lock) {
@@ -325,7 +328,7 @@ internal class CometConsoleBackend : ConsoleBackend {
         generation++
         heartbeat?.cancel()
         heartbeat = null
-        input?.release(retire = true)
+        input?.let { retiringWriter = it.retire() }
         input = null
         if (graceful) control?.close(1000, null) else control?.cancel()
         media?.cancel()

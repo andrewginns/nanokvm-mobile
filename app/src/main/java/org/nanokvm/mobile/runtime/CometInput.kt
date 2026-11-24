@@ -3,6 +3,7 @@ package org.nanokvm.mobile.runtime
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -119,16 +120,19 @@ internal class CometInput(
         keys.toList().asReversed().forEach { keyNow(it, false) }
     }
 
-    fun release(retire: Boolean = false) = synchronized(lock) {
+    fun release() = synchronized(lock) {
         epoch++
         cancelPaste()
         if (!retired) {
             try { releaseHeld() } catch (_: IOException) { /* Socket close clears HID on RM1. */ }
         }
-        if (retire) {
-            retired = true
-            commands.close()
-        }
+    }
+
+    fun retire(): Job = synchronized(lock) {
+        release()
+        retired = true
+        commands.close()
+        writer
     }
 
     private fun stroke(stroke: HidKeystroke) {
