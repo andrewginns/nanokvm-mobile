@@ -1,9 +1,16 @@
 param(
+    [ValidateSet("nano", "comet")][string]$Target = "nano",
     [string]$Gradle = ".\gradlew.bat"
 )
 
 $ErrorActionPreference = "Stop"
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'private\release-target.ps1')
+$product = Get-ReleaseTarget -Repository $repository -Target $Target
+$flavor = $product.Title
+$releaseVariant = $product.ReleaseVariant
+$slug = $product.Slug
+
 $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $comparisonDirectory = Join-Path $temporaryRoot ("nanokvm-repro-" + [Guid]::NewGuid().ToString("N"))
 $comparisonDirectory = [IO.Path]::GetFullPath($comparisonDirectory)
@@ -13,17 +20,17 @@ if (-not $comparisonDirectory.StartsWith($temporaryRoot, [StringComparison]::Ord
 New-Item -ItemType Directory -Path $comparisonDirectory | Out-Null
 
 $artifacts = @(
-    "app\build\outputs\apk\release\app-release-unsigned.apk",
-    "app\build\outputs\bundle\release\app-release.aab",
-    "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json",
-    "app\build\outputs\mapping\release\configuration.txt",
-    "app\build\outputs\mapping\release\mapping.txt"
+    "app\build\outputs\apk\$Target\release\app-$Target-release-unsigned.apk",
+    "app\build\outputs\bundle\$releaseVariant\app-$Target-release.aab",
+    "app\build\reports\cyclonedx\$slug.cdx.json",
+    "app\build\outputs\mapping\$releaseVariant\configuration.txt",
+    "app\build\outputs\mapping\$releaseVariant\mapping.txt"
 )
 
 function Invoke-ReleaseBuild {
     & $Gradle --no-daemon --no-parallel --no-build-cache --no-configuration-cache --no-problems-report `
         "-Dkotlin.compiler.execution.strategy=in-process" --dependency-verification=strict `
-        clean :app:verifyReleaseProfiles bundleRelease :app:verifyReproducibleSbomMetadata
+        "-PreleaseTarget=$Target" clean :app:verifyReleaseProfiles ":app:bundle${flavor}Release" :app:verifyReproducibleSbomMetadata
     if ($LASTEXITCODE -ne 0) {
         throw "Release build failed with exit code $LASTEXITCODE."
     }

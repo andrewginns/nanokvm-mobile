@@ -31,9 +31,13 @@ internal fun ConnectionFailure.displayText(): String = when (this) {
         stringResource(R.string.console_failure_certificate_date_invalid)
     ConnectionFailure.CertificateInspectionFailed ->
         stringResource(R.string.console_failure_certificate_inspection_failed)
-    is ConnectionFailure.RequestRejected -> responseCode?.let { code ->
+    is ConnectionFailure.RequestRejected -> when (responseCode) {
+        401, 403 -> stringResource(R.string.comet_login_rejected)
+        429 -> stringResource(R.string.comet_rate_limited)
+        else -> responseCode?.let { code ->
         stringResource(R.string.console_failure_request_rejected_code, code)
     } ?: stringResource(R.string.console_failure_request_rejected)
+    }
     ConnectionFailure.UnsupportedApplicationVersion ->
         stringResource(R.string.console_failure_unsupported_application_version)
     ConnectionFailure.ProtocolError -> stringResource(R.string.console_failure_protocol_error)
@@ -50,6 +54,7 @@ internal fun CertificatePresentationReason.displayText(): String = stringResourc
 @StringRes
 internal fun certificatePresentationReasonResource(reason: CertificatePresentationReason): Int =
     when (reason) {
+        CertificatePresentationReason.NameMismatch -> R.string.comet_name_mismatch
         CertificatePresentationReason.NotTrustedByAndroid ->
             R.string.certificate_reason_not_trusted
         CertificatePresentationReason.TrustedByAndroid ->
@@ -102,6 +107,7 @@ internal fun ConsoleMessage.displayText(): String = when (this) {
         R.string.console_message_authenticating_destination,
         authority,
     )
+    ConsoleMessage.NoHdmiSignal -> stringResource(R.string.comet_no_hdmi)
     ConsoleMessage.ConnectedToNanoKvm -> stringResource(R.string.console_message_connected)
     ConsoleMessage.PausedInBackground ->
         stringResource(R.string.console_message_paused_in_background)

@@ -98,6 +98,7 @@ internal class ConsoleFixtureState : ViewModel(), NanoKvmOfflineUpdateFeatureOwn
     internal var sensitiveGeneration by mutableLongStateOf(0L)
     internal val features = ConsoleFeatureBundle(
         core = backend,
+        appliance = backend,
         administration = backend,
         offlineUpdate = this,
     )

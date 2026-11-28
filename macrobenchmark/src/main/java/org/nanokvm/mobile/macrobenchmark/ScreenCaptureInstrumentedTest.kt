@@ -40,18 +40,18 @@ class ScreenCaptureInstrumentedTest {
 
     @Test
     fun foregroundScreenshotsContainAppContentAcrossNavigationResumeAndRotation() {
-        assertTextIsCaptured("NanoKVM Mobile")
-        device.findObject(By.desc("Add a NanoKVM profile")).click()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("${BuildConfig.DEVICE_NAME} Mobile")
+        device.findObject(By.desc("Add a ${BuildConfig.DEVICE_NAME} profile")).click()
+        assertTextIsCaptured("Add ${BuildConfig.DEVICE_NAME}")
 
         device.pressHome()
         launchTarget()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add ${BuildConfig.DEVICE_NAME}")
 
         device.setOrientationLeft()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add ${BuildConfig.DEVICE_NAME}")
         device.setOrientationNatural()
-        assertTextIsCaptured("Add NanoKVM")
+        assertTextIsCaptured("Add ${BuildConfig.DEVICE_NAME}")
     }
 
     private fun launchTarget() {
@@ -87,7 +87,7 @@ class ScreenCaptureInstrumentedTest {
     }
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
+        val TARGET_PACKAGE = BuildConfig.TARGET_PACKAGE
         const val UI_TIMEOUT_MS = 8_000L
     }
 }

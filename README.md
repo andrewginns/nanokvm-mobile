@@ -1,4 +1,4 @@
-# NanoKVM Mobile
+# NanoKVM Mobile and Comet Mobile
 
 [![Latest release](https://img.shields.io/github/v/release/andrewginns/nanokvm-mobile?label=release)](https://github.com/andrewginns/nanokvm-mobile/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
@@ -20,7 +20,11 @@ controls, and appliance administration.
 **[Build from source](#build-from-source)** |
 **[Report a problem](https://github.com/andrewginns/nanokvm-mobile/issues/new/choose)**
 
-## Features
+## Comet Mobile
+
+The same Android project also builds Comet Mobile for the GL.iNet Comet RM1. Its console supports pinned HTTPS, optional two-factor sign-in, H.264 video, keyboard shortcuts, pointer input, clipboard typing and reconnect. Each app keeps its own profiles, certificate pins and saved passwords. [Comet console scope](docs/COMET_CONSOLE_PLAN.md)
+
+## NanoKVM features
 
 - Saved NanoKVM profiles with explicit HTTPS certificate review and per-device
   certificate pinning.
@@ -135,6 +139,17 @@ provenance requirements are documented in [Distribution](docs/DISTRIBUTION.md).
 
 ## Build from source
 
+Run `./gradlew verifyDeviceBuilds` to build both release APKs, test the shared protocol and video modules, and run app tests and lint for both products. Version each app independently in `release/targets/`. NanoKVM keeps its historical `v*` tags. Comet uses `comet-v*` tags. Find public artifacts on the [releases page](https://github.com/andrewginns/nanokvm-mobile/releases). Set Comet releases to `--latest=false` to preserve NanoKVM's existing download link.
+
+For local phone updates, use PowerShell 7 with JDK 21 and the Android SDK configured. Supply the previous APK actually installed on the device.
+
+```powershell
+./scripts/build-development-update.ps1 -Variant Development -PreviousApk <previous-nano-dev.apk>
+./scripts/build-development-update.ps1 -Target comet -PreviousApk <previous-comet-device-test.apk>
+```
+
+The builders verify package, version and signing identity before placing the APK in `dist/`. NanoKVM Dev installs alongside production NanoKVM. Comet's device-test build updates the historical Comet test installation.
+
 Install Android Studio, or install JDK 21 plus the Android SDK command-line
 tools, platform 37, and platform-tools, then accept the SDK licences. Configure
 the SDK through Android Studio, `ANDROID_HOME`, or a local untracked
@@ -149,16 +164,16 @@ cd nanokvm-mobile
 Windows PowerShell:
 
 ```powershell
-.\gradlew.bat --no-problems-report --dependency-verification=strict :app:assembleDebug
+.\gradlew.bat --no-problems-report --dependency-verification=strict :app:assembleNanoDebug :app:assembleCometDebug
 ```
 
 macOS or Linux:
 
 ```shell
-./gradlew --no-problems-report --dependency-verification=strict :app:assembleDebug
+./gradlew --no-problems-report --dependency-verification=strict :app:assembleNanoDebug :app:assembleCometDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. It uses the
+The debug APKs are written under `app/build/outputs/apk/{nano,comet}/debug/`. Both use the
 local machine's debug certificate and cannot update the published APK. Do not
 share it as an update build. `main` identifies itself as the next development
 version; check out a release tag when you need the exact source for a published

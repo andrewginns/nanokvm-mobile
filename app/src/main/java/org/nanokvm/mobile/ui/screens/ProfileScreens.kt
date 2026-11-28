@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.ui.screens
 
+import org.nanokvm.mobile.DeviceTarget
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -579,6 +580,7 @@ private fun ProfileCard(
             FilledTonalButton(
                 onClick = if (profile.useHttps) onConnect else onEdit,
                 enabled = actionsEnabled,
+                modifier = Modifier.testTag("connect-profile-${profile.id}"),
             ) {
                 if (!profile.useHttps) {
                     Text(stringResource(R.string.profile_upgrade_action))
@@ -711,6 +713,7 @@ fun ProfileEditorScreen(
     var port by rememberSaveable(initial.id) {
         mutableStateOf(if (!initial.useHttps && initial.port == 80) "443" else initial.port.toString())
     }
+    var requiresTotp by rememberSaveable(initial.id) { mutableStateOf(initial.requiresTotp) }
     var username by rememberSaveable(initial.id) { mutableStateOf(initial.username) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRemovePassword by remember { mutableStateOf(false) }
@@ -721,6 +724,7 @@ fun ProfileEditorScreen(
         port = portValue ?: initial.port,
         useHttps = true,
         username = username.trim(),
+        requiresTotp = requiresTotp,
     )
     val issue = ProfileInputPolicy.issue(prospectiveProfile)
     val valid = portValue != null && issue == null
@@ -827,6 +831,14 @@ fun ProfileEditorScreen(
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             isError = username.isNotEmpty() && issue == ProfileInputIssue.InvalidUsername,
                         )
+                        if (DeviceTarget.supportsTotp) Row(
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .toggleable(requiresTotp, role = Role.Switch) { requiresTotp = it },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(stringResource(R.string.comet_use_totp), Modifier.weight(1f))
+                            Switch(checked = requiresTotp, onCheckedChange = null)
+                        }
                         if (hasSavedPassword) {
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -1056,5 +1068,30 @@ private fun SectionLabel(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+internal fun TotpDialog(profile: HostProfile, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
+    var code by remember(profile) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(profile.name) },
+        text = {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it.filter { digit -> digit in '0'..'9' }.take(6) },
+                label = { Text(stringResource(R.string.comet_totp)) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = code.length == 6, onClick = { onSubmit(code) }) {
+                Text(stringResource(R.string.profile_connect_action))
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.common_cancel)) } },
     )
 }

@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("nano", "comet")][string]$Target = "nano",
     [Parameter(Mandatory = $true)]
     [string]$SourceTag,
 
@@ -174,6 +175,13 @@ function Remove-EvidencePath {
 }
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'private\release-target.ps1')
+$product = Get-ReleaseTarget -Repository $repository -Target $Target
+$flavor = $product.Title
+$releaseVariant = $product.ReleaseVariant
+$slug = $product.Slug
+$artifactName = $product.ArtifactName
+
 $gitStatusResult = Invoke-NativeCapture `
     -FilePath "git.exe" `
     -Arguments @("-C", $repository, "status", "--porcelain", "--untracked-files=all")
@@ -185,16 +193,9 @@ if ($gitStatus) {
     throw "Unsigned release evidence requires a clean worktree at the exact source tag."
 }
 
-$rootBuild = Get-Content -Raw (Join-Path $repository "build.gradle.kts")
-$appBuild = Get-Content -Raw (Join-Path $repository "app\build.gradle.kts")
-$versionNameMatch = [regex]::Match($rootBuild, '(?m)^\s*version\s*=\s*"([^"]+)"')
-$versionCodeMatch = [regex]::Match($appBuild, '(?m)^\s*versionCode\s*=\s*([0-9]+)')
-if (-not $versionNameMatch.Success -or -not $versionCodeMatch.Success) {
-    throw "Could not determine the source version name/code from the Gradle build files."
-}
-$sourceVersionName = $versionNameMatch.Groups[1].Value
-$sourceVersionCode = [long]$versionCodeMatch.Groups[1].Value
-$canonicalTag = "v$sourceVersionName"
+$sourceVersionName = $product.VersionName
+$sourceVersionCode = $product.VersionCode
+$canonicalTag = $product.Tag
 if ($SourceTag -cne $canonicalTag) {
     throw "The canonical release tag for source version $sourceVersionName is $canonicalTag."
 }
@@ -267,7 +268,7 @@ foreach ($tool in @($aapt2, $zipAlign, $apkSignerJar)) {
 
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
+        "dist\$artifactName-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {
@@ -278,7 +279,7 @@ if ([IO.Path]::IsPathRooted($OutputPath)) {
 if (-not $BuildLogPath) {
     $buildTimestamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
     $BuildLogPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
+        "dist\$artifactName-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
     )
 }
 if ([IO.Path]::IsPathRooted($BuildLogPath)) {
@@ -343,13 +344,14 @@ $strictBuildArguments = @(
     "-Pkotlin.compiler.execution.strategy=in-process",
     "--dependency-verification=strict",
     "clean",
-    "test",
-    "lintRelease",
-    "assembleRelease",
-    "bundleRelease",
-    "assembleBenchmark",
+    "-PreleaseTarget=$Target",
+    ":protocol:testDebugUnitTest", ":video:testDebugUnitTest", ":app:test${flavor}DebugUnitTest",
+    ":protocol:lintRelease", ":video:lintRelease", ":app:lint${flavor}Release", ":macrobenchmark:lint${flavor}Release",
+    ":app:assemble${flavor}Release",
+    ":app:bundle${flavor}Release",
+    ":app:assemble${flavor}Benchmark",
     ":app:verifyReleaseProfiles",
-    ":macrobenchmark:assembleBenchmark",
+    ":macrobenchmark:assemble${flavor}Benchmark",
     ":app:verifyReproducibleSbomMetadata"
 )
 $gradleWrapper = Join-Path $repository "gradlew.bat"
@@ -396,6 +398,7 @@ Move-Item -LiteralPath $inProgressBuildLog -Destination $absoluteBuildLog
 $publishedEvidencePaths.Add($absoluteBuildLog)
 
 $dependencyGraphArguments = @(
+    "-PreleaseTarget=$Target",
     "--no-problems-report",
     "--no-daemon",
     "--no-parallel",
@@ -405,7 +408,7 @@ $dependencyGraphArguments = @(
     "--console=plain",
     ":app:dependencies",
     "--configuration",
-    "releaseRuntimeClasspath"
+    "${releaseVariant}RuntimeClasspath"
 )
 New-Item -ItemType Directory -Path $inProgressArtifactDirectory | Out-Null
 $inProgressDependencyDirectory = Join-Path $inProgressArtifactDirectory "dependencies"
@@ -442,7 +445,7 @@ if ((Get-Item -LiteralPath $inProgressDependencyGraph).Length -le 0) {
 }
 $dependencyGraphText = Get-Content -Raw -LiteralPath $inProgressDependencyGraph
 if (
-    $dependencyGraphText -notmatch '(?m)^releaseRuntimeClasspath\s+-\s+' -or
+    $dependencyGraphText -notmatch "(?m)^${releaseVariant}RuntimeClasspath\s+-\s+" -or
     $dependencyGraphText -match '(?m)\bFAILED\b'
 ) {
     throw "The retained release dependency graph is incomplete or unresolved."
@@ -456,33 +459,33 @@ if ($postBuildGitResult.ExitCode -ne 0 -or $postBuildGitStatus) {
     throw "The strict build changed the tagged source worktree; release evidence was not created."
 }
 
-$UnsignedApk = Join-Path $repository "app\build\outputs\apk\release\app-release-unsigned.apk"
-$ReleaseBundle = Join-Path $repository "app\build\outputs\bundle\release\app-release.aab"
-$Sbom = Join-Path $repository "app\build\reports\cyclonedx\nanokvm-mobile.cdx.json"
+$UnsignedApk = Join-Path $repository "app\build\outputs\apk\$Target\release\app-$Target-release-unsigned.apk"
+$ReleaseBundle = Join-Path $repository "app\build\outputs\bundle\$releaseVariant\app-$Target-release.aab"
+$Sbom = Join-Path $repository "app\build\reports\cyclonedx\$slug.cdx.json"
 $unsignedApkRecord = Get-ArtifactRecord -Path $UnsignedApk -Repository $repository
 $releaseBundleRecord = Get-ArtifactRecord -Path $ReleaseBundle -Repository $repository
 $sbomRecord = Get-ArtifactRecord -Path $Sbom -Repository $repository
 $strictBuildLogRecord = Get-ArtifactRecord -Path $absoluteBuildLog -Repository $repository
 
-$benchmarkApk = Join-Path $repository "app\build\outputs\apk\benchmark\app-benchmark.apk"
+$benchmarkApk = Join-Path $repository "app\build\outputs\apk\$Target\benchmark\app-$Target-benchmark.apk"
 $mergedReleaseManifest = Join-Path $repository (
-    "app\build\intermediates\merged_manifests\release\processReleaseManifest\AndroidManifest.xml"
+    "app\build\intermediates\merged_manifests\$releaseVariant\process${flavor}ReleaseManifest\AndroidManifest.xml"
 )
 $networkSecurityConfig = Join-Path $repository (
-    "app\build\intermediates\packaged_res\release\packageReleaseResources\xml\network_security_config.xml"
+    "app\build\intermediates\packaged_res\$releaseVariant\package${flavor}ReleaseResources\xml\network_security_config.xml"
 )
 $r8Outputs = [ordered]@{
-    mapping = Join-Path $repository "app\build\outputs\mapping\release\mapping.txt"
-    seeds = Join-Path $repository "app\build\outputs\mapping\release\seeds.txt"
-    usage = Join-Path $repository "app\build\outputs\mapping\release\usage.txt"
-    configuration = Join-Path $repository "app\build\outputs\mapping\release\configuration.txt"
-    resources = Join-Path $repository "app\build\outputs\mapping\release\resources.txt"
+    mapping = Join-Path $repository "app\build\outputs\mapping\$releaseVariant\mapping.txt"
+    seeds = Join-Path $repository "app\build\outputs\mapping\$releaseVariant\seeds.txt"
+    usage = Join-Path $repository "app\build\outputs\mapping\$releaseVariant\usage.txt"
+    configuration = Join-Path $repository "app\build\outputs\mapping\$releaseVariant\configuration.txt"
+    resources = Join-Path $repository "app\build\outputs\mapping\$releaseVariant\resources.txt"
 }
 
 $resolvedUnsignedApk = (Resolve-Path -LiteralPath (Join-Path $repository $unsignedApkRecord.path)).Path
 $apkMetadata = Get-ApkMetadata -Apk $resolvedUnsignedApk -Aapt2 $aapt2
 if (
-    $apkMetadata.package -ne "org.nanokvm.mobile" -or
+    $apkMetadata.package -ne $product.ApplicationId -or
     $apkMetadata.versionName -ne $sourceVersionName -or
     $apkMetadata.versionCode -ne $sourceVersionCode -or
     $apkMetadata.minimumSdk -ne 26 -or
@@ -507,7 +510,8 @@ if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
 
 $testFiles = @()
 foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
-    $testResultDirectory = Join-Path $repository "$module\build\test-results\testDebugUnitTest"
+    $testTask = if ($module -eq "app") { "test${flavor}DebugUnitTest" } else { "testDebugUnitTest" }
+    $testResultDirectory = Join-Path $repository "$module\build\test-results\$testTask"
     if (Test-Path -LiteralPath $testResultDirectory -PathType Container) {
         $testFiles += Get-ChildItem -LiteralPath $testResultDirectory -File -Filter "TEST-*.xml"
     }
@@ -527,7 +531,8 @@ if ($testTotals.tests -le 0 -or $testTotals.failures -ne 0 -or $testTotals.error
 
 $lintFiles = @()
 foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
-    $lintFile = Join-Path $repository "$module\build\reports\lint-results-release.xml"
+    $lintVariant = if ($module -in "app", "macrobenchmark") { $releaseVariant } else { "release" }
+    $lintFile = Join-Path $repository "$module\build\reports\lint-results-$lintVariant.xml"
     if (Test-Path -LiteralPath $lintFile -PathType Leaf) {
         $lintFiles += Get-Item -LiteralPath $lintFile
     }
@@ -586,7 +591,7 @@ foreach ($requiredArtifact in @(
     }
 }
 
-$sourceArchiveRelative = "source\NanoKVM-Mobile-$sourceVersionName-source.zip"
+$sourceArchiveRelative = "source\$artifactName-$sourceVersionName-source.zip"
 $sourceArchiveStaging = Join-Path $inProgressArtifactDirectory $sourceArchiveRelative
 $sourceArchiveDirectory = Split-Path -Parent $sourceArchiveStaging
 New-Item -ItemType Directory -Path $sourceArchiveDirectory | Out-Null
@@ -597,7 +602,7 @@ $sourceArchiveResult = Invoke-NativeCapture `
         $repository,
         "archive",
         "--format=zip",
-        "--prefix=NanoKVM-Mobile-$sourceVersionName/",
+        "--prefix=$artifactName-$sourceVersionName/",
         "--output=$sourceArchiveStaging",
         $tagReference
     )
@@ -612,7 +617,7 @@ $retainedSources = [ordered]@{
     unsignedApk = [pscustomobject]@{ source = $UnsignedApk; destination = "artifacts\app-release-unsigned.apk" }
     releaseBundle = [pscustomobject]@{ source = $ReleaseBundle; destination = "artifacts\app-release.aab" }
     benchmarkApk = [pscustomobject]@{ source = $benchmarkApk; destination = "artifacts\app-benchmark.apk" }
-    sbom = [pscustomobject]@{ source = $Sbom; destination = "reports\nanokvm-mobile.cdx.json" }
+    sbom = [pscustomobject]@{ source = $Sbom; destination = "reports\$slug.cdx.json" }
     mergedReleaseManifest = [pscustomobject]@{ source = $mergedReleaseManifest; destination = "manifest\AndroidManifest.xml" }
     networkSecurityConfig = [pscustomobject]@{ source = $networkSecurityConfig; destination = "manifest\network_security_config.xml" }
     mapping = [pscustomobject]@{ source = $r8Outputs.mapping; destination = "r8\mapping.txt" }

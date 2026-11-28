@@ -69,7 +69,9 @@ class AboutDialogInstrumentedTest {
                 .fetchSemanticsNodes()
                 .isNotEmpty()
         }
-        composeRule.onNodeWithText("# Privacy notice", substring = true).assertIsDisplayed()
+        val privacyTitle = composeRule.activity.assets.open("about/PRIVACY.md")
+            .bufferedReader().use { requireNotNull(it.readLine()) }
+        composeRule.onNodeWithText(privacyTitle, substring = true).assertIsDisplayed()
     }
 
     @Test

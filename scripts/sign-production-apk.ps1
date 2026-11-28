@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("nano", "comet")][string]$Target = "nano",
     [Parameter(Mandatory = $true)]
     [string]$SourceTag,
 
@@ -149,12 +150,12 @@ function Get-VerifiedSigner {
     }
     $signerMatches = [regex]::Matches(
         $signatureOutput,
-        "Signer #[0-9]+ certificate SHA-256 digest:\s*([0-9a-fA-F]+)"
+        '(?m)^(?:Signer #1|V[0-9.]+ Signer:) certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\r?$'
     )
-    if ($signerMatches.Count -ne 1) {
+    if ($signatureOutput -notmatch '(?m)^Number of signers: 1\r?$' -or $signerMatches.Count -ne 1) {
         throw "Expected exactly one APK signer for $Apk; found $($signerMatches.Count)."
     }
-    $subjectMatch = [regex]::Match($signatureOutput, 'Signer #1 certificate DN:\s*(.+)')
+    $subjectMatch = [regex]::Match($signatureOutput, '(?m)^(?:Signer #1|V[0-9.]+ Signer:) certificate DN:\s*(.+)')
     return [pscustomobject]@{
         sha256 = $signerMatches[0].Groups[1].Value.ToLowerInvariant()
         subject = $(if ($subjectMatch.Success) { $subjectMatch.Groups[1].Value.Trim() } else { "" })
@@ -218,6 +219,10 @@ if ($FirstProductionRelease.IsPresent -eq [bool]$PreviousProductionApk) {
 }
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'private\release-target.ps1')
+$product = Get-ReleaseTarget -Repository $repository -Target $Target
+$artifactName = $product.ArtifactName
+
 $repositoryPrefix = $repository.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $gitStatusResult = Invoke-NativeCapture `
     -FilePath "git.exe" `
@@ -230,16 +235,9 @@ if ($gitStatus) {
     throw "Production signing requires a clean worktree at the exact source tag."
 }
 
-$rootBuild = Get-Content -Raw (Join-Path $repository "build.gradle.kts")
-$appBuild = Get-Content -Raw (Join-Path $repository "app\build.gradle.kts")
-$versionNameMatch = [regex]::Match($rootBuild, '(?m)^\s*version\s*=\s*"([^"]+)"')
-$versionCodeMatch = [regex]::Match($appBuild, '(?m)^\s*versionCode\s*=\s*([0-9]+)')
-if (-not $versionNameMatch.Success -or -not $versionCodeMatch.Success) {
-    throw "Could not determine the source version name/code from the Gradle build files."
-}
-$sourceVersionName = $versionNameMatch.Groups[1].Value
-$sourceVersionCode = [long]$versionCodeMatch.Groups[1].Value
-$canonicalTag = "v$sourceVersionName"
+$sourceVersionName = $product.VersionName
+$sourceVersionCode = $product.VersionCode
+$canonicalTag = $product.Tag
 if ($SourceTag -cne $canonicalTag) {
     throw "The canonical release tag for source version $sourceVersionName is $canonicalTag."
 }
@@ -274,7 +272,7 @@ if (
 }
 
 if (-not $LineagePath) {
-    $LineagePath = Join-Path $repository "release\production-signing-lineage.json"
+    $LineagePath = Join-Path $repository $product.Lineage
 }
 $resolvedLineage = Resolve-ReleaseInputPath -Path $LineagePath -Repository $repository
 if (-not $resolvedLineage.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
@@ -291,7 +289,7 @@ $lineage = Get-Content -Raw -LiteralPath $resolvedLineage | ConvertFrom-Json
 $previousLineageProperty = $lineage.PSObject.Properties["previousProduction"]
 if (
     $lineage.schemaVersion -ne 1 -or
-    $lineage.package -ne "org.nanokvm.mobile" -or
+    $lineage.package -ne $product.ApplicationId -or
     $lineage.keyAlias -cne $KeyAlias -or
     [long]$lineage.firstProductionVersionCode -le 0 -or
     [string]::IsNullOrWhiteSpace([string]$lineage.firstProductionVersionName) -or
@@ -377,7 +375,7 @@ if (
     $evidence.schemaVersion -ne 2 -or
     $evidence.sourceTag -cne $SourceTag -or
     $evidence.sourceCommit -ne $headCommit -or
-    $evidence.package -ne "org.nanokvm.mobile" -or
+    $evidence.package -ne $product.ApplicationId -or
     $evidence.versionName -ne $sourceVersionName -or
     [long]$evidence.versionCode -ne $sourceVersionCode -or
     [int]$evidence.minimumSdk -ne 26 -or
@@ -493,6 +491,11 @@ $forbiddenDevelopmentSigners = @(
     "7f2e5128eb089159536803992e381aa830d0e7a2d9601fac0048e3821ea02746",
     "149d694db3d3b0d86849d1f99a570fb78c11627739494aa8c4e04eec6e276002"
 )
+if ($Target -eq 'comet') {
+    $nanoLineage = Get-Content -Raw (Join-Path $repository 'release/production-signing-lineage.json') | ConvertFrom-Json
+    $forbiddenDevelopmentSigners += $nanoLineage.signingCertificateSha256
+    $forbiddenDevelopmentSigners += ([string]$env:COMET_DEVELOPMENT_SIGNER_SHA256).Replace(':','').ToLowerInvariant()
+}
 if ($normalizedExpectedSigner -in $forbiddenDevelopmentSigners) {
     throw "A development/debug certificate cannot establish the production signing lineage."
 }
@@ -566,7 +569,7 @@ if ($Unattended -and -not $useLocalPassword) {
 
 if (-not $OutputPath) {
     $OutputPath = Join-Path $repository (
-        "dist\NanoKVM-Mobile-$sourceVersionName-v$sourceVersionCode.apk"
+        "dist\$artifactName-$sourceVersionName-v$sourceVersionCode.apk"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {

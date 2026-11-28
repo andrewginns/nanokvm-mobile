@@ -6,9 +6,7 @@ import org.nanokvm.mobile.data.ProfileRepository
 import org.nanokvm.mobile.platform.AndroidLocalNetworkAccess
 import org.nanokvm.mobile.platform.AndroidClipboardGateway
 import org.nanokvm.mobile.runtime.ConsoleBackend
-import org.nanokvm.mobile.runtime.NanoKvmConsoleBackend
 import org.nanokvm.mobile.security.SavedCredentialStore
-import org.nanokvm.video.NanoKvmWebRtcRuntime
 
 /**
  * Small manual dependency container. The process owns repositories and factories; each
@@ -38,7 +36,7 @@ class AppContainer(context: Context) {
     }
 
     val backendFactory: ConsoleBackendFactory = ConsoleBackendFactory {
-        NanoKvmConsoleBackend { NanoKvmWebRtcRuntime.get(applicationContext) }
+        DeviceTarget.createBackend(applicationContext)
     }
 }
 

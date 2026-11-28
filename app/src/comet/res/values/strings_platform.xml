@@ -1,0 +1,10 @@
+<resources>
+    <string name="local_network_permission_rationale">Comet needs local network access to connect directly to %1$s. It does not scan your network or send this access to another service.</string>
+    <string name="local_network_permission_denied_retry">Comet cannot reach %1$s until local network access is allowed. You can try the Android permission request again.</string>
+    <string name="local_network_permission_denied_settings">Comet cannot reach %1$s until local network access is enabled in Android settings.</string>
+    <string name="credential_prompt_unlock_title">Unlock saved Comet password</string>
+    <string name="credential_prompt_save_title">Protect Comet password</string>
+    <string name="share_plain_text_only">Comet can review one direct plain-text share. Rich text, files, links supplied through content providers, and empty shares are not opened.</string>
+    <string name="share_text_too_long">Shared text exceeds Comet’s 65,536-byte retained paste limit and was not retained.</string>
+    <string name="share_choose_connection">Choose a Comet connection to review the shared text. Nothing will be sent automatically.</string>
+</resources>

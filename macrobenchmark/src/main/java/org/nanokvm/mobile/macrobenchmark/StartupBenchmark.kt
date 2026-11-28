@@ -55,6 +55,6 @@ class StartupBenchmark {
     )
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
+        val TARGET_PACKAGE = BuildConfig.TARGET_PACKAGE
     }
 }

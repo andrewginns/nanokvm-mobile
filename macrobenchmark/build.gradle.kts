@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.test)
     alias(libs.plugins.androidx.baselineprofile.producer)
@@ -14,6 +16,21 @@ android {
         testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "EMULATOR"
     }
 
+    buildFeatures { buildConfig = true }
+    flavorDimensions += "device"
+    productFlavors {
+        listOf("nano", "comet").forEach { target ->
+            create(target) {
+                dimension = "device"
+                val metadata = Properties().apply {
+                    rootProject.file("release/targets/$target.properties").inputStream().use { load(it) }
+                }
+                val deviceName = if (target == "nano") "NanoKVM" else "Comet"
+                buildConfigField("String", "DEVICE_NAME", "\"$deviceName\"")
+                buildConfigField("String", "TARGET_PACKAGE", "\"" + metadata.getProperty("applicationId") + "\"")
+            }
+        }
+    }
     targetProjectPath = ":app"
     experimentalProperties["android.experimental.self-instrumenting"] = true
 

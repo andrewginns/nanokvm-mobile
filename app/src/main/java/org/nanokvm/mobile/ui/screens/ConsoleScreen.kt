@@ -329,6 +329,7 @@ internal fun ConsoleScreen(
         )
     }
     val coreControls = features.core
+    val applianceControls = features.appliance != null
     val phase3Controls = features.phase3
     val administrationControls = features.administration
     val operatorControls = features.operator
@@ -345,6 +346,7 @@ internal fun ConsoleScreen(
     var keyboardVisible by rememberSaveable { mutableStateOf(false) }
     var keyboardLayout by rememberSaveable { mutableStateOf(defaultKeyboardLayout) }
     var viewNavigationVisible by rememberSaveable { mutableStateOf(true) }
+    var trackpadDragging by remember(session.inputReleaseGeneration, session.sessionGeneration) { mutableStateOf(false) }
     var controlsExpanded by rememberSaveable { mutableStateOf(false) }
     var fitRequest by rememberSaveable(
         profile.id,
@@ -355,6 +357,19 @@ internal fun ConsoleScreen(
     var viewportCommand by remember { mutableStateOf<ViewportCommand?>(null) }
     var overlay by rememberSaveable(stateSaver = consoleOverlaySaver) {
         mutableStateOf<ConsoleOverlay>(ConsoleOverlay.None)
+    }
+    LaunchedEffect(features, overlay) {
+        val available = when (overlay) {
+            ConsoleOverlay.PowerMenu, ConsoleOverlay.VideoSettings, ConsoleOverlay.DeviceInfo -> applianceControls
+            ConsoleOverlay.VirtualMedia, ConsoleOverlay.WakeOnLan -> phase3Controls != null
+            ConsoleOverlay.OfflineUpdate -> offlineUpdateOwner != null
+            ConsoleOverlay.Automation -> automationOwner != null
+            ConsoleOverlay.OperatorTools -> operatorControls != null
+            ConsoleOverlay.Administration -> administrationControls != null
+            ConsoleOverlay.PicoClaw -> picoClawControls != null
+            else -> true
+        }
+        if (!available) overlay = ConsoleOverlay.None
     }
     val offlineDocumentHandoff = drafts.offlineDocumentHandoff
     val pendingDocument = offlineDocumentHandoff.pending
@@ -626,6 +641,9 @@ internal fun ConsoleScreen(
             overlay = overlay.dismissSessionBoundOverlay()
             observedSensitiveWorkGeneration = sensitiveWorkGeneration
         }
+    }
+    LaunchedEffect(pointerMode, session.sessionGeneration, session.connection.isSessionUsable) {
+        if (session.connection.isSessionUsable) input.selectRelativePointer(pointerMode != PointerMode.Direct)
     }
     LaunchedEffect(pointerCaptureState) {
         if (
@@ -916,7 +934,15 @@ internal fun ConsoleScreen(
                 contextualInput.releaseAllInput()
             },
             onViewportAction = requestViewportAction,
-            onCtrlAltDelete = { requestPowerAction(PowerAction.CtrlAltDelete) },
+            onCtrlAltDelete = {
+                if (applianceControls) requestPowerAction(PowerAction.CtrlAltDelete)
+                else {
+                    contextualInput.releaseAllInput()
+                    val chord = listOf(RemoteKey.Control, RemoteKey.Alt, RemoteKey.Delete)
+                    chord.forEach { contextualInput.key(it, true) }
+                    chord.asReversed().forEach { contextualInput.key(it, false) }
+                }
+            },
             onRetryConnection = {
                 if (!session.connection.isSessionUsable) contextualInput.releaseAllInput()
                 if (session.status == ConsoleMessage.AuthenticationExpired) {
@@ -933,6 +959,7 @@ internal fun ConsoleScreen(
         )
         val controlsContent: @Composable (Modifier) -> Unit = { controlsModifier ->
             ConsoleControlContent(
+                applianceControls = applianceControls,
                 profile = profile,
                 session = session,
                 pointerMode = pointerMode,
@@ -951,6 +978,12 @@ internal fun ConsoleScreen(
                 },
                 onPointerMode = selectPointerMode,
                 onViewNavigation = toggleViewNavigation,
+                trackpadDragging = trackpadDragging,
+                onToggleDrag = {
+                    trackpadDragging = !trackpadDragging
+                    contextualInput.mouseButton(MouseButton.Left, trackpadDragging)
+                    controlsExpanded = false
+                },
                 onMouseClick = { button -> contextualInput.sendOneShotMouseClick(button) },
                 onFit = {
                     fitRequest++
@@ -1150,7 +1183,7 @@ internal fun ConsoleScreen(
         }
     }
 
-    if (overlay == ConsoleOverlay.VideoSettings) {
+    if (applianceControls && overlay == ConsoleOverlay.VideoSettings) {
         VideoSettingsDialog(
             initial = session.videoSettings,
             supportsManualResolution = session.supportsManualResolution,
@@ -1159,7 +1192,7 @@ internal fun ConsoleScreen(
             initialMjpegFrameDetectionEnabled = mjpegFrameDetectionEnabled,
             onDismiss = { overlay = ConsoleOverlay.None },
             onApply = { settings, frameDetectionEnabled ->
-                if (settings != session.videoSettings) coreControls.updateVideo(settings)
+                if (settings != session.videoSettings) features.appliance.updateVideo(settings)
                 if (frameDetectionEnabled != mjpegFrameDetectionEnabled) {
                     onMjpegFrameDetectionEnabledChange(frameDetectionEnabled)
                 }
@@ -1177,7 +1210,7 @@ internal fun ConsoleScreen(
             },
         )
     }
-    if (overlay == ConsoleOverlay.PowerMenu) {
+    if (applianceControls && overlay == ConsoleOverlay.PowerMenu) {
         PowerMenuDialog(
             onDismiss = { overlay = ConsoleOverlay.None },
             onChoose = {
@@ -1192,22 +1225,25 @@ internal fun ConsoleScreen(
             onDismiss = { pendingPowerAction = null },
             onConfirm = {
                 keyboardContextBoundary.invalidate()
-                coreControls.power(request.destination, request.action)
+                features.appliance?.power(request.destination, request.action)
                 pendingPowerAction = null
             },
         )
     }
     if (overlay == ConsoleOverlay.MoreMenu) {
         MoreActionsDialog(
+            applianceControls = applianceControls,
             onDismiss = { overlay = ConsoleOverlay.None },
             onReconnect = {
                 overlay = ConsoleOverlay.None
-                coreControls.reconnect()
+                contextualInput.releaseAllInput()
+                if (session.status == ConsoleMessage.AuthenticationExpired) onReauthenticate()
+                else coreControls.reconnect()
             },
             onResetHid = {
                 overlay = ConsoleOverlay.None
                 contextualInput.releaseAllInput()
-                coreControls.resetHid()
+                features.appliance?.resetHid()
             },
             onDeviceInfo = {
                 overlay = ConsoleOverlay.DeviceInfo
@@ -1260,7 +1296,7 @@ internal fun ConsoleScreen(
             },
         )
     }
-    if (overlay == ConsoleOverlay.DeviceInfo) {
+    if (applianceControls && overlay == ConsoleOverlay.DeviceInfo) {
         DeviceInfoDialog(
             session = session,
             onDismiss = { overlay = ConsoleOverlay.None },
@@ -1287,7 +1323,7 @@ internal fun ConsoleScreen(
             onDismiss = { overlay = ConsoleOverlay.None },
         )
     }
-    if (overlay == ConsoleOverlay.OfflineUpdate) {
+    if (offlineUpdateOwner != null && overlay == ConsoleOverlay.OfflineUpdate) {
         OfflineUpdateGatewayDialog(
             gateway = offlineUpdateGateway,
             onChoosePackage = chooseOfflineUpdateDocument,
@@ -2312,7 +2348,7 @@ private fun ClipboardPasteDialog(
                 }
                 payload.warnings.forEach { warning ->
                     Text(
-                        text = "• " + stringResource(warning.stringResourceId()),
+                        text = "â€¢ " + stringResource(warning.stringResourceId()),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -2449,6 +2485,9 @@ internal fun PointerCaptureStatus(
 
 @Composable
 private fun ConsoleControlContent(
+    trackpadDragging: Boolean,
+    onToggleDrag: () -> Unit,
+    applianceControls: Boolean,
     profile: HostProfile,
     session: BackendSession,
     pointerMode: PointerMode,
@@ -2535,6 +2574,14 @@ private fun ConsoleControlContent(
             onViewNavigation,
         )
         MouseClickControls(onMouseClick)
+        if (!applianceControls && pointerMode == PointerMode.Trackpad) {
+            SheetAction(
+                Icons.Default.OpenWith,
+                stringResource(if (trackpadDragging) R.string.comet_end_drag else R.string.comet_start_drag),
+                onToggleDrag,
+                enabled = session.connection.isSessionUsable,
+            )
+        }
         SideSessionStatus(profile, session)
         SheetAction(
             Icons.Default.Refresh,
@@ -2567,17 +2614,19 @@ private fun ConsoleControlContent(
             stringResource(R.string.console_actual_size_remote_view),
             onActualSize,
         )
-        SheetAction(
-            Icons.Default.Tune,
-            stringResource(R.string.console_video_settings),
-            onVideo,
-        )
-        SheetAction(
-            Icons.Default.PowerSettingsNew,
-            stringResource(R.string.console_power_controls),
-            onPower,
-            enabled = session.connection.isSessionUsable,
-        )
+        if (applianceControls) {
+            SheetAction(
+                Icons.Default.Tune,
+                stringResource(R.string.console_video_settings),
+                onVideo,
+            )
+            SheetAction(
+                Icons.Default.PowerSettingsNew,
+                stringResource(R.string.console_power_controls),
+                onPower,
+                enabled = session.connection.isSessionUsable,
+            )
+        }
         SheetAction(
             Icons.Default.MoreVert,
             stringResource(R.string.console_more_actions),
@@ -3375,6 +3424,7 @@ private fun DisconnectConfirmationDialog(
 
 @Composable
 private fun MoreActionsDialog(
+    applianceControls: Boolean,
     onDismiss: () -> Unit,
     onReconnect: () -> Unit,
     onResetHid: () -> Unit,
@@ -3412,7 +3462,7 @@ private fun MoreActionsDialog(
                 OutlinedButton(onClick = onResetHid, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Usb, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.console_reset_keyboard_mouse))
+                    Text(stringResource(if (applianceControls) R.string.console_reset_keyboard_mouse else R.string.comet_release_input))
                 }
                 OutlinedButton(
                     onClick = onImmersiveMode,
@@ -3437,9 +3487,9 @@ private fun MoreActionsDialog(
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.console_disconnect))
                 }
-                HorizontalDivider()
-                Text(stringResource(R.string.console_actions_device_group), style = MaterialTheme.typography.titleSmall)
-                OutlinedButton(
+                if (applianceControls) HorizontalDivider()
+                if (applianceControls) Text(stringResource(R.string.console_actions_device_group), style = MaterialTheme.typography.titleSmall)
+                if (applianceControls) OutlinedButton(
                     onClick = onDeviceInfo,
                     modifier = Modifier
                         .fillMaxWidth()

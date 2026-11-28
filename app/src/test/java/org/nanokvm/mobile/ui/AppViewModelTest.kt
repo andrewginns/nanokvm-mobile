@@ -29,6 +29,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.nanokvm.mobile.DeviceTarget
 import org.nanokvm.mobile.data.HostProfile
 import org.nanokvm.mobile.clipboard.ClipboardPayloadAnalyzer
 import org.nanokvm.mobile.data.AppSettings
@@ -48,6 +49,7 @@ import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConnectOutcome
 import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.NanoKvmApplianceControls
 import org.nanokvm.mobile.runtime.ConsoleMessage
 import org.nanokvm.mobile.runtime.KeyboardLayout
 import org.nanokvm.mobile.runtime.MouseButton
@@ -379,6 +381,42 @@ class AppViewModelTest {
         assertEquals(1, credentials.unlockCalls)
         assertEquals(listOf("preflight", "connect"), backend.events)
         assertTrue(viewModel.state.value.screen is AppScreen.Console)
+    }
+
+    @Test
+    fun savedPasswordUnlockRequestsFreshCodesOnlyOnTargetsWithTotp() = runTest(dispatcher) {
+        val profile = HostProfile.Default.copy(requiresTotp = true)
+        val codes = mutableListOf<String>()
+        val backend = FakeConsoleBackend().apply {
+            connectHandler = {
+                assertEquals("test-only-password", it.password.concatToString())
+                codes += it.totp.concatToString()
+                ConnectOutcome.Connected
+            }
+        }
+        val prompts = MutableSharedFlow<CredentialPromptResult>(extraBufferCapacity = 1)
+        val credentials = FakeSavedCredentials(mutableSetOf(profile.id))
+        val vm = viewModel(FakeProfilesRepository(ProfileCatalogState.Ready(listOf(profile))), credentials, backend, prompts)
+        advanceUntilIdle()
+        for (code in listOf("001234", "999001")) {
+            vm.prepareConnection(profile)
+            advanceUntilIdle()
+            prompts.emit(CredentialPromptResult.Authenticated(checkNotNull(vm.state.value.credentialPrompt).id))
+            advanceUntilIdle()
+            if (DeviceTarget.supportsTotp) {
+                assertEquals(profile, vm.state.value.totpProfile)
+                vm.submitTotp("12345")
+                assertEquals(profile, vm.state.value.totpProfile)
+                vm.submitTotp(code)
+                advanceUntilIdle()
+            }
+            assertNull(vm.state.value.totpProfile)
+            assertEquals(AppScreen.Console(profile), vm.state.value.screen)
+            vm.disconnect()
+            advanceUntilIdle()
+        }
+        assertEquals(if (DeviceTarget.supportsTotp) listOf("001234", "999001") else listOf("", ""), codes)
+        assertEquals(0, credentials.stageCalls)
     }
 
     @Test
@@ -1388,7 +1426,7 @@ private class FakeConsoleBackend(
         CertificateTrustSource.System,
         CertificateDetails("AA", "subject", "issuer", emptyList(), "from", "to"),
     ),
-) : ConsoleBackend, NanoKvmPasswordChangeFeatureOwner {
+) : ConsoleBackend, NanoKvmApplianceControls, NanoKvmPasswordChangeFeatureOwner {
     private val mutableSession = MutableStateFlow(BackendSession())
     override val session = mutableSession
     override val features = ConsoleFeatureBundle(core = this, passwordChange = this)

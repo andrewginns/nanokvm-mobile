@@ -93,5 +93,5 @@ internal enum class ProfileInputIssue(val message: String) {
     InvalidPort("Profile port is invalid"),
     HttpsRequired("Profile must use HTTPS"),
     InvalidCertificateFingerprint("Profile certificate fingerprint is invalid"),
-    InvalidEndpoint("Profile does not describe a valid HTTPS NanoKVM origin"),
+    InvalidEndpoint("Profile does not describe a valid HTTPS origin"),
 }

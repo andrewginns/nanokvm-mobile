@@ -55,6 +55,7 @@ import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConnectionFailure
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.NanoKvmApplianceControls
 import org.nanokvm.mobile.runtime.TrustPreflightOutcome
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.KeyboardLayout
@@ -270,7 +271,7 @@ private class NavigationAcknowledgementCommands : NoOpAdministrationControls() {
     }
 }
 
-private class AdministrationReadOnlyBackend : ConsoleBackend {
+private class AdministrationReadOnlyBackend : ConsoleBackend, NanoKvmApplianceControls {
     private val mutableSession = MutableStateFlow(
         BackendSession(
             connection = ConnectionState.Connected,

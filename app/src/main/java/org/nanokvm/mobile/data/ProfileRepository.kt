@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.data
 
+import org.nanokvm.mobile.DeviceTarget
 import android.content.Context
 import androidx.datastore.core.CorruptionException
 import androidx.datastore.core.DataStore
@@ -152,11 +153,12 @@ internal object ProfileCodec {
 @Serializable
 private data class ProfileRecord(
     val id: String,
-    val name: String = "NanoKVM",
+    val name: String = DeviceTarget.profileName,
     val host: String = "192.0.2.250",
     val port: Int = 443,
     @SerialName("https") val useHttps: Boolean = true,
     val username: String = "admin",
+    val requiresTotp: Boolean = false,
     @SerialName("certificate") val trustedCertificateSha256: String? = null,
 ) {
     fun toDomain(): HostProfile {
@@ -167,6 +169,7 @@ private data class ProfileRecord(
             port = port,
             useHttps = useHttps,
             username = username,
+            requiresTotp = requiresTotp,
             trustedCertificateSha256 = trustedCertificateSha256,
         )
         ProfileInputPolicy.requireValid(ProfileInputPolicy.prospectiveHttps(profile))
@@ -181,6 +184,7 @@ private data class ProfileRecord(
             port = profile.port,
             useHttps = profile.useHttps,
             username = profile.username,
+            requiresTotp = profile.requiresTotp,
             trustedCertificateSha256 = profile.trustedCertificateSha256,
         )
     }

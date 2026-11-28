@@ -1,5 +1,6 @@
 package org.nanokvm.mobile.ui
 
+import org.nanokvm.mobile.DeviceTarget
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.SavedStateHandle
@@ -94,7 +95,7 @@ internal fun initialConnectionIssue(
             ConnectionIssueRecovery.EditConnection
         failure == ConnectionFailure.AppInBackground -> ConnectionIssueRecovery.Retry
         retryable -> ConnectionIssueRecovery.Retry
-        failure is ConnectionFailure.RequestRejected && failure.responseCode == 401 ->
+        failure is ConnectionFailure.RequestRejected && failure.responseCode in setOf(401, 403) ->
             ConnectionIssueRecovery.UseAnotherPassword
         else -> null
     },
@@ -115,6 +116,7 @@ data class AppUiState(
     val backendSession: BackendSession = BackendSession(),
     val credentialPrompt: CredentialPromptRequest? = null,
     val passwordChangeInProgress: Boolean = false,
+    val totpProfile: HostProfile? = null,
     val passwordEntryProfile: HostProfile? = null,
     val profileStorageIssue: ProfileStorageIssue? = null,
     val profileStorageBusy: Boolean = false,
@@ -302,7 +304,7 @@ class AppViewModel internal constructor(
                     appSettingsStore.setMjpegFrameDetectionEnabled(enabled)
                     // Preference collection is local-only; this is the sole explicit appliance
                     // write and only follows a successful local persistence operation.
-                    backend.setMjpegFrameDetectionEnabled(enabled)
+                    backend.features.appliance?.setMjpegFrameDetectionEnabled(enabled)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -319,7 +321,7 @@ class AppViewModel internal constructor(
     }
 
     private fun applyAppSettings(settings: AppSettings) {
-        backend.setMjpegFrameDetectionPreference(settings.mjpegFrameDetectionEnabled)
+        backend.features.appliance?.setMjpegFrameDetectionPreference(settings.mjpegFrameDetectionEnabled)
         mutableState.update {
             it.copy(
                 scrollSensitivity = settings.scrollSensitivity,
@@ -387,7 +389,7 @@ class AppViewModel internal constructor(
         if (!profileCatalogIsActionable()) return
         val screen = AppScreen.EditProfile(
             profile = HostProfile(
-                name = "NanoKVM ${mutableState.value.profiles.size + 1}",
+                name = "${DeviceTarget.profileName} ${mutableState.value.profiles.size + 1}",
                 host = "",
             ),
             isNew = true,
@@ -851,9 +853,23 @@ class AppViewModel internal constructor(
         val request = ConnectRequest(profile = profile, password = password)
         val attempt = ConnectionAttempt(request, stagedCredential)
         replaceActiveAttempt(attempt)
+        if (DeviceTarget.supportsTotp && profile.requiresTotp) {
+            mutableState.update { it.copy(screen = AppScreen.Profiles, totpProfile = profile) }
+            return
+        }
         launchConnect(attempt, request) {
             performConnectInCurrentCoroutine(attempt, request)
         }
+    }
+
+    fun submitTotp(code: String) {
+        val attempt = attempts.current ?: return
+        if (attempt.request.profile != mutableState.value.totpProfile ||
+            code.length != 6 || code.any { it !in '0'..'9' }) return
+        val request = attempt.request.copy(totp = code.toCharArray())
+        attempt.continueWith(request)
+        mutableState.update { it.copy(totpProfile = null) }
+        launchConnect(attempt, request) { performConnectInCurrentCoroutine(attempt, request) }
     }
 
     fun trustCertificate(persist: Boolean) {
@@ -1657,6 +1673,7 @@ class AppViewModel internal constructor(
 
     private fun clearActiveAttempt() {
         attempts.clear()
+        mutableState.update { it.copy(totpProfile = null) }
     }
 
     private suspend fun savedCredentialIds(profiles: List<HostProfile>): Set<String> = buildSet {
@@ -1691,6 +1708,7 @@ internal object RestorableAppScreenState {
     private const val STATE_EDIT_HOST = "edit.host"
     private const val STATE_EDIT_PORT = "edit.port"
     private const val STATE_EDIT_HTTPS = "edit.https"
+    private const val STATE_EDIT_TOTP = "edit.totp"
     private const val STATE_EDIT_USERNAME = "edit.username"
     private const val STATE_EDIT_CERTIFICATE = "edit.certificate"
     private val editStateKeys = listOf(
@@ -1700,6 +1718,7 @@ internal object RestorableAppScreenState {
         STATE_EDIT_HOST,
         STATE_EDIT_PORT,
         STATE_EDIT_HTTPS,
+        STATE_EDIT_TOTP,
         STATE_EDIT_USERNAME,
         STATE_EDIT_CERTIFICATE,
     )
@@ -1718,6 +1737,7 @@ internal object RestorableAppScreenState {
                 savedStateHandle[STATE_EDIT_HOST] = screen.profile.host
                 savedStateHandle[STATE_EDIT_PORT] = screen.profile.port
                 savedStateHandle[STATE_EDIT_HTTPS] = screen.profile.useHttps
+                savedStateHandle[STATE_EDIT_TOTP] = screen.profile.requiresTotp
                 savedStateHandle[STATE_EDIT_USERNAME] = screen.profile.username
                 savedStateHandle[STATE_EDIT_CERTIFICATE] = screen.profile.trustedCertificateSha256
             }
@@ -1738,10 +1758,11 @@ internal object RestorableAppScreenState {
         return AppScreen.EditProfile(
             profile = HostProfile(
                 id = id,
-                name = savedStateHandle.get<String>(STATE_EDIT_NAME) ?: "NanoKVM",
+                name = savedStateHandle.get<String>(STATE_EDIT_NAME) ?: DeviceTarget.profileName,
                 host = savedStateHandle.get<String>(STATE_EDIT_HOST).orEmpty(),
                 port = savedStateHandle.get<Int>(STATE_EDIT_PORT) ?: 443,
                 useHttps = savedStateHandle.get<Boolean>(STATE_EDIT_HTTPS) ?: true,
+                requiresTotp = savedStateHandle.get<Boolean>(STATE_EDIT_TOTP) ?: false,
                 username = savedStateHandle.get<String>(STATE_EDIT_USERNAME) ?: "admin",
                 trustedCertificateSha256 = savedStateHandle[STATE_EDIT_CERTIFICATE],
             ),

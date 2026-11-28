@@ -105,6 +105,7 @@ import org.nanokvm.mobile.runtime.ConnectRequest
 import org.nanokvm.mobile.runtime.ConnectionFailure
 import org.nanokvm.mobile.runtime.ConnectionState
 import org.nanokvm.mobile.runtime.ConsoleBackend
+import org.nanokvm.mobile.runtime.NanoKvmApplianceControls
 import org.nanokvm.mobile.runtime.ConsoleFeatureBundle
 import org.nanokvm.mobile.runtime.ConsoleMessage
 import org.nanokvm.mobile.runtime.withActionFeedback
@@ -3094,7 +3095,7 @@ private fun colorContrastRatio(first: Int, second: Int): Double {
 
 private val TEST_VIDEO_COLOR = Color.rgb(31, 190, 142)
 
-private class RecordingConsoleBackend : ConsoleBackend {
+private class RecordingConsoleBackend : ConsoleBackend, NanoKvmApplianceControls {
     val mutablePicoClawState = MutableStateFlow(
         PicoClawUiState(support = PicoClawSupport.Supported),
     )

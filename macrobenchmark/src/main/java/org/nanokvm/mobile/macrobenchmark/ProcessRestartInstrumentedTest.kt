@@ -89,9 +89,9 @@ class ProcessRestartInstrumentedTest {
     }
 
     private fun launchTarget() {
-        device.executeShellCommand("am start -W -n $TARGET_PACKAGE/.MainActivity")
+        device.executeShellCommand("am start -W -n $TARGET_PACKAGE/org.nanokvm.mobile.MainActivity")
         assertTrue(
-            "NanoKVM Mobile did not reach an interactive window.",
+            "${BuildConfig.DEVICE_NAME} Mobile did not reach an interactive window.",
             device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE)), UI_TIMEOUT_MS),
         )
     }
@@ -119,9 +119,9 @@ class ProcessRestartInstrumentedTest {
     }
 
     private companion object {
-        const val TARGET_PACKAGE = "org.nanokvm.mobile"
-        const val ADD_PROFILE_DESCRIPTION = "Add a NanoKVM profile"
-        const val ADD_PROFILE_TITLE = "Add NanoKVM"
+        val TARGET_PACKAGE = BuildConfig.TARGET_PACKAGE
+        const val ADD_PROFILE_DESCRIPTION = "Add a ${BuildConfig.DEVICE_NAME} profile"
+        const val ADD_PROFILE_TITLE = "Add ${BuildConfig.DEVICE_NAME}"
         const val DRAFT_NAME = "Restart-safe desk KVM"
         const val DRAFT_HOST = "restart-safe.example.test"
         const val UI_TIMEOUT_MS = 8_000L

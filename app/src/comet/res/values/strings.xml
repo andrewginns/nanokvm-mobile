@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">Comet Mobile</string>
+    <string name="notice_password_changed">Comet credentials changed. Reconnect with the new credentials.</string>
+    <string name="notice_password_rejected">Comet rejected the password change. The existing session and saved password were preserved.</string>
+    <string name="notice_password_session_expired">The Comet session expired. Sign in again; the saved password was not changed.</string>
+    <string name="notice_password_invalid_request">The username or password is not valid for Comet. Nothing was sent.</string>
+    <string name="notice_password_android_authentication_failed">Android authentication failed. Nothing was sent to Comet.</string>
+    <string name="notice_password_local_preparation_failed">Android could not prepare the protected replacement. Nothing was sent to Comet.</string>
+    <string name="notice_credential_authentication_failed">Device authentication failed. Enter the Comet password instead.</string>
+    <string name="profiles_add_content_description">Add a Comet profile</string>
+    <string name="profiles_empty_message">Add a Comet connection to start controlling a trusted device.</string>
+    <string name="about_title">Comet Mobile %1$s</string>
+    <string name="about_description">Unofficial Android client for trusted GL.iNet Comet GL-RM1 devices.</string>
+    <string name="about_copyright">Based on NanoKVM Mobile. Copyright © 2026 NanoKVM Mobile contributors.</string>
+    <string name="about_independence">This project is independent and is not endorsed by GL.iNet.</string>
+    <string name="password_remove_dialog_message">You will need to enter the Comet password on the next connection.</string>
+    <string name="profile_editor_add_title">Add Comet</string>
+    <string name="certificate_fingerprint_clip_label">Comet certificate fingerprint</string>
+    <string name="certificate_security_note">Only trust certificates from a Comet you control. This decision does not change Android\'s system trust store.</string>
+    <string name="certificate_changed_warning">The certificate presented by %1$s no longer matches the saved certificate. Verify the change on the Comet or through another trusted channel before continuing.</string>
+    <string name="certificate_previous_fingerprint_clip_label">Previous Comet certificate fingerprint</string>
+    <string name="comet_login_rejected">Comet rejected the password or verification code.</string>
+</resources>

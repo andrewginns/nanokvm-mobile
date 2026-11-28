@@ -33,6 +33,7 @@ enum class CertificatePresentationReason {
     NotTrustedByAndroid,
     TrustedByAndroid,
     MatchesSavedCertificate,
+    NameMismatch,
     PrivateCertificateNotTrusted,
     DiffersFromSavedCertificate,
 }
@@ -101,6 +102,7 @@ sealed interface ConsoleMessage {
         val totalKeystrokes: Int,
     ) : ActionFeedback
 
+    data object NoHdmiSignal : Status
     data object AuthenticationExpired : Status
     data object HidInterfaceReset : ActionFeedback
     data object CtrlAltDeleteSent : ActionFeedback

@@ -1,3 +1,4 @@
+import java.util.Properties
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import org.cyclonedx.model.Component
@@ -32,6 +33,16 @@ plugins {
     alias(libs.plugins.cyclonedx.bom)
 }
 
+val products = listOf("nano", "comet").associateWith { target ->
+    Properties().apply { rootProject.file("release/targets/$target.properties").inputStream().use { load(it) } }
+}
+val releaseTarget = providers.gradleProperty("releaseTarget").orElse("nano").get()
+val releaseProduct = products.getValue(releaseTarget)
+val releaseVariant = "${releaseTarget}Release"
+val releaseTask = releaseVariant.replaceFirstChar { it.uppercase() }
+val releaseSlug = if (releaseTarget == "nano") "nanokvm-mobile" else "comet-kvm-mobile"
+val releaseTag = releaseProduct.getProperty("tagPrefix") + releaseProduct.getProperty("versionName")
+
 val developmentKeystorePath = providers
     .gradleProperty("nanokvm.developmentKeystore")
     .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEYSTORE"))
@@ -56,14 +67,6 @@ val developmentKeyPassword = providers
     .orElse(providers.environmentVariable("NANOKVM_DEVELOPMENT_KEY_PASSWORD"))
     .orElse("android")
 
-val bundledAboutAssetsDirectory = layout.buildDirectory.dir("generated/about-assets")
-val bundledAboutDocuments = mapOf(
-    rootProject.file("LICENSE") to "GPL-3.0-or-later.txt",
-    rootProject.file("NOTICE") to "NOTICE.txt",
-    rootProject.file("THIRD_PARTY_NOTICES.md") to "THIRD_PARTY_NOTICES.md",
-    rootProject.file("PRIVACY.md") to "PRIVACY.md",
-    rootProject.file("SECURITY.md") to "SECURITY.md",
-)
 val bundledWebRtcNotices = layout.projectDirectory
     .file("src/main/assets/open_source_licenses/WEBRTC.md")
     .asFile
@@ -94,18 +97,6 @@ val expectedIjgNoticeSha256 =
     "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
 val expectedRuntimeComponentLicensesSha256 =
     "c94407a034aad6e0477ede11ebe332210a49ab7ec2d1e03939b65ba60b8499df"
-
-val generateBundledAboutAssets by tasks.registering(Sync::class) {
-    group = "build"
-    description = "Copies the canonical project notices and policies into the app."
-    into(bundledAboutAssetsDirectory)
-    bundledAboutDocuments.forEach { (source, bundledName) ->
-        from(source) {
-            into("about")
-            rename { bundledName }
-        }
-    }
-}
 
 @CacheableTask
 abstract class VerifyBundledAboutAssets : DefaultTask() {
@@ -193,51 +184,6 @@ abstract class VerifyBundledAboutAssets : DefaultTask() {
     }
 }
 
-val resolvedRuntimeCoordinateProvider = providers.provider {
-    configurations
-        .getByName("releaseRuntimeClasspath")
-        .incoming
-        .resolutionResult
-        .allComponents
-        .mapNotNull { component ->
-            (component.id as? ModuleComponentIdentifier)?.let { identifier ->
-                "${identifier.group}:${identifier.module}:${identifier.version}"
-            }
-        }
-        .toSortedSet()
-}
-
-val verifyBundledAboutAssets = tasks.register<VerifyBundledAboutAssets>("verifyBundledAboutAssets") {
-    group = "verification"
-    description = "Verifies bundled project documents and complete runtime licence materials."
-    dependsOn(generateBundledAboutAssets)
-    sourceDocuments.from(bundledAboutDocuments.keys)
-    generatedDocumentsDirectory.set(bundledAboutAssetsDirectory)
-    bundledDocumentNames.set(bundledAboutDocuments.mapKeys { (source, _) -> source.name })
-    pinnedLicenceFiles.from(
-        bundledWebRtcNotices,
-        bundledWebRtcWrapperLicense,
-        bundledApacheLicense,
-        bundledProtobufLicense,
-        bundledIjgNotice,
-        bundledRuntimeComponentLicenses,
-    )
-    expectedSha256ByFileName.set(
-        mapOf(
-            bundledWebRtcNotices.name to expectedWebRtcNoticesSha256,
-            bundledWebRtcWrapperLicense.name to expectedWebRtcWrapperLicenseSha256,
-            bundledApacheLicense.name to expectedApacheLicenseSha256,
-            bundledProtobufLicense.name to expectedProtobufLicenseSha256,
-            bundledIjgNotice.name to expectedIjgNoticeSha256,
-            bundledRuntimeComponentLicenses.name to expectedRuntimeComponentLicensesSha256,
-        ),
-    )
-    runtimeComponentLicenceIndex.set(
-        layout.projectDirectory.file("src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md"),
-    )
-    resolvedRuntimeCoordinates.set(resolvedRuntimeCoordinateProvider)
-}
-
 @CacheableTask
 abstract class NormalizeCycloneDxSbom : DefaultTask() {
     @get:InputFile
@@ -250,6 +196,9 @@ abstract class NormalizeCycloneDxSbom : DefaultTask() {
 
     @get:Input
     abstract val releaseVersion: Property<String>
+
+    @get:Input
+    abstract val productName: Property<String>
 
     @get:Input
     abstract val releaseVcsUrl: Property<String>
@@ -305,7 +254,7 @@ abstract class NormalizeCycloneDxSbom : DefaultTask() {
         val rootComponent = (metadata["component"] as? Map<*, *>)
             ?.toMutableStringMap("CycloneDX root component")
             ?: throw GradleException("The CycloneDX document has no root component.")
-        assertComponentIdentity(rootComponent, "org.nanokvm", "nanokvm-mobile")
+        assertComponentIdentity(rootComponent, "org.nanokvm", productName.get())
         metadata["component"] = enrichProjectComponent(rootComponent)
         root["metadata"] = metadata
 
@@ -579,19 +528,102 @@ abstract class VerifyReleaseProfiles : DefaultTask() {
     }
 }
 
+products.keys.forEach { target ->
+    val title = target.replaceFirstChar { it.uppercase() }
+    val policyDirectory = if (target == "comet") "release/comet/" else ""
+    val bundledAboutAssetsDirectory = layout.buildDirectory.dir("generated/about-assets/$target")
+    val bundledAboutDocuments = mapOf(
+        rootProject.file("LICENSE") to "GPL-3.0-or-later.txt",
+        rootProject.file(policyDirectory + "NOTICE") to "NOTICE.txt",
+        rootProject.file("THIRD_PARTY_NOTICES.md") to "THIRD_PARTY_NOTICES.md",
+        rootProject.file(policyDirectory + "PRIVACY.md") to "PRIVACY.md",
+        rootProject.file(policyDirectory + "SECURITY.md") to "SECURITY.md",
+    )
+    val generateBundledAboutAssets = tasks.register<Sync>("generate${title}AboutAssets") {
+        group = "build"
+        description = "Copies the canonical project notices and policies into the app."
+        into(bundledAboutAssetsDirectory)
+        bundledAboutDocuments.forEach { (source, bundledName) ->
+            from(source) {
+                into("about")
+                rename { bundledName }
+            }
+        }
+    }
+
+    val resolvedRuntimeCoordinateProvider = providers.provider {
+        configurations
+            .getByName("${target}ReleaseRuntimeClasspath")
+            .incoming
+            .resolutionResult
+            .allComponents
+            .mapNotNull { component ->
+                (component.id as? ModuleComponentIdentifier)?.let { identifier ->
+                    "${identifier.group}:${identifier.module}:${identifier.version}"
+                }
+            }
+            .toSortedSet()
+    }
+
+    val verifyBundledAboutAssets = tasks.register<VerifyBundledAboutAssets>("verify${title}BundledAboutAssets") {
+        group = "verification"
+        description = "Verifies bundled project documents and complete runtime licence materials."
+        dependsOn(generateBundledAboutAssets)
+        sourceDocuments.from(bundledAboutDocuments.keys)
+        generatedDocumentsDirectory.set(bundledAboutAssetsDirectory)
+        bundledDocumentNames.set(bundledAboutDocuments.mapKeys { (source, _) -> source.name })
+        pinnedLicenceFiles.from(
+            bundledWebRtcNotices,
+            bundledWebRtcWrapperLicense,
+            bundledApacheLicense,
+            bundledProtobufLicense,
+            bundledIjgNotice,
+            bundledRuntimeComponentLicenses,
+        )
+        expectedSha256ByFileName.set(
+            mapOf(
+                bundledWebRtcNotices.name to expectedWebRtcNoticesSha256,
+                bundledWebRtcWrapperLicense.name to expectedWebRtcWrapperLicenseSha256,
+                bundledApacheLicense.name to expectedApacheLicenseSha256,
+                bundledProtobufLicense.name to expectedProtobufLicenseSha256,
+                bundledIjgNotice.name to expectedIjgNoticeSha256,
+                bundledRuntimeComponentLicenses.name to expectedRuntimeComponentLicensesSha256,
+            ),
+        )
+        runtimeComponentLicenceIndex.set(
+            layout.projectDirectory.file("src/main/assets/open_source_licenses/RUNTIME_COMPONENT_LICENSES.md"),
+        )
+        resolvedRuntimeCoordinates.set(resolvedRuntimeCoordinateProvider)
+    }
+    tasks.matching { it.name.startsWith("pre$title") && it.name.endsWith("Build") }.configureEach {
+        dependsOn(verifyBundledAboutAssets)
+    }
+}
+
 android {
     namespace = "org.nanokvm.mobile"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "org.nanokvm.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 30
-        versionName = project.version.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    flavorDimensions += "device"
+    productFlavors {
+        products.forEach { (target, metadata) ->
+            create(target) {
+                dimension = "device"
+                applicationId = metadata.getProperty("applicationId")
+                versionCode = metadata.getProperty("versionCode").toInt()
+                versionName = metadata.getProperty("versionName")
+                val tag = metadata.getProperty("tagPrefix") + versionName
+                buildConfigField("String", "SOURCE_URL", "\"https://github.com/andrewginns/nanokvm-mobile/tree/$tag\"")
+            }
+        }
     }
 
     signingConfigs.named("debug") {
@@ -620,10 +652,18 @@ android {
             if (experimentalArm64Apk.get()) ndk.abiFilters.add("arm64-v8a")
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        create("development") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            applicationIdSuffix = ".development"
+            versionNameSuffix = "-dev"
+            signingConfig = if (developmentKeystorePath.isPresent) signingConfigs.getByName("debug") else null
+            isDebuggable = false
             buildConfigField(
                 "String",
                 "SOURCE_URL",
-                "\"https://github.com/andrewginns/nanokvm-mobile/tree/v${project.version}\"",
+                "\"https://github.com/andrewginns/nanokvm-mobile/tree/main\"",
             )
         }
         create("benchmark") {
@@ -650,12 +690,17 @@ android {
         buildConfig = true
     }
 
-    sourceSets.getByName("main").assets.srcDir(bundledAboutAssetsDirectory.get().asFile)
+    products.keys.forEach { target ->
+        sourceSets.getByName(target).assets.srcDir(layout.buildDirectory.dir("generated/about-assets/$target").get().asFile)
+    }
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
 
 androidComponents {
+    beforeVariants(selector().withBuildType("development")) { variant ->
+        variant.enable = variant.productFlavors.any { it.second == "nano" }
+    }
     onVariants(selector().withBuildType("benchmark")) { variant ->
         if (compactDevelopmentApk.get()) {
             // The existing optimized development variant keeps all ABIs and app features.
@@ -665,9 +710,6 @@ androidComponents {
     }
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(verifyBundledAboutAssets)
-}
 
 baselineProfile {
     mergeIntoMain = true
@@ -706,6 +748,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    add("androidTestCometImplementation", libs.okhttp.mockwebserver)
+    add("androidTestCometImplementation", libs.okhttp.tls)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -721,30 +765,30 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
 tasks.register<VerifyReleaseProfiles>("verifyReleaseProfiles") {
     group = "verification"
     description = "Verifies generated Baseline/Startup Profiles and release APK packaging."
-    dependsOn("assembleRelease", "bundleRelease")
+    dependsOn("assemble$releaseTask", "bundle$releaseTask")
     baselineProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/baseline-prof.txt"))
     startupProfile.set(layout.projectDirectory.file("src/main/generated/baselineProfiles/startup-prof.txt"))
-    releaseApk.set(layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk"))
-    releaseBundle.set(layout.buildDirectory.file("outputs/bundle/release/app-release.aab"))
+    releaseApk.set(layout.buildDirectory.file("outputs/apk/$releaseTarget/release/app-$releaseTarget-release-unsigned.apk"))
+    releaseBundle.set(layout.buildDirectory.file("outputs/bundle/$releaseVariant/app-$releaseTarget-release.aab"))
 }
 
-val rawCycloneDxSbom = layout.buildDirectory.file("reports/cyclonedx/raw.cdx.json")
+val rawCycloneDxSbom = layout.buildDirectory.file("reports/cyclonedx/$releaseTarget/raw.cdx.json")
 val releaseVersionForSbom = project.version.toString()
 val releaseVcsUrlForSbom =
-    "https://github.com/andrewginns/nanokvm-mobile/tree/v$releaseVersionForSbom"
+    "https://github.com/andrewginns/nanokvm-mobile/tree/$releaseTag"
 val webRtcVersionForSbom = libs.versions.webrtc.get()
 val webRtcVcsUrlForSbom =
     "https://github.com/webrtc-sdk/android/tree/v$webRtcVersionForSbom"
 val bundledWebRtcNoticeRepositoryPath =
     "app/src/main/assets/open_source_licenses/WEBRTC.md"
 val bundledWebRtcNoticeUrlForSbom =
-    "https://github.com/andrewginns/nanokvm-mobile/blob/v$releaseVersionForSbom/" +
+    "https://github.com/andrewginns/nanokvm-mobile/blob/$releaseTag/" +
         bundledWebRtcNoticeRepositoryPath
 val upstreamWebRtcNoticeUrlForSbom =
     "https://github.com/webrtc-sdk/android/blob/v$webRtcVersionForSbom/Licenses/WEBRTC.md"
 
 tasks.cyclonedxDirectBom {
-    includeConfigs = listOf("releaseRuntimeClasspath")
+    includeConfigs = listOf(releaseVariant + "RuntimeClasspath")
     projectType = Component.Type.APPLICATION
     includeBomSerialNumber = false
     includeLicenseText = false
@@ -752,7 +796,7 @@ tasks.cyclonedxDirectBom {
     includeBuildEnvironment = false
     includeBuildSystem = false
     componentGroup = "org.nanokvm"
-    componentName = "nanokvm-mobile"
+    componentName = releaseSlug
     componentVersion = project.version.toString()
     jsonOutput.set(rawCycloneDxSbom)
     xmlOutput.unsetConvention()
@@ -766,6 +810,7 @@ val reproducibleSbom = tasks.register<NormalizeCycloneDxSbom>("reproducibleSbom"
     webRtcNoticeFile.set(
         layout.projectDirectory.file("src/main/assets/open_source_licenses/WEBRTC.md"),
     )
+    productName.set(releaseSlug)
     releaseVersion.set(releaseVersionForSbom)
     releaseVcsUrl.set(releaseVcsUrlForSbom)
     webRtcVersion.set(webRtcVersionForSbom)
@@ -774,7 +819,7 @@ val reproducibleSbom = tasks.register<NormalizeCycloneDxSbom>("reproducibleSbom"
     bundledWebRtcNoticeUrl.set(bundledWebRtcNoticeUrlForSbom)
     upstreamWebRtcNoticeUrl.set(upstreamWebRtcNoticeUrlForSbom)
     expectedWebRtcNoticeSha256.set(expectedWebRtcNoticesSha256)
-    outputFile.set(layout.buildDirectory.file("reports/cyclonedx/nanokvm-mobile.cdx.json"))
+    outputFile.set(layout.buildDirectory.file("reports/cyclonedx/$releaseSlug.cdx.json"))
 }
 
 tasks.register("verifyReproducibleSbomMetadata") {
@@ -829,7 +874,7 @@ tasks.register("verifyReproducibleSbomMetadata") {
             check(vcsUrls == listOf(releaseVcsUrlForSbom))
         }
 
-        assertProjectComponent(rootComponent, "nanokvm-mobile")
+        assertProjectComponent(rootComponent, releaseSlug)
         assertProjectComponent(component("org.nanokvm", "protocol"), "protocol")
         assertProjectComponent(component("org.nanokvm", "video"), "video")
 

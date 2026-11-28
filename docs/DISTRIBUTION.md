@@ -3,7 +3,13 @@
 NanoKVM Mobile distributes public APKs through GitHub Releases. A local debug,
 benchmark, or unsigned release build is not a publishable artifact.
 
-## Signing model
+## Choose the product
+
+The release evidence, signing and reproducibility scripts accept `-Target nano` (default) or `-Target comet`. Use the version and package in `release/targets/<target>.properties`. NanoKVM uses `vX.Y.Z` tags and the historical root signing record. Comet uses `comet-vX.Y.Z` tags and `release/comet/production-signing-lineage.json`. Both products now use this source repository. Mark Comet releases with `--latest=false`.
+
+Comet's first production signing record still needs an owner-approved public identity and initial version. For local updates to the existing phone-test installation use `scripts/build-development-update.ps1 -Target comet -PreviousApk <apk>`. It signs locally using the enrolled Windows credential and verifies the installed lineage.
+
+## NanoKVM signing model
 
 Public updates use the long-lived production certificate recorded in
 `release/production-signing-lineage.json`. Keep the private keystore and its
@@ -145,7 +151,7 @@ supersede the artifact. Never replace assets silently or reuse the version code.
 
 The standard build produces the universal APK. To measure a separate ARM64-only build locally, run the release assembly with the experimental property in a separate checkout or preserve the universal output before rebuilding.
 
-`.\gradlew.bat -Pnanokvm.experimentalArm64Apk=true --dependency-verification=strict :app:assembleRelease`
+`.\gradlew.bat -Pnanokvm.experimentalArm64Apk=true --dependency-verification=strict :app:assembleNanoRelease`
 
 The resulting unsigned APK is for size and alignment checks. Any published alternative belongs to the same release version and production signing lineage as the universal APK, carries its own checksum and provenance, and must pass the in-place upgrade matrix on an ARM64 phone. Keep the universal APK available for all supported ABIs.
 
