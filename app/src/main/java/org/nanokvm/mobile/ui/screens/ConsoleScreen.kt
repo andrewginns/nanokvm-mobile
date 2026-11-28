@@ -2348,7 +2348,7 @@ private fun ClipboardPasteDialog(
                 }
                 payload.warnings.forEach { warning ->
                     Text(
-                        text = "â€¢ " + stringResource(warning.stringResourceId()),
+                        text = "• " + stringResource(warning.stringResourceId()),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )

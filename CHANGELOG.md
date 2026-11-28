@@ -11,8 +11,9 @@ production release unless it explicitly says so.
 
 - Build the existing adaptive console and NanoKVM appliance controls from the shared Android project. The dedicated phone-test app reports 0.3.21-dev.
 
-### Comet Mobile 0.1.1 (2)
+### Comet Mobile 0.1.2 (3)
 
+- Restore punctuation in connection status and accessibility messages found during the upgrade test.
 - Bring the RM1 video, keyboard, mouse, clipboard and reconnect implementation into the shared adaptive console. Device-test updates preserve the existing package, signing identity and saved-profile format.
 
 ## [0.3.20] - 2026-11-21
