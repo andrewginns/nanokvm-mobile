@@ -1943,6 +1943,7 @@ private fun TabletopQuickControls(
         )
         if (showViewPad) {
             RemoteScrollPad(
+                inputGeneration = state.session.sessionGeneration,
                 input = state.input,
                 sensitivity = state.scrollSensitivity,
                 modifier = Modifier.size(48.dp),
