@@ -833,6 +833,16 @@ tasks.register("verifyReproducibleSbomMetadata") {
     inputs.property("bundledWebRtcNoticeUrl", bundledWebRtcNoticeUrlForSbom)
     inputs.property("expectedWebRtcNoticeSha256", expectedWebRtcNoticesSha256)
 
+    val expectedVersion = releaseVersionForSbom
+    val expectedProduct = releaseSlug
+    val expectedProjectUrl = releaseVcsUrlForSbom
+    val expectedWebRtcVersion = webRtcVersionForSbom
+    val expectedWebRtcUrl = webRtcVcsUrlForSbom
+    val expectedNoticeUrl = bundledWebRtcNoticeUrlForSbom
+    val expectedNoticeHash = expectedWebRtcNoticesSha256
+    val expectedUpstreamNoticeUrl = upstreamWebRtcNoticeUrlForSbom
+    val expectedNoticePath = bundledWebRtcNoticeRepositoryPath
+
     doLast {
         val sbomText = normalizedSbom.get().asFile.readText(Charsets.UTF_8)
         check(!Regex("\"(?:serialNumber|timestamp)\"\\s*:").containsMatchIn(sbomText)) {
@@ -866,36 +876,36 @@ tasks.register("verifyReproducibleSbomMetadata") {
         fun assertProjectComponent(value: Map<*, *>, expectedName: String) {
             check(value["group"]?.toString() == "org.nanokvm")
             check(value["name"]?.toString() == expectedName)
-            check(value["version"]?.toString() == releaseVersionForSbom)
+            check(value["version"]?.toString() == expectedVersion)
             check(licenceIds(value) == setOf("GPL-3.0-or-later"))
             val vcsUrls = references(value)
                 .filter { it["type"]?.toString() == "vcs" }
                 .map { it["url"]?.toString() }
-            check(vcsUrls == listOf(releaseVcsUrlForSbom))
+            check(vcsUrls == listOf(expectedProjectUrl))
         }
 
-        assertProjectComponent(rootComponent, releaseSlug)
+        assertProjectComponent(rootComponent, expectedProduct)
         assertProjectComponent(component("org.nanokvm", "protocol"), "protocol")
         assertProjectComponent(component("org.nanokvm", "video"), "video")
 
         val webRtc = component("io.github.webrtc-sdk", "android-prefixed-stripped")
-        check(webRtc["version"]?.toString() == webRtcVersionForSbom)
+        check(webRtc["version"]?.toString() == expectedWebRtcVersion)
         check(licenceIds(webRtc) == setOf("MIT", "BSD-3-Clause"))
         val webRtcReferences = references(webRtc)
         val webRtcVcsUrls = webRtcReferences
             .filter { it["type"]?.toString() == "vcs" }
             .map { it["url"]?.toString() }
-        check(webRtcVcsUrls == listOf(webRtcVcsUrlForSbom))
+        check(webRtcVcsUrls == listOf(expectedWebRtcUrl))
         val bundledNoticeReference = webRtcReferences.single {
             it["type"]?.toString() == "license" &&
-                it["url"]?.toString() == bundledWebRtcNoticeUrlForSbom
+                it["url"]?.toString() == expectedNoticeUrl
         }
         val bundledNoticeHashes = bundledNoticeReference["hashes"] as? Collection<*>
             ?: error("The bundled WebRTC notice reference has no hashes.")
         check(bundledNoticeHashes.any { rawHash ->
             val hash = rawHash as? Map<*, *> ?: return@any false
             hash["alg"]?.toString() == "SHA-256" &&
-                hash["content"]?.toString() == expectedWebRtcNoticesSha256
+                hash["content"]?.toString() == expectedNoticeHash
         })
 
         val webRtcProperties = ((webRtc["properties"] as? Collection<*>) ?: emptyList<Any?>())
@@ -906,15 +916,15 @@ tasks.register("verifyReproducibleSbomMetadata") {
             }
         check(
             webRtcProperties["org.nanokvm:bundled-notice:path"] ==
-                bundledWebRtcNoticeRepositoryPath,
+                expectedNoticePath,
         )
         check(
             webRtcProperties["org.nanokvm:bundled-notice:sha256"] ==
-                expectedWebRtcNoticesSha256,
+                expectedNoticeHash,
         )
         check(
             webRtcProperties["org.nanokvm:bundled-notice:upstream"] ==
-                upstreamWebRtcNoticeUrlForSbom,
+                expectedUpstreamNoticeUrl,
         )
     }
 }
