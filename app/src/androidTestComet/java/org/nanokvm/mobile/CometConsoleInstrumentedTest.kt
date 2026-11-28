@@ -204,6 +204,14 @@ class CometConsoleInstrumentedTest {
                 waitText("No HDMI signal", substring = true)
                 control.get().send("""{"event_type":"streamer","event":{"streamer":{"hdmi":{"signal":true}}}}""")
                 ui.waitUntil(5000) { ui.onAllNodesWithText("No HDMI signal", substring = true).fetchSemanticsNodes().isEmpty() }
+                ui.onNodeWithContentDescription("Open console controls").performClick()
+                ui.onNodeWithContentDescription("Power controls").assertDoesNotExist()
+                ui.onNodeWithContentDescription("More actions").performScrollTo().performClick()
+                ui.onNodeWithText("Release keys and mouse buttons").assertExists()
+                for (tag in listOf("phase3-virtual-media-action", "administration-action", "device-info-action")) {
+                    ui.onNodeWithTag(tag).assertDoesNotExist()
+                }
+                ui.onNodeWithText("Close").performClick()
                 expire.set(true)
                 control.get().close(1000, null)
                 waitText("login expired", substring = true)

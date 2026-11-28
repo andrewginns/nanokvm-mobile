@@ -21,6 +21,19 @@ allprojects {
     version = releaseMetadata.getProperty("versionName")
 }
 
+// Gradle forwards the Windows JVM's native search path to test workers. A stray
+// quote in an inherited PATH entry otherwise splits the worker's Java command.
+if (File.separatorChar == '\\') {
+    val nativeSearchPath = System.getProperty("java.library.path")
+    if ('"' in nativeSearchPath) {
+        subprojects {
+            tasks.withType<Test>().configureEach {
+                systemProperty("java.library.path", nativeSearchPath.replace("\"", ""))
+            }
+        }
+    }
+}
+
 tasks.register("verifyDeviceBuilds") {
     group = "verification"
     description = "Build both release APKs and run their unit tests and Android lint."
