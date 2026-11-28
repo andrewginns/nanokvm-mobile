@@ -266,9 +266,13 @@ foreach ($tool in @($aapt2, $zipAlign, $apkSignerJar)) {
     }
 }
 
+# Unqualified Nano invocations retain their historical evidence paths.
+$evidenceBase = if ($PSBoundParameters.ContainsKey('Target')) {
+    Join-Path $repository "dist/$Target/$sourceVersionName"
+} else { Join-Path $repository 'dist' }
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $repository (
-        "dist\$artifactName-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
+    $OutputPath = Join-Path $evidenceBase (
+        "$artifactName-$sourceVersionName-v$sourceVersionCode-unsigned-evidence.json"
     )
 }
 if ([IO.Path]::IsPathRooted($OutputPath)) {
@@ -278,8 +282,8 @@ if ([IO.Path]::IsPathRooted($OutputPath)) {
 }
 if (-not $BuildLogPath) {
     $buildTimestamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
-    $BuildLogPath = Join-Path $repository (
-        "dist\$artifactName-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
+    $BuildLogPath = Join-Path $evidenceBase (
+        "$artifactName-$sourceVersionName-v$sourceVersionCode-strict-build-$buildTimestamp.log"
     )
 }
 if ([IO.Path]::IsPathRooted($BuildLogPath)) {

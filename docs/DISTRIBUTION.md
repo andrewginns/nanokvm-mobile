@@ -7,6 +7,8 @@ benchmark, or unsigned release build is not a publishable artifact.
 
 The release evidence, signing and reproducibility scripts accept `-Target nano` (default) or `-Target comet`. Use the version and package in `release/targets/<target>.properties`. NanoKVM uses `vX.Y.Z` tags and the historical root signing record. Comet uses `comet-vX.Y.Z` tags and `release/comet/production-signing-lineage.json`. Both products now use this source repository. Mark Comet releases with `--latest=false`.
 
+Pass an explicit `-Target` to retain strict build evidence under `dist/<target>/<version>/`. Existing NanoKVM commands that omit the target continue writing to `dist/`.
+
 Comet's first production signing record still needs an owner-approved public identity and initial version. For local updates to the existing phone-test installation use `scripts/build-development-update.ps1 -Target comet -PreviousApk <apk>`. It signs locally using the enrolled Windows credential and verifies the installed lineage.
 
 ## NanoKVM signing model

@@ -1,5 +1,6 @@
 [CmdletBinding(DefaultParameterSetName = "Upgrade")]
 param(
+    [ValidateSet('nano','comet')][string]$Target = 'nano',
     [Parameter(Mandatory = $true, ParameterSetName = "Upgrade")]
     [string]$PreviousApk,
 
@@ -20,6 +21,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if ($Target -eq 'comet') {
+    $ExpectedPackage = 'org.cometkvm.mobile'
+    $ExpectedSignerSha256 = '649643c659dbfcb0c1d31fecd1e986eed30840a6dcac54beb980f80ab6e566e0'
+}
 $expectedSigner = $ExpectedSignerSha256.Replace(":", "").ToLowerInvariant()
 if ($PSCmdlet.ParameterSetName -eq "FirstInstall") {
     if (-not $FirstInstall -or $ExpectedPackage -ne "org.nanokvm.mobile.development") {

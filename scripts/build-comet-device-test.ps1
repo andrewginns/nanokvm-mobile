@@ -46,7 +46,7 @@ try {
     $signingArguments = @('-jar', $jar, 'sign', '--ks', $keystore, '--v4-signing-enabled', 'false', '--out', $staged, $unsigned)
     $result = Invoke-ApkSignerWithLocalPassword -Java $java -SigningArguments $signingArguments -PasswordFile $passwordFile
     if ($result -ne 0) { throw 'Comet device-test signing failed.' }
-    & (Join-Path $PSScriptRoot 'verify-apk-upgrade.ps1') -PreviousApk $previous -CandidateApk $staged -ExpectedPackage $product.ApplicationId -ExpectedSignerSha256 '649643c659dbfcb0c1d31fecd1e986eed30840a6dcac54beb980f80ab6e566e0' -ExpectedVersionName $product.VersionName -ExpectedVersionCode $product.VersionCode
+    & (Join-Path $PSScriptRoot 'verify-apk-upgrade.ps1') -PreviousApk $previous -CandidateApk $staged -Target comet -ExpectedVersionName $product.VersionName -ExpectedVersionCode $product.VersionCode
     if (Test-Path -LiteralPath $output) {
         if ((Get-FileHash -LiteralPath $output).Hash -ne (Get-FileHash -LiteralPath $staged).Hash) {
             throw "Different bytes already exist at $output. Increase the Comet version."
