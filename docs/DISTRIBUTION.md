@@ -24,6 +24,18 @@ accounts.
 a completely new public signing lineage. It must never be used for an ordinary
 update or as a recovery shortcut when the existing production key is missing.
 
+## Unattended signing on the local Windows account
+
+Use PowerShell 7.2 or later. Enroll the existing keystore once from a local terminal under the account that signs releases. Use a dedicated, access-controlled directory per keystore. The enrollment command accepts a masked prompt and writes a current-user Windows DPAPI envelope called `password.dpapi` beside the key. For a keystore with a distinct entry password, add `-SeparateKeyPassword` at enrollment. The existing NanoKVM and Comet keys use separate directories.
+
+```powershell
+.\scripts\register-local-signing-password.ps1 -KeystorePath 'C:\protected\NanoKVM-Mobile-production.keystore'
+```
+
+For subsequent local releases, the guarded `sign-production-apk.ps1` invocation below automatically uses the enrolled credential with PowerShell 7.2 or later. Use a clean release tag that includes this change. Add `-Unattended` when starting an automated build so a missing credential fails immediately. The interactive prompt is the default for an unenrolled keystore. After the existing release and key-custody checks, the helper supplies the password directly to the verified Android signer through its standard input.
+
+DPAPI protects the saved password on disk. Processes running as the same Windows user can decrypt it. Keep the existing independent recovery copies of the keystore and password for recovery on another account or machine. Signing a candidate and publishing it remain separate release steps. [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) · [Android signer password inputs](https://developer.android.com/tools/apksigner)
+
 ## Prepare a release
 
 1. Increase `versionName` and `versionCode`; never reuse a published code for
