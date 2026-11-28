@@ -9,7 +9,7 @@ The release evidence, signing and reproducibility scripts accept `-Target nano` 
 
 Pass an explicit `-Target` to retain strict build evidence under `dist/<target>/<version>/`. Existing NanoKVM commands that omit the target continue writing to `dist/`.
 
-Comet's first production signing record still needs an owner-approved public identity and initial version. For local updates to the existing phone-test installation use `scripts/build-development-update.ps1 -Target comet -PreviousApk <apk>`. It signs locally using the enrolled Windows credential and verifies the installed lineage.
+Comet's production lineage starts at 0.1.3 (4) with the certificate used by the 0.1.2 (3) device-test APK. Its existing keystore alias is `comet-device-test`. For the first production build, use `-Target comet -FirstProductionRelease` with the guarded signer and verify the signed result against the retained device-test APK. For subsequent production updates, record and pass the exact preceding production APK.
 
 ## NanoKVM signing model
 
@@ -91,8 +91,7 @@ outputs. Then sign only those reviewed bytes:
     -PreviousProductionApk 'C:\evidence\previous-release.apk'
 ```
 
-`-FirstProductionRelease` applied only to v0.3.6 and must not be used for a
-normal update. The signer rejects dirty or untagged source, repository-local
+`-FirstProductionRelease` applies only to each target's recorded first production version. The signer rejects dirty or untagged source, repository-local
 keys, changed evidence, a wrong package/version/signer, debuggable inputs,
 missing v2/v3 signatures, failed alignment, and existing output paths.
 

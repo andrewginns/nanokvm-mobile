@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "package": "org.cometkvm.mobile",
-  "keyAlias": "comet-release",
-  "signingCertificateSha256": null,
-  "firstProductionVersionName": "0.1.0",
-  "firstProductionVersionCode": 1,
+  "keyAlias": "comet-device-test",
+  "signingCertificateSha256": "649643c659dbfcb0c1d31fecd1e986eed30840a6dcac54beb980f80ab6e566e0",
+  "firstProductionVersionName": "0.1.3",
+  "firstProductionVersionCode": 4,
   "previousProduction": null
 }

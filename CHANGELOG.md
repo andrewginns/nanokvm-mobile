@@ -11,6 +11,10 @@ production release unless it explicitly says so.
 
 - Build the existing adaptive console and NanoKVM appliance controls from the shared Android project. The dedicated phone-test app reports 0.3.21-dev.
 
+### Comet Mobile 0.1.3 (4)
+
+- First production-signed Comet build. It uses the same package and certificate as the existing device-test app so Android can update it in place.
+
 ### Comet Mobile 0.1.2 (3)
 
 - Restore punctuation in connection status and accessibility messages found during the upgrade test.
