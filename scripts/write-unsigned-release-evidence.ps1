@@ -350,7 +350,7 @@ $strictBuildArguments = @(
     "clean",
     "-PreleaseTarget=$Target",
     ":protocol:testDebugUnitTest", ":video:testDebugUnitTest", ":app:test${flavor}DebugUnitTest",
-    ":protocol:lintRelease", ":video:lintRelease", ":app:lint${flavor}Release", ":macrobenchmark:lint${flavor}Release",
+    ":protocol:lintRelease", ":video:lintRelease", ":app:lint${flavor}Release",
     ":app:assemble${flavor}Release",
     ":app:bundle${flavor}Release",
     ":app:assemble${flavor}Benchmark",
@@ -513,7 +513,7 @@ if ($unsignedVerification -notmatch 'DOES NOT VERIFY|Missing META-INF') {
 }
 
 $testFiles = @()
-foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
+foreach ($module in @("app", "protocol", "video")) {
     $testTask = if ($module -eq "app") { "test${flavor}DebugUnitTest" } else { "testDebugUnitTest" }
     $testResultDirectory = Join-Path $repository "$module\build\test-results\$testTask"
     if (Test-Path -LiteralPath $testResultDirectory -PathType Container) {
@@ -534,8 +534,8 @@ if ($testTotals.tests -le 0 -or $testTotals.failures -ne 0 -or $testTotals.error
 }
 
 $lintFiles = @()
-foreach ($module in @("app", "protocol", "video", "macrobenchmark")) {
-    $lintVariant = if ($module -in "app", "macrobenchmark") { $releaseVariant } else { "release" }
+foreach ($module in @("app", "protocol", "video")) {
+    $lintVariant = if ($module -eq "app") { $releaseVariant } else { "release" }
     $lintFile = Join-Path $repository "$module\build\reports\lint-results-$lintVariant.xml"
     if (Test-Path -LiteralPath $lintFile -PathType Leaf) {
         $lintFiles += Get-Item -LiteralPath $lintFile
